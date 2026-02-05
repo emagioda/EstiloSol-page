@@ -1,0 +1,23 @@
+"use client";
+import React from "react";
+import ProductCard from "../ProductCard/ProductCard";
+import type { Product } from "../ProductCard/ProductCard";
+
+export default function ProductsGrid({ products }: { products: Product[] }) {
+  if (!products || products.length === 0) {
+    return (
+      <div className="py-12 text-center text-[var(--brand-cream)]">
+        <h3 className="text-lg font-medium">No encontramos productos con esos filtros</h3>
+        <p className="mt-2 text-sm text-[var(--brand-gold-300)]">Probá quitar algunos filtros o buscá otro término.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+      {products.map((p) => (
+        <ProductCard key={p.id} product={p} />
+      ))}
+    </div>
+  );
+}

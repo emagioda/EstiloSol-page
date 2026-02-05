@@ -1,0 +1,28 @@
+@import "tailwindcss";
+@import "../src/core/presentation/styles/tokens.css";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-brand-body);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  /* prefer brand background when available, otherwise fall back to theme background */
+  background: var(--brand-violet-950, var(--background));
+  color: var(--foreground);
+  font-family: var(--font-brand-body), "Playfair Display", serif;
+}
