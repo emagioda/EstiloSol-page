@@ -19,7 +19,7 @@ export default function FloatingCartButton() {
     }
 
     const navbar = document.getElementById(NAVBAR_ID);
-
+  
     if (!navbar) {
       return;
     }
