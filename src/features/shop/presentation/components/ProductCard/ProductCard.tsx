@@ -68,7 +68,7 @@ export default function ProductCard({ product }: { product: Product }) {
           ) : (
             <button
               onClick={() => addItem({ productId: product.id, name: product.name, unitPrice: product.price, qty: 1, image: thumb ?? '' })}
-              className="w-full rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-violet-strong)] px-4 py-2 text-sm font-semibold text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)] transition-transform duration-200 hover:-translate-y-0.5 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] sm:w-auto"
+              className="mx-auto flex w-[60%] max-w-[200px] items-center justify-center rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-violet-strong)] px-4 py-2 text-center text-sm font-semibold text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)] transition-transform duration-200 hover:-translate-y-0.5 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
               aria-label={`Agregar ${product.name} al carrito`}
             >
               Agregar

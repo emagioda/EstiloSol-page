@@ -5,6 +5,7 @@ import brandConfig from "@/src/config/brand";
 import Navbar from "@/src/core/presentation/components/Navbar/Navbar";
 import { CartDrawerProvider } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import { CartProvider } from "@/src/features/shop/presentation/view-models/useCartStore";
+import FloatingCartButton from "@/src/features/shop/presentation/components/FloatingCartButton/FloatingCartButton";
 
 const brandDisplay = Parisienne({
   variable: "--font-brand-display",
@@ -54,6 +55,7 @@ export default function RootLayout({
         <CartProvider>
           <CartDrawerProvider>
             <Navbar />
+            <FloatingCartButton />
             {children}
           </CartDrawerProvider>
         </CartProvider>
