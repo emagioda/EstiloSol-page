@@ -17,7 +17,6 @@ interface FiltersSidebarProps {
 
 export default function FiltersSidebar({
   categories,
-  maxPrice,
   filters,
   onFilterChange,
   onClearFilters,

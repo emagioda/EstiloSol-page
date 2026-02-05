@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type Product = {
   id: string;
@@ -9,7 +9,7 @@ export type Product = {
   price: number;
   currency?: string;
   images?: string[];
-  [k: string]: any;
+  [k: string]: unknown;
 };
 
 export type FilterState = {
@@ -19,6 +19,9 @@ export type FilterState = {
 };
 
 export const useProductsStore = () => {
+  const sheetsEndpoint =
+    process.env.NEXT_PUBLIC_SHEETS_ENDPOINT ||
+    "https://script.google.com/macros/s/AKfycbz6DR8Q1sFG4CuZ0UtMn889EUQNQAUQjdDMbjt689wLfY45jWFvBkgkEKlgapYaQm1sIg/exec";
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<FilterState>({
@@ -27,14 +30,10 @@ export const useProductsStore = () => {
     sortBy: "newest",
   });
 
-  useEffect(() => {
-    fetchProducts();
-  }, []);
-
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/products");
+      const res = await fetch(sheetsEndpoint, { cache: "no-store" });
       if (!res.ok) {
         console.error("Failed to fetch products:", res.status);
         setProducts([]);
@@ -48,7 +47,11 @@ export const useProductsStore = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [sheetsEndpoint]);
+
+  useEffect(() => {
+    fetchProducts();
+  }, [fetchProducts]);
 
   const getCategories = (): string[] => {
     const cats = new Set<string>();

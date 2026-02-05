@@ -1,1 +1,1 @@
-export type ListProducts = {};
+export type ListProducts = Record<string, unknown>;

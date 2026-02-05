@@ -1,1 +1,3 @@
-export interface ProductRepository {}
+export interface ProductRepository {
+  readonly __brand?: "ProductRepository";
+}

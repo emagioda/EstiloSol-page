@@ -1,5 +1,4 @@
 "use client";
-import React from "react";
 import ProductCard from "../ProductCard/ProductCard";
 import type { Product } from "../ProductCard/ProductCard";
 

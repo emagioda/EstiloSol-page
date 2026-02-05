@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import { useState } from "react";
 import { useProductsStore } from "../view-models/useProductsStore";
 import { useCartDrawer } from "../view-models/useCartDrawer";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";

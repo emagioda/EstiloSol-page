@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import { useState } from "react";
 import type { CartItem } from "../../view-models/useCartStore";
 
 interface Props {

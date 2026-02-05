@@ -1,5 +1,4 @@
 "use client";
-import React from "react";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 
 export default function CartCounter() {

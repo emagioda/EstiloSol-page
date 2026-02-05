@@ -1,1 +1,3 @@
-export interface BookingPolicy {}
+export interface BookingPolicy {
+  readonly __brand?: "BookingPolicy";
+}

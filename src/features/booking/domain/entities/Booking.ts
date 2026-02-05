@@ -1,1 +1,1 @@
-export type Booking = {};
+export type Booking = Record<string, unknown>;

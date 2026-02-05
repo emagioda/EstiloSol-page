@@ -1,5 +1,4 @@
 "use client";
-import React from "react";
 
 export default function LoadingGrid() {
   const placeholders = Array.from({ length: 8 }, (_, index) => index);

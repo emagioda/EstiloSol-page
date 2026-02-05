@@ -1,11 +1,12 @@
 "use client";
-import React, { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useCart } from "../../view-models/useCartStore";
 import CheckoutModal from "../CheckoutModal/CheckoutModal";
 
 export default function CartDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { items, updateQty, removeItem, clear } = useCart();
-  const [checkoutOpen, setCheckoutOpen] = React.useState(false);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
   const subtotal = useMemo(() => items.reduce((s, it) => s + it.unitPrice * it.qty, 0), [items]);
 
@@ -29,7 +30,13 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
           {items.map((it) => (
             <div key={it.productId} className="flex items-center gap-3 border-b border-[var(--brand-violet-900)] pb-3">
               <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded bg-black">
-                {it.image ? <img src={it.image} alt={it.name} className="h-full w-full object-cover" /> : null}
+                {it.image ? (
+                  <img
+                    src={it.image.startsWith("/") ? `${basePath}${it.image}` : it.image}
+                    alt={it.name}
+                    className="h-full w-full object-cover"
+                  />
+                ) : null}
               </div>
               <div className="flex-1 text-sm">
                 <div className="font-medium">{it.name}</div>
