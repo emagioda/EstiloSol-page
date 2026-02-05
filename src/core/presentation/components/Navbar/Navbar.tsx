@@ -21,7 +21,7 @@ export default function Navbar() {
 
   return (
     <header className="w-full">
-      <nav className="backdrop-blur-sm bg-[rgba(58,31,95,0.75)] border-b border-[var(--brand-gold-400)]/60">
+      <nav id="main-navbar" className="backdrop-blur-sm bg-[rgba(58,31,95,0.75)] border-b border-[var(--brand-gold-400)]/60">
         <div className="mx-auto flex w-full items-center justify-between gap-6 px-4 py-3 md:px-8">
           {/* Mobile: Left links */}
           <div className="flex flex-1 items-center justify-start md:hidden">
