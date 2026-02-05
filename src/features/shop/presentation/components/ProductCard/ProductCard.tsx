@@ -13,10 +13,10 @@ export type Product = {
   [k: string]: unknown;
 };
 
-const ACTION_WIDTH_CLASS = "w-[170px] min-w-[170px]";
+const ACTION_SIZE_CLASS = "h-11 w-[170px] min-w-[170px]";
 
 export default function ProductCard({ product }: { product: Product }) {
-  const { addItem, items, updateQty, removeItem } = useCart();
+  const { addItem, items } = useCart();
   const cartItem = items.find((it) => it.productId === product.id);
 
   const thumb =
@@ -51,59 +51,25 @@ export default function ProductCard({ product }: { product: Product }) {
         </div>
 
         <div className="flex w-full justify-center">
-          {cartItem ? (
-            <div
-              className={`${ACTION_WIDTH_CLASS} flex items-center justify-between rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-violet-strong)] px-3 py-3 shadow-[0_8px_20px_rgba(26,10,48,0.35)]`}
-            >
-              <button
-                onClick={() => {
-                  if (cartItem.qty > 1) {
-                    updateQty(product.id, cartItem.qty - 1);
-                  } else {
-                    removeItem(product.id);
-                  }
-                }}
-                className="min-h-9 min-w-9 rounded-full text-base transition hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
-                aria-label={`Quitar una unidad de ${product.name}`}
-              >
-                −
-              </button>
-              <span className="w-10 text-center text-base font-semibold">
-                {cartItem.qty}
-              </span>
-              <button
-                onClick={() =>
-                  addItem({
-                    productId: product.id,
-                    name: product.name,
-                    unitPrice: product.price,
-                    qty: 1,
-                    image: thumb ?? "",
-                  })
-                }
-                className="min-h-9 min-w-9 rounded-full text-base transition hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
-                aria-label={`Agregar una unidad más de ${product.name}`}
-              >
-                +
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() =>
-                addItem({
-                  productId: product.id,
-                  name: product.name,
-                  unitPrice: product.price,
-                  qty: 1,
-                  image: thumb ?? "",
-                })
-              }
-              className={`${ACTION_WIDTH_CLASS} flex items-center justify-center rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-violet-strong)] px-6 py-3 text-center text-sm font-semibold text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]`}
-              aria-label={`Agregar ${product.name} al carrito`}
-            >
-              Agregar
-            </button>
-          )}
+          <button
+            onClick={() =>
+              addItem({
+                productId: product.id,
+                name: product.name,
+                unitPrice: product.price,
+                qty: 1,
+                image: thumb ?? "",
+              })
+            }
+            className={`${ACTION_SIZE_CLASS} flex items-center justify-center rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-violet-strong)] px-6 text-center text-sm font-semibold text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]`}
+            aria-label={
+              cartItem
+                ? `Agregar otra unidad de ${product.name}`
+                : `Agregar ${product.name} al carrito`
+            }
+          >
+            {cartItem ? `Agregado (${cartItem.qty})` : "Agregar"}
+          </button>
         </div>
       </div>
     </article>
