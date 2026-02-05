@@ -16,7 +16,7 @@ export type Product = {
 const ACTION_SIZE_CLASS = "h-11 w-[170px] min-w-[170px]";
 
 export default function ProductCard({ product }: { product: Product }) {
-  const { addItem, items } = useCart();
+  const { addItem, items, updateQty, removeItem } = useCart();
   const cartItem = items.find((it) => it.productId === product.id);
 
   const thumb =
@@ -51,25 +51,60 @@ export default function ProductCard({ product }: { product: Product }) {
         </div>
 
         <div className="flex w-full justify-center">
-          <button
-            onClick={() =>
-              addItem({
-                productId: product.id,
-                name: product.name,
-                unitPrice: product.price,
-                qty: 1,
-                image: thumb ?? "",
-              })
-            }
-            className={`${ACTION_SIZE_CLASS} flex items-center justify-center rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-violet-strong)] px-6 text-center text-sm font-semibold text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]`}
-            aria-label={
-              cartItem
-                ? `Agregar otra unidad de ${product.name}`
-                : `Agregar ${product.name} al carrito`
-            }
-          >
-            {cartItem ? `Agregado (${cartItem.qty})` : "Agregar"}
-          </button>
+          {cartItem ? (
+            <div
+              className={`${ACTION_SIZE_CLASS} flex items-center justify-between rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-violet-strong)] px-3 text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)]`}
+              aria-label={`Cantidad agregada de ${product.name}`}
+            >
+              <button
+                onClick={() => {
+                  if (cartItem.qty > 1) {
+                    updateQty(product.id, cartItem.qty - 1);
+                  } else {
+                    removeItem(product.id);
+                  }
+                }}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-base font-semibold transition hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                aria-label={`Quitar una unidad de ${product.name}`}
+              >
+                -
+              </button>
+              <span className="w-10 text-center text-sm font-semibold">
+                {cartItem.qty}
+              </span>
+              <button
+                onClick={() =>
+                  addItem({
+                    productId: product.id,
+                    name: product.name,
+                    unitPrice: product.price,
+                    qty: 1,
+                    image: thumb ?? "",
+                  })
+                }
+                className="flex h-8 w-8 items-center justify-center rounded-full text-base font-semibold transition hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                aria-label={`Agregar una unidad de ${product.name}`}
+              >
+                +
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() =>
+                addItem({
+                  productId: product.id,
+                  name: product.name,
+                  unitPrice: product.price,
+                  qty: 1,
+                  image: thumb ?? "",
+                })
+              }
+              className={`${ACTION_SIZE_CLASS} flex items-center justify-center rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-violet-strong)] px-6 text-center text-sm font-semibold text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]`}
+              aria-label={`Agregar ${product.name} al carrito`}
+            >
+              Agregar
+            </button>
+          )}
         </div>
       </div>
     </article>
