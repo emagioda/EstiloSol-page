@@ -8,6 +8,8 @@
   --brand-gold-400: #f2c777;
   --brand-gold-300: #f8e3b0;
   --brand-cream: #f8f1ff;
+  --space-card-padding: 1rem;
+  --space-card-content-gap: 0.875rem;
 }
 
 .sparkle-bg {
