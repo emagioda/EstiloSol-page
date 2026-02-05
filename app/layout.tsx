@@ -33,7 +33,7 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const { palette, typography } = brandConfig;
+  const { palette } = brandConfig;
 
   const cssVars = `:root {
     --brand-violet-950: ${palette.violet.deepest};

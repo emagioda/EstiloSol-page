@@ -1,6 +1,5 @@
 "use client";
 import Image from "next/image";
-import React from "react";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 
 export type Product = {
@@ -11,7 +10,7 @@ export type Product = {
   images?: string[];
   is_new?: boolean;
   is_sale?: boolean;
-  [k: string]: any;
+  [k: string]: unknown;
 };
 
 export default function ProductCard({ product }: { product: Product }) {

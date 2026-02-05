@@ -2,10 +2,8 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import brandConfig from "@/src/config/brand";
-import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import CartBadge from "@/src/features/shop/presentation/components/CartBadge/CartBadge";
 
@@ -17,14 +15,9 @@ export default function Navbar() {
     Boolean
   );
 
-  const { items } = useCart();
   const { setOpen: setCartOpen } = useCartDrawer();
-  const [mounted, setMounted] = useState(false);
   const pathname = usePathname();
   const isTienda = pathname?.startsWith("/tienda");
-
-  useEffect(() => setMounted(true), []);
-  const cartCount = items.reduce((sum, it) => sum + (Number(it.qty) || 0), 0);
 
   return (
     <header className="w-full">
@@ -81,7 +74,7 @@ export default function Navbar() {
                 {link.label}
               </Link>
             ))}
-            {mounted && isTienda && (
+            {isTienda && (
                 <button
                   onClick={() => setCartOpen(true)}
                   className="relative ml-3 text-xl"
@@ -117,7 +110,7 @@ export default function Navbar() {
                 {link.label}
               </Link>
             ))}
-            {mounted && isTienda && (
+            {isTienda && (
                 <button
                   onClick={() => setCartOpen(true)}
                   className="relative flex items-center gap-2 transition hover:text-[var(--brand-gold-300)]"

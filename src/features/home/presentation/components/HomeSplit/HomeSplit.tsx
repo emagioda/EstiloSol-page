@@ -6,7 +6,7 @@ import brandConfig from "@/src/config/brand";
 const heroSections = [brandConfig.heroLeft, brandConfig.heroRight];
 
 export default function HomeSplit() {
-  const { palette, typography, assetsDecorativos } = brandConfig;
+  const { palette, typography } = brandConfig;
 
   const brandStyles = {
     "--brand-violet-950": palette.violet.deepest,

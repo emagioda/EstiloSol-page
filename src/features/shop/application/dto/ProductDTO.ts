@@ -1,1 +1,1 @@
-export type ProductDTO = {};
+export type ProductDTO = Record<string, unknown>;

@@ -1,1 +1,1 @@
-export type Cart = {};
+export type Cart = Record<string, unknown>;
