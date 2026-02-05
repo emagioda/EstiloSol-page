@@ -38,7 +38,7 @@ export default function StoreToolbar({
       </div>
 
       {/* Right Section */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
         {/* Product Count */}
         <span className="text-sm text-[var(--brand-cream)]/70">
           {productCount} producto{productCount !== 1 ? "s" : ""}
@@ -48,7 +48,7 @@ export default function StoreToolbar({
         {onFiltersClick && (
           <button
             onClick={onFiltersClick}
-            className="flex items-center gap-2 rounded-lg border border-[var(--brand-violet-800)] bg-[var(--brand-violet-950)]/60 px-3 py-2 text-sm text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(18,8,35,0.3)] transition-transform duration-200 hover:-translate-y-0.5 hover:bg-[var(--brand-violet-900)] md:hidden"
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--brand-violet-800)] bg-[var(--brand-violet-950)]/60 px-3 py-2 text-sm text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(18,8,35,0.3)] transition-transform duration-200 hover:-translate-y-0.5 hover:bg-[var(--brand-violet-900)] sm:w-auto md:hidden"
           >
             <span>⚙️</span>
             Filtros
