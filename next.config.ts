@@ -1,17 +1,11 @@
 import type { NextConfig } from "next";
 
-const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-const isGitHubPages = basePath.length > 0;
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH;
 
 const nextConfig: NextConfig = {
-  ...(isGitHubPages
-    ? {
-        basePath,
-        assetPrefix: basePath,
-        trailingSlash: true,
-        output: "export",
-      }
-    : {}),
+  output: "export",
+  trailingSlash: true,
+  ...(basePath ? { basePath, assetPrefix: basePath } : {}),
   images: {
     remotePatterns: [
       {
@@ -23,7 +17,7 @@ const nextConfig: NextConfig = {
         hostname: "res.cloudinary.com",
       },
     ],
-    ...(isGitHubPages ? { unoptimized: true } : {}),
+    unoptimized: true,
   },
 };
 
