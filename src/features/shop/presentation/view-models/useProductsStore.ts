@@ -5,7 +5,7 @@ export type Product = {
   id: string;
   name: string;
   slug?: string;
-  description?: string; // <--- AGREGADO: Para solucionar el error de build
+  description?: string;
   category?: string;
   price: number;
   currency?: string;
@@ -25,6 +25,7 @@ export const useProductsStore = () => {
     "https://script.google.com/macros/s/AKfycbz6DR8Q1sFG4CuZ0UtMn889EUQNQAUQjdDMbjt689wLfY45jWFvBkgkEKlgapYaQm1sIg/exec";
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [filters, setFilters] = useState<FilterState>({
     searchTerm: "",
     category: null,
@@ -65,22 +66,19 @@ export const useProductsStore = () => {
   const applyFilters = (products: Product[]): Product[] => {
     let filtered = [...products];
 
-    // Search by name/description
     if (filters.searchTerm) {
       const term = filters.searchTerm.toLowerCase();
       filtered = filtered.filter(
         (p) =>
           p.name?.toLowerCase().includes(term) ||
-          p.description?.toLowerCase().includes(term) // Ahora TypeScript sabe que description es string
+          p.description?.toLowerCase().includes(term)
       );
     }
 
-    // Filter by category
     if (filters.category) {
       filtered = filtered.filter((p) => p.category === filters.category);
     }
 
-    // Sort
     switch (filters.sortBy) {
       case "price-asc":
         filtered.sort((a, b) => a.price - b.price);
@@ -96,7 +94,6 @@ export const useProductsStore = () => {
         break;
       case "newest":
       default:
-        // Assume products are already in newest-first order
         break;
     }
 
@@ -112,6 +109,7 @@ export const useProductsStore = () => {
   const setCategory = (category: string | null) => {
     setFilters((prev) => ({ ...prev, category }));
   };
+
   const setSortBy = (sort: FilterState["sortBy"]) => {
     setFilters((prev) => ({ ...prev, sortBy: sort }));
   };
@@ -124,6 +122,14 @@ export const useProductsStore = () => {
     });
   };
 
+  const openQuickView = (product: Product) => {
+    setSelectedProduct(product);
+  };
+
+  const closeQuickView = () => {
+    setSelectedProduct(null);
+  };
+
   const refresh = async () => {
     await fetchProducts();
   };
@@ -131,6 +137,8 @@ export const useProductsStore = () => {
   return {
     products: filteredProducts,
     allProducts: products,
+    selectedProduct,
+    isQuickViewOpen: Boolean(selectedProduct),
     loading,
     refresh,
     filters,
@@ -138,6 +146,8 @@ export const useProductsStore = () => {
     setCategory,
     setSortBy,
     clearFilters,
+    openQuickView,
+    closeQuickView,
     categories: getCategories(),
   } as const;
 };
