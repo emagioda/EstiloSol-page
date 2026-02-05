@@ -2,7 +2,13 @@
 import ProductCard from "../ProductCard/ProductCard";
 import type { Product } from "../ProductCard/ProductCard";
 
-export default function ProductsGrid({ products }: { products: Product[] }) {
+export default function ProductsGrid({
+  products,
+  onQuickView,
+}: {
+  products: Product[];
+  onQuickView?: (product: Product) => void;
+}) {
   if (!products || products.length === 0) {
     return (
       <div className="py-12 text-center text-[var(--brand-cream)]">
@@ -13,9 +19,9 @@ export default function ProductsGrid({ products }: { products: Product[] }) {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3 lg:grid-cols-4">
       {products.map((p) => (
-        <ProductCard key={p.id} product={p} />
+        <ProductCard key={p.id} product={p} onQuickView={onQuickView} />
       ))}
     </div>
   );

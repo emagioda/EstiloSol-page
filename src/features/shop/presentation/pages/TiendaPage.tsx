@@ -7,6 +7,7 @@ import FiltersSidebar from "@/src/features/shop/presentation/components/FiltersS
 import StoreToolbar from "@/src/features/shop/presentation/components/StoreToolbar/StoreToolbar";
 import CartDrawer from "@/src/features/shop/presentation/components/CartDrawer/CartDrawer";
 import LoadingGrid from "@/src/features/shop/presentation/components/LoadingGrid/LoadingGrid";
+import QuickViewModal from "@/src/features/shop/presentation/components/QuickViewModal/QuickViewModal";
 
 export default function TiendaPage() {
   const {
@@ -18,6 +19,10 @@ export default function TiendaPage() {
     setSortBy,
     clearFilters,
     categories,
+    selectedProduct,
+    isQuickViewOpen,
+    openQuickView,
+    closeQuickView,
   } = useProductsStore();
   const { open: cartOpen, setOpen: setCartOpen } = useCartDrawer();
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -35,7 +40,6 @@ export default function TiendaPage() {
       </header>
 
       <section className="flex flex-col gap-6 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.35)] p-4 shadow-[0_20px_50px_rgba(18,8,35,0.35)] md:flex-row md:gap-8 md:p-6">
-        {/* Sidebar (Desktop visible, Mobile drawer) */}
         <div className="hidden md:block md:w-64">
           <FiltersSidebar
             categories={categories}
@@ -49,9 +53,7 @@ export default function TiendaPage() {
           />
         </div>
 
-        {/* Main Content */}
         <div className="flex-1">
-          {/* Toolbar */}
           <StoreToolbar
             searchTerm={filters.searchTerm}
             onSearchChange={setSearchTerm}
@@ -59,16 +61,14 @@ export default function TiendaPage() {
             productCount={products.length}
           />
 
-          {/* Products Grid */}
           {loading ? (
             <LoadingGrid />
           ) : (
-            <ProductsGrid products={products} />
+            <ProductsGrid products={products} onQuickView={openQuickView} />
           )}
         </div>
       </section>
 
-      {/* Mobile Filters Drawer */}
       {filtersOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
           <FiltersSidebar
@@ -86,7 +86,14 @@ export default function TiendaPage() {
         </div>
       )}
 
-      <CartDrawer open={cartOpen} onClose={()=>setCartOpen(false)} />
+      <QuickViewModal
+        key={selectedProduct?.id ?? "quick-view-empty"}
+        open={isQuickViewOpen}
+        product={selectedProduct}
+        onClose={closeQuickView}
+      />
+
+      <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} />
     </main>
   );
 }
