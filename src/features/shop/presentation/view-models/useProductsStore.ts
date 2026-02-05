@@ -5,6 +5,7 @@ export type Product = {
   id: string;
   name: string;
   slug?: string;
+  description?: string; // <--- AGREGADO: Para solucionar el error de build
   category?: string;
   price: number;
   currency?: string;
@@ -70,7 +71,7 @@ export const useProductsStore = () => {
       filtered = filtered.filter(
         (p) =>
           p.name?.toLowerCase().includes(term) ||
-          p.description?.toLowerCase().includes(term)
+          p.description?.toLowerCase().includes(term) // Ahora TypeScript sabe que description es string
       );
     }
 
@@ -78,8 +79,6 @@ export const useProductsStore = () => {
     if (filters.category) {
       filtered = filtered.filter((p) => p.category === filters.category);
     }
-
-    // (price filter removed)
 
     // Sort
     switch (filters.sortBy) {
