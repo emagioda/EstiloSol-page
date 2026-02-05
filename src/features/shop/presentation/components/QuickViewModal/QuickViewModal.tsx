@@ -47,11 +47,11 @@ export default function QuickViewModal({
         onClick={(e) => e.stopPropagation()}
       >
         <button
-          className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full border border-[var(--brand-gold-400)]/40 text-lg transition hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+          className="absolute right-3 top-3 z-20 flex h-10 w-10 items-center justify-center rounded-full border border-[var(--brand-gold-300)] bg-[var(--brand-violet-950)]/90 text-2xl leading-none text-[var(--brand-gold-100)] shadow-[0_8px_20px_rgba(0,0,0,0.45)] transition hover:scale-105 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-200)]"
           onClick={onClose}
           aria-label="Cerrar vista rápida"
         >
-          ×
+          <span aria-hidden="true" className="-mt-0.5">×</span>
         </button>
 
         <div className="relative h-64 overflow-hidden rounded-2xl border border-[var(--brand-gold-400)]/30 bg-black/20 sm:h-full sm:min-h-[320px]">

@@ -15,7 +15,7 @@ export type Product = {
   [k: string]: unknown;
 };
 
-const ACTION_SIZE_CLASS = "h-11 w-[170px] min-w-[170px]";
+const ACTION_SIZE_CLASS = "h-11 w-full max-w-[170px]";
 
 export default function ProductCard({
   product,
