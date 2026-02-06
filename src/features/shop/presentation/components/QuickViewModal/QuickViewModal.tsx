@@ -18,6 +18,8 @@ export default function QuickViewModal({
 }: QuickViewModalProps) {
   const { addItem } = useCart();
   const [qty, setQty] = useState(1);
+  const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
+  const [isLightboxOpen, setIsLightboxOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -30,6 +32,12 @@ export default function QuickViewModal({
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open) {
+      setIsLightboxOpen(false);
+      setQty(1);
+    }
+  }, [open]);
 
   const formatter = useMemo(
     () =>
@@ -65,13 +73,33 @@ export default function QuickViewModal({
           <span aria-hidden="true" className="-mt-0.5">×</span>
         </button>
 
-        <div className="relative h-60 overflow-hidden bg-[#f7f7f7] sm:h-full sm:min-h-[420px]">
+        <div
+          className="group relative h-60 overflow-hidden bg-[#f7f7f7] sm:h-full sm:min-h-[420px]"
+          onMouseMove={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            const x = ((event.clientX - rect.left) / rect.width) * 100;
+            const y = ((event.clientY - rect.top) / rect.height) * 100;
+            setZoomPosition({ x, y });
+          }}
+          onMouseLeave={() => setZoomPosition({ x: 50, y: 50 })}
+          onClick={() => setIsLightboxOpen(true)}
+          role="button"
+          tabIndex={0}
+          aria-label="Ampliar imagen del producto"
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              setIsLightboxOpen(true);
+            }
+          }}
+        >
           {thumb ? (
             <Image
               src={thumb}
               alt={product.name}
               fill
-              className="object-cover"
+              className="object-cover transition-transform duration-300 ease-out md:group-hover:scale-110"
+              style={{ transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%` }}
               sizes="(max-width:640px) 100vw, 50vw"
             />
           ) : (
@@ -95,18 +123,34 @@ export default function QuickViewModal({
             <div className="flex w-fit items-center gap-2">
               <button
                 type="button"
-                className="flex h-10 w-10 items-center justify-center border border-[#ff6767] text-lg leading-none text-[#ff6767]"
+                className="flex h-10 w-10 items-center justify-center border border-[#ff6767] text-lg leading-none text-[#ff6767] transition active:scale-95 active:bg-[#ff6767] active:text-white"
                 onClick={() => setQty((prev) => Math.max(1, prev - 1))}
                 aria-label="Reducir cantidad"
               >
                 -
               </button>
-              <span className="flex h-10 w-10 items-center justify-center border border-[#d9d9d9] text-sm font-semibold">
-                {qty}
-              </span>
+              <input
+                type="number"
+                min={1}
+                inputMode="numeric"
+                className="h-10 w-12 rounded-md border border-[#d9d9d9] text-center text-sm font-semibold"
+                value={qty}
+                onChange={(event) => {
+                  const nextQty = Number(event.target.value);
+                  if (Number.isNaN(nextQty)) return;
+                  setQty(Math.max(1, Math.floor(nextQty)));
+                }}
+                onBlur={(event) => {
+                  const nextQty = Number(event.target.value);
+                  if (Number.isNaN(nextQty) || nextQty < 1) {
+                    setQty(1);
+                  }
+                }}
+                aria-label="Cantidad"
+              />
               <button
                 type="button"
-                className="flex h-10 w-10 items-center justify-center border border-[#6dc96d] text-lg leading-none text-[#4cae4c]"
+                className="flex h-10 w-10 items-center justify-center border border-[#6dc96d] text-lg leading-none text-[#4cae4c] transition active:scale-95 active:bg-[#6dc96d] active:text-white"
                 onClick={() => setQty((prev) => prev + 1)}
                 aria-label="Aumentar cantidad"
               >
@@ -125,7 +169,7 @@ export default function QuickViewModal({
                   });
                   onClose();
                 }}
-                className="ml-1 h-10 border border-[var(--brand-gold-400)] bg-[var(--brand-violet-800)] px-5 text-xs font-bold uppercase tracking-[0.08em] text-[var(--brand-cream)] transition hover:bg-[var(--brand-violet-700)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                className="ml-1 h-10 border border-[var(--brand-gold-400)] bg-[var(--brand-violet-800)] px-5 text-xs font-bold uppercase tracking-[0.08em] text-[var(--brand-cream)] transition hover:bg-[var(--brand-violet-700)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
               >
                 Comprar
               </button>
@@ -149,6 +193,27 @@ export default function QuickViewModal({
           </div>
         </div>
       </div>
+      {isLightboxOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90 p-4"
+          onClick={() => setIsLightboxOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Imagen ampliada del producto"
+        >
+          {thumb ? (
+            <img
+              src={thumb}
+              alt={product.name}
+              className="max-h-full max-w-full object-contain"
+            />
+          ) : (
+            <div className="text-sm uppercase tracking-[0.2em] text-white">
+              Sin imagen
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
