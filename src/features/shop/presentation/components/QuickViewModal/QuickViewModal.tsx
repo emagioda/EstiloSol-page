@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
+import { TransformComponent, TransformWrapper } from "react-zoom-pan-pinch";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/presentation/view-models/useProductsStore";
 
@@ -201,28 +202,48 @@ export default function QuickViewModal({
           aria-modal="true"
           aria-label="Imagen ampliada del producto"
         >
-          <button
-            type="button"
-            className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-2xl text-white backdrop-blur transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
-            aria-label="Cerrar imagen ampliada"
-            onClick={(event) => {
-              event.stopPropagation();
-              setIsLightboxOpen(false);
-            }}
+          <div
+            className="relative flex h-full w-full items-center justify-center"
+            onClick={(event) => event.stopPropagation()}
           >
-            <span aria-hidden>×</span>
-          </button>
-          {thumb ? (
-            <img
-              src={thumb}
-              alt={product.name}
-              className="block max-h-[100dvh] max-w-[100dvw] object-contain"
-            />
-          ) : (
-            <div className="text-sm uppercase tracking-[0.2em] text-white">
-              Sin imagen
-            </div>
-          )}
+            <button
+              type="button"
+              className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-2xl text-white backdrop-blur transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+              aria-label="Cerrar imagen ampliada"
+              onClick={() => setIsLightboxOpen(false)}
+            >
+              <span aria-hidden>×</span>
+            </button>
+            {thumb ? (
+              <TransformWrapper
+                initialScale={1}
+                minScale={1}
+                maxScale={4}
+                centerOnInit
+                limitToBounds
+                doubleClick={{ mode: "zoomIn", step: 1 }}
+                pinch={{ step: 5 }}
+                panning={{ velocityDisabled: false }}
+                alignmentAnimation={{ sizeX: 0.05, sizeY: 0.05, animationTime: 220 }}
+              >
+                <TransformComponent
+                  wrapperClass="flex h-full w-full items-center justify-center"
+                  contentClass="flex h-full w-full items-center justify-center"
+                >
+                  <img
+                    src={thumb}
+                    alt={product.name}
+                    className="block max-h-[100dvh] max-w-[100dvw] object-contain"
+                    style={{ willChange: "transform", touchAction: "none" }}
+                  />
+                </TransformComponent>
+              </TransformWrapper>
+            ) : (
+              <div className="text-sm uppercase tracking-[0.2em] text-white">
+                Sin imagen
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
