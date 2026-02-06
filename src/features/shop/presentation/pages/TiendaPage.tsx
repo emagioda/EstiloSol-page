@@ -27,12 +27,16 @@ export default function TiendaPage() {
   } = useProductsStore();
   const { open: cartOpen, setOpen: setCartOpen } = useCartDrawer();
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const { setSuppressBadge } = useCartBadgeVisibility();
+  const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
 
   useEffect(() => {
     setSuppressBadge(isQuickViewOpen);
-    return () => setSuppressBadge(false);
-  }, [isQuickViewOpen, setSuppressBadge]);
+    setSuppressFloatingCart(isQuickViewOpen);
+    return () => {
+      setSuppressBadge(false);
+      setSuppressFloatingCart(false);
+    };
+  }, [isQuickViewOpen, setSuppressBadge, setSuppressFloatingCart]);
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-8 text-[var(--brand-cream)]">

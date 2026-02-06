@@ -5,6 +5,8 @@ import { createContext, useContext, useState } from "react";
 type CartBadgeVisibilityContextValue = {
   suppressBadge: boolean;
   setSuppressBadge: (value: boolean) => void;
+  suppressFloatingCart: boolean;
+  setSuppressFloatingCart: (value: boolean) => void;
 };
 
 const CartBadgeVisibilityContext = createContext<CartBadgeVisibilityContextValue | undefined>(
@@ -17,9 +19,17 @@ export const CartBadgeVisibilityProvider = ({
   children: React.ReactNode;
 }) => {
   const [suppressBadge, setSuppressBadge] = useState(false);
+  const [suppressFloatingCart, setSuppressFloatingCart] = useState(false);
 
   return (
-    <CartBadgeVisibilityContext.Provider value={{ suppressBadge, setSuppressBadge }}>
+    <CartBadgeVisibilityContext.Provider
+      value={{
+        suppressBadge,
+        setSuppressBadge,
+        suppressFloatingCart,
+        setSuppressFloatingCart,
+      }}
+    >
       {children}
     </CartBadgeVisibilityContext.Provider>
   );
