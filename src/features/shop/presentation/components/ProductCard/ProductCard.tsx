@@ -26,6 +26,10 @@ export default function ProductCard({
 }) {
   const { addItem, items, updateQty, removeItem } = useCart();
   const cartItem = items.find((it) => it.productId === product.id);
+  const formattedPrice = new Intl.NumberFormat("es-AR", {
+    style: "currency",
+    currency: "ARS",
+  }).format(product.price);
 
   const thumb =
     product.images && product.images.length > 0 ? product.images[0] : undefined;
@@ -76,7 +80,7 @@ export default function ProductCard({
             {product.name}
           </h3>
           <div className="text-sm font-semibold text-[var(--brand-cream)] sm:text-base">
-            {product.price} {product.currency ?? "ARS"}
+            {formattedPrice}
           </div>
         </div>
 
