@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { fetchProductsFromSheets } from "@/src/features/shop/infrastructure/data/fetchProducts";
 
 export type Product = {
   id: string;
@@ -19,12 +20,14 @@ export type FilterState = {
   sortBy: "price-asc" | "price-desc" | "name-asc" | "name-desc" | "newest";
 };
 
-export const useProductsStore = () => {
-  const sheetsEndpoint =
-    process.env.NEXT_PUBLIC_SHEETS_ENDPOINT ||
-    "https://script.google.com/macros/s/AKfycbz6DR8Q1sFG4CuZ0UtMn889EUQNQAUQjdDMbjt689wLfY45jWFvBkgkEKlgapYaQm1sIg/exec";
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
+export const useProductsStore = ({
+  initialProducts,
+}: {
+  initialProducts?: Product[];
+} = {}) => {
+  const hasInitialProducts = initialProducts !== undefined;
+  const [products, setProducts] = useState<Product[]>(() => initialProducts ?? []);
+  const [loading, setLoading] = useState(!hasInitialProducts);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [filters, setFilters] = useState<FilterState>({
     searchTerm: "",
@@ -35,25 +38,20 @@ export const useProductsStore = () => {
   const fetchProducts = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(sheetsEndpoint, { cache: "no-store" });
-      if (!res.ok) {
-        console.error("Failed to fetch products:", res.status);
-        setProducts([]);
-        return;
-      }
-      const data = await res.json();
-      setProducts(Array.isArray(data) ? data : []);
+      const data = await fetchProductsFromSheets();
+      setProducts(data as Product[]);
     } catch (error) {
       console.error("Error fetching products:", error);
       setProducts([]);
     } finally {
       setLoading(false);
     }
-  }, [sheetsEndpoint]);
+  }, []);
 
   useEffect(() => {
+    if (hasInitialProducts) return;
     fetchProducts();
-  }, [fetchProducts]);
+  }, [fetchProducts, hasInitialProducts]);
 
   const getCategories = (): string[] => {
     const cats = new Set<string>();
