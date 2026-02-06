@@ -195,7 +195,7 @@ export default function QuickViewModal({
       </div>
       {isLightboxOpen && (
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90 p-4 relative"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90"
           onClick={() => setIsLightboxOpen(false)}
           role="dialog"
           aria-modal="true"
@@ -216,7 +216,7 @@ export default function QuickViewModal({
             <img
               src={thumb}
               alt={product.name}
-              className="max-h-full max-w-full object-contain"
+              className="block max-h-[100dvh] max-w-[100dvw] object-contain"
             />
           ) : (
             <div className="text-sm uppercase tracking-[0.2em] text-white">
