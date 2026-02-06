@@ -43,18 +43,18 @@ export default function QuickViewModal({
       aria-label={`Vista rápida de ${product.name}`}
     >
       <div
-        className="relative grid w-full max-w-3xl gap-4 rounded-3xl border border-[var(--brand-gold-400)]/30 bg-[var(--brand-violet-strong)] p-4 text-[var(--brand-cream)] shadow-[0_20px_80px_rgba(6,3,14,0.7)] sm:grid-cols-2 sm:gap-6 sm:p-6"
+        className="relative grid w-full max-w-4xl overflow-hidden border border-[#e8e8e8] bg-white text-[#1f1f1f] shadow-[0_20px_80px_rgba(0,0,0,0.45)] sm:grid-cols-2"
         onClick={(e) => e.stopPropagation()}
       >
         <button
-          className="absolute right-3 top-3 z-20 flex h-10 w-10 items-center justify-center rounded-full border border-[var(--brand-gold-300)] bg-[var(--brand-violet-950)]/90 text-2xl leading-none text-[var(--brand-gold-100)] shadow-[0_8px_20px_rgba(0,0,0,0.45)] transition hover:scale-105 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-200)]"
+          className="absolute right-0 top-0 z-20 flex h-10 w-10 items-center justify-center bg-[#3b3f45] text-2xl leading-none text-[#dce548] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#dce548]"
           onClick={onClose}
           aria-label="Cerrar vista rápida"
         >
           <span aria-hidden="true" className="-mt-0.5">×</span>
         </button>
 
-        <div className="relative h-64 overflow-hidden rounded-2xl border border-[var(--brand-gold-400)]/30 bg-black/20 sm:h-full sm:min-h-[320px]">
+        <div className="relative h-60 overflow-hidden bg-[#f7f7f7] sm:h-full sm:min-h-[420px]">
           {thumb ? (
             <Image
               src={thumb}
@@ -64,69 +64,77 @@ export default function QuickViewModal({
               sizes="(max-width:640px) 100vw, 50vw"
             />
           ) : (
-            <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[var(--brand-gold-300)]">
+            <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[#777]">
               Sin imagen
             </div>
           )}
         </div>
 
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4 p-5 sm:p-7">
           <div>
-            <h3 className="text-2xl font-semibold">{product.name}</h3>
-            <p className="mt-2 text-xl font-semibold text-[var(--brand-gold-300)]">
+            <h3 className="text-4xl font-bold uppercase leading-tight tracking-[0.02em] sm:text-[2.2rem]">
+              {product.name}
+            </h3>
+            <p className="mt-4 border-b border-[#ececec] pb-4 text-5xl font-medium sm:text-[3rem]">
               {formatter.format(product.price)}
             </p>
           </div>
 
-          {product.description && (
-            <p className="text-sm leading-relaxed text-[var(--brand-cream)]/90">
-              {product.description}
-            </p>
-          )}
-
-          {product.category && (
-            <p className="text-xs uppercase tracking-[0.12em] text-[var(--brand-gold-200)]">
-              Categoría: {product.category}
-            </p>
-          )}
-
           <div className="mt-auto flex flex-col gap-3">
-            <div className="flex w-fit items-center overflow-hidden rounded-full border border-[var(--brand-gold-400)]/40 bg-black/20">
+            <div className="flex w-fit items-center gap-2">
               <button
                 type="button"
-                className="flex h-10 w-10 items-center justify-center text-lg"
+                className="flex h-10 w-10 items-center justify-center border border-[#ff6767] text-lg leading-none text-[#ff6767]"
                 onClick={() => setQty((prev) => Math.max(1, prev - 1))}
                 aria-label="Reducir cantidad"
               >
                 -
               </button>
-              <span className="w-12 text-center text-sm font-semibold">{qty}</span>
+              <span className="flex h-10 w-10 items-center justify-center border border-[#d9d9d9] text-sm font-semibold">
+                {qty}
+              </span>
               <button
                 type="button"
-                className="flex h-10 w-10 items-center justify-center text-lg"
+                className="flex h-10 w-10 items-center justify-center border border-[#6dc96d] text-lg leading-none text-[#4cae4c]"
                 onClick={() => setQty((prev) => prev + 1)}
                 aria-label="Aumentar cantidad"
               >
                 +
               </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  addItem({
+                    productId: product.id,
+                    name: product.name,
+                    unitPrice: product.price,
+                    qty,
+                    image: thumb,
+                  });
+                  onClose();
+                }}
+                className="ml-1 h-10 border border-[#b68757] bg-[#b68757] px-5 text-xs font-bold uppercase tracking-[0.08em] text-white transition hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b68757]"
+              >
+                Comprar
+              </button>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                addItem({
-                  productId: product.id,
-                  name: product.name,
-                  unitPrice: product.price,
-                  qty,
-                  image: thumb,
-                });
-                onClose();
-              }}
-              className="rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-gold-300)] px-5 py-3 text-sm font-semibold uppercase tracking-[0.08em] text-[var(--brand-violet-strong)] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-cream)]"
-            >
-              Agregar al carrito
-            </button>
+            <div className="space-y-1 border-t border-[#ececec] pt-4 text-sm leading-relaxed text-[#222]">
+              <p>
+                <span className="font-semibold">SKU:</span> {product.id.toUpperCase()}
+              </p>
+              {product.category && (
+                <p>
+                  <span className="font-semibold">Categorías:</span> {product.category}
+                </p>
+              )}
+              {product.description && (
+                <p>
+                  <span className="font-semibold">Etiquetas:</span> {product.description}
+                </p>
+              )}
+            </div>
           </div>
         </div>
       </div>
