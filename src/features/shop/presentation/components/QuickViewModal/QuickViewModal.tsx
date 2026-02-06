@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/presentation/view-models/useProductsStore";
 
@@ -18,6 +18,17 @@ export default function QuickViewModal({
 }: QuickViewModalProps) {
   const { addItem } = useCart();
   const [qty, setQty] = useState(1);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [open]);
 
 
   const formatter = useMemo(
@@ -43,7 +54,7 @@ export default function QuickViewModal({
       aria-label={`Vista rápida de ${product.name}`}
     >
       <div
-        className="relative grid w-full max-w-4xl overflow-hidden border border-[#e8e8e8] bg-white text-[#1f1f1f] shadow-[0_20px_80px_rgba(0,0,0,0.45)] sm:grid-cols-2"
+        className="relative grid w-full max-w-4xl overflow-hidden border border-[var(--brand-violet-700)]/40 bg-[var(--brand-cream)] text-[var(--brand-violet-950)] shadow-[0_20px_80px_rgba(0,0,0,0.45)] sm:grid-cols-2"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -114,7 +125,7 @@ export default function QuickViewModal({
                   });
                   onClose();
                 }}
-                className="ml-1 h-10 border border-[#b68757] bg-[#b68757] px-5 text-xs font-bold uppercase tracking-[0.08em] text-white transition hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b68757]"
+                className="ml-1 h-10 border border-[var(--brand-gold-400)] bg-[var(--brand-violet-800)] px-5 text-xs font-bold uppercase tracking-[0.08em] text-[var(--brand-cream)] transition hover:bg-[var(--brand-violet-700)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
               >
                 Comprar
               </button>
