@@ -33,7 +33,7 @@ export default function HomeSplit() {
                 key={section.title}
                 className="relative flex w-full flex-col items-center justify-center gap-4 px-4 py-8 text-center text-[var(--brand-cream)] sm:py-10 md:h-full md:py-0 md:px-8 md:text-left"
               >
-                <div className="glass-panel w-full rounded-2xl px-5 py-6 text-center sm:rounded-3xl sm:px-6 sm:py-8 md:text-left">
+                <div className="glass-panel w-full rounded-2xl px-5 py-6 text-center transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl sm:rounded-3xl sm:px-6 sm:py-8 md:text-left">
                   <TitleTag
                     className="text-2xl font-semibold leading-tight text-[var(--brand-cream)] sm:text-3xl md:text-4xl"
                     style={{ fontFamily: typography.display }}
