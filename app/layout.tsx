@@ -6,6 +6,7 @@ import Navbar from "@/src/core/presentation/components/Navbar/Navbar";
 import { CartDrawerProvider } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import { CartProvider } from "@/src/features/shop/presentation/view-models/useCartStore";
 import FloatingCartButton from "@/src/features/shop/presentation/components/FloatingCartButton/FloatingCartButton";
+import { CartBadgeVisibilityProvider } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
 
 const brandDisplay = Parisienne({
   variable: "--font-brand-display",
@@ -54,9 +55,11 @@ export default function RootLayout({
         <style dangerouslySetInnerHTML={{ __html: cssVars }} />
         <CartProvider>
           <CartDrawerProvider>
-            <Navbar />
-            <FloatingCartButton />
-            {children}
+            <CartBadgeVisibilityProvider>
+              <Navbar />
+              <FloatingCartButton />
+              {children}
+            </CartBadgeVisibilityProvider>
           </CartDrawerProvider>
         </CartProvider>
       </body>

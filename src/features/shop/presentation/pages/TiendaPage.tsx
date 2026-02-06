@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useProductsStore } from "../view-models/useProductsStore";
 import { useCartDrawer } from "../view-models/useCartDrawer";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
@@ -8,6 +8,7 @@ import StoreToolbar from "@/src/features/shop/presentation/components/StoreToolb
 import CartDrawer from "@/src/features/shop/presentation/components/CartDrawer/CartDrawer";
 import LoadingGrid from "@/src/features/shop/presentation/components/LoadingGrid/LoadingGrid";
 import QuickViewModal from "@/src/features/shop/presentation/components/QuickViewModal/QuickViewModal";
+import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
 
 export default function TiendaPage() {
   const {
@@ -26,6 +27,12 @@ export default function TiendaPage() {
   } = useProductsStore();
   const { open: cartOpen, setOpen: setCartOpen } = useCartDrawer();
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const { setSuppressBadge } = useCartBadgeVisibility();
+
+  useEffect(() => {
+    setSuppressBadge(isQuickViewOpen);
+    return () => setSuppressBadge(false);
+  }, [isQuickViewOpen, setSuppressBadge]);
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-8 text-[var(--brand-cream)]">

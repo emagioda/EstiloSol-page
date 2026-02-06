@@ -195,12 +195,23 @@ export default function QuickViewModal({
       </div>
       {isLightboxOpen && (
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90 p-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90 p-4 relative"
           onClick={() => setIsLightboxOpen(false)}
           role="dialog"
           aria-modal="true"
           aria-label="Imagen ampliada del producto"
         >
+          <button
+            type="button"
+            className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-2xl text-white backdrop-blur transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+            aria-label="Cerrar imagen ampliada"
+            onClick={(event) => {
+              event.stopPropagation();
+              setIsLightboxOpen(false);
+            }}
+          >
+            <span aria-hidden>×</span>
+          </button>
           {thumb ? (
             <img
               src={thumb}
