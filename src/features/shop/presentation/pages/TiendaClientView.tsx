@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useProductsStore, type Product } from "../view-models/useProductsStore";
 import { useCartDrawer } from "../view-models/useCartDrawer";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
@@ -7,8 +7,6 @@ import FiltersSidebar from "@/src/features/shop/presentation/components/FiltersS
 import StoreToolbar from "@/src/features/shop/presentation/components/StoreToolbar/StoreToolbar";
 import CartDrawer from "@/src/features/shop/presentation/components/CartDrawer/CartDrawer";
 import LoadingGrid from "@/src/features/shop/presentation/components/LoadingGrid/LoadingGrid";
-import QuickViewModal from "@/src/features/shop/presentation/components/QuickViewModal/QuickViewModal";
-import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
 
 type TiendaClientViewProps = {
   initialProducts: Product[];
@@ -24,23 +22,9 @@ export default function TiendaClientView({ initialProducts }: TiendaClientViewPr
     setSortBy,
     clearFilters,
     categories,
-    selectedProduct,
-    isQuickViewOpen,
-    openQuickView,
-    closeQuickView,
   } = useProductsStore({ initialProducts });
   const { open: cartOpen, setOpen: setCartOpen } = useCartDrawer();
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
-
-  useEffect(() => {
-    setSuppressBadge(isQuickViewOpen);
-    setSuppressFloatingCart(isQuickViewOpen);
-    return () => {
-      setSuppressBadge(false);
-      setSuppressFloatingCart(false);
-    };
-  }, [isQuickViewOpen, setSuppressBadge, setSuppressFloatingCart]);
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-8 text-[var(--brand-cream)]">
@@ -76,11 +60,7 @@ export default function TiendaClientView({ initialProducts }: TiendaClientViewPr
             productCount={products.length}
           />
 
-          {loading ? (
-            <LoadingGrid />
-          ) : (
-            <ProductsGrid products={products} onQuickView={openQuickView} />
-          )}
+          {loading ? <LoadingGrid /> : <ProductsGrid products={products} />}
         </div>
       </section>
 
@@ -100,13 +80,6 @@ export default function TiendaClientView({ initialProducts }: TiendaClientViewPr
           />
         </div>
       )}
-
-      <QuickViewModal
-        key={selectedProduct?.id ?? "quick-view-empty"}
-        open={isQuickViewOpen}
-        product={selectedProduct}
-        onClose={closeQuickView}
-      />
 
       <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} />
     </main>

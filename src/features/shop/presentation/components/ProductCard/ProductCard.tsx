@@ -1,5 +1,6 @@
 "use client";
 import Image from "next/image";
+import Link from "next/link";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 
 export type Product = {
@@ -19,10 +20,8 @@ const ACTION_SIZE_CLASS = "h-11 w-full max-w-[170px]";
 
 export default function ProductCard({
   product,
-  onQuickView,
 }: {
   product: Product;
-  onQuickView?: (product: Product) => void;
 }) {
   const { addItem, items, updateQty, removeItem } = useCart();
   const cartItem = items.find((it) => it.productId === product.id);
@@ -39,16 +38,16 @@ export default function ProductCard({
     <article className="animate-fade-up flex flex-col rounded-3xl p-3 text-[var(--brand-cream)] shadow-[0_10px_30px_rgba(26,10,48,0.35)] transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl glass-panel sm:p-[var(--space-card-padding)]">
       
       {/* IMAGEN ESTÁTICA */}
-      <div 
-        className="group relative mb-[var(--space-card-content-gap)] flex h-40 w-full items-center justify-center overflow-hidden rounded-2xl border border-[var(--brand-gold-400)]/30 bg-[rgba(255,255,255,0.03)] sm:h-44 cursor-pointer"
-        onClick={() => onQuickView?.(product)}
+      <Link
+        href={`/tienda/producto/${String(product.slug ?? product.id)}`}
+        className="group relative mb-[var(--space-card-content-gap)] flex h-40 w-full items-center justify-center overflow-hidden rounded-2xl border border-[var(--brand-gold-400)]/30 bg-[rgba(255,255,255,0.03)] sm:h-44"
       >
         {thumb ? (
           <Image
             src={thumb}
             alt={product.name}
             fill
-            className="object-cover transition-transform duration-500 group-hover:scale-105"
+            className="object-cover"
             sizes="(max-width:640px) 50vw, (max-width:1024px) 33vw, 25vw"
           />
         ) : (
@@ -66,7 +65,7 @@ export default function ProductCard({
             Ver detalles
           </span>
         </div>
-      </div>
+      </Link>
 
       {/* INFO DEL PRODUCTO */}
       <div className="flex flex-col gap-[var(--space-card-content-gap)]">

@@ -46,14 +46,14 @@ export const ProductGallery = ({ images, productName }: ProductGalleryProps) => 
           <>
             <button
               onClick={(e) => { e.stopPropagation(); handlePrev(); }}
-              className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white hover:bg-[var(--brand-violet-strong)] transition-colors backdrop-blur-sm opacity-0 group-hover:opacity-100"
+              className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white transition-colors backdrop-blur-sm opacity-100 md:opacity-0 md:group-hover:opacity-100 hover:bg-[var(--brand-violet-strong)]"
               aria-label="Imagen anterior"
             >
               <ChevronLeft size={24} />
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); handleNext(); }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white hover:bg-[var(--brand-violet-strong)] transition-colors backdrop-blur-sm opacity-0 group-hover:opacity-100"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white transition-colors backdrop-blur-sm opacity-100 md:opacity-0 md:group-hover:opacity-100 hover:bg-[var(--brand-violet-strong)]"
               aria-label="Siguiente imagen"
             >
               <ChevronRight size={24} />
