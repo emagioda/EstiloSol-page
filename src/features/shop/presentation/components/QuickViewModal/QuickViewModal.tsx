@@ -2,7 +2,9 @@
 
 import Image from "next/image";
 import { type MouseEvent, useEffect, useMemo, useState } from "react";
-import { TransformComponent, TransformWrapper } from "react-zoom-pan-pinch";
+import Lightbox from "yet-another-react-lightbox";
+import Zoom from "yet-another-react-lightbox/plugins/zoom";
+import "yet-another-react-lightbox/styles.css";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/presentation/view-models/useProductsStore";
 
@@ -277,61 +279,16 @@ export default function QuickViewModal({
           </div>
         </div>
       </div>
-      {isLightboxOpen && (
-        <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90"
-          onClick={() => setIsLightboxOpen(false)}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Imagen ampliada del producto"
-        >
-          <div
-            className="relative flex h-full w-full items-center justify-center"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button
-              type="button"
-              className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-2xl text-white backdrop-blur transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
-              aria-label="Cerrar imagen ampliada"
-              onClick={() => setIsLightboxOpen(false)}
-            >
-              <span aria-hidden>×</span>
-            </button>
-            {currentImage ? (
-              <TransformWrapper
-                key={currentImageIndex}
-                initialScale={1}
-                minScale={1}
-                maxScale={4}
-                centerOnInit
-                limitToBounds
-                doubleClick={{ mode: "zoomIn", step: 1 }}
-                pinch={{ step: 5 }}
-                panning={{ velocityDisabled: false }}
-                alignmentAnimation={{ sizeX: 0.05, sizeY: 0.05, animationTime: 220 }}
-              >
-                <TransformComponent
-                  wrapperClass="flex h-full w-full items-center justify-center"
-                  contentClass="flex h-full w-full items-center justify-center"
-                >
-                  {/* CORRECCIÓN 2: Desactivamos el aviso de Next.js para poder usar img con zoom */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={currentImage}
-                    alt={product.name}
-                    className="block max-h-[100dvh] max-w-[100dvw] object-contain"
-                    style={{ willChange: "transform", touchAction: "none" }}
-                  />
-                </TransformComponent>
-              </TransformWrapper>
-            ) : (
-              <div className="text-sm uppercase tracking-[0.2em] text-white">
-                Sin imagen
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      <Lightbox
+        open={isLightboxOpen}
+        close={() => setIsLightboxOpen(false)}
+        slides={images.map((src) => ({ src }))}
+        plugins={[Zoom]}
+        index={currentImageIndex}
+        on={{
+          view: ({ index }) => setCurrentImageIndex(index),
+        }}
+      />
     </div>
   );
 }
