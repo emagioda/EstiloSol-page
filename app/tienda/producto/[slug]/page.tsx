@@ -5,12 +5,19 @@ import type { Product } from "@/src/features/shop/presentation/view-models/usePr
 
 type Props = { params: Promise<{ slug: string }> };
 
+export const dynamicParams = false;
+
 export async function generateStaticParams() {
   try {
     const products = (await fetchProductsFromSheets()) as Product[];
-    return products
-      .filter((p) => p.slug)
-      .map((p) => ({ slug: String(p.slug) }));
+    const slugs = new Set<string>();
+
+    for (const product of products) {
+      const staticParam = String(product.slug ?? product.id ?? "").trim();
+      if (staticParam) slugs.add(staticParam);
+    }
+
+    return Array.from(slugs).map((slug) => ({ slug }));
   } catch (error) {
     console.error("Error generando static params:", error);
     return [];
