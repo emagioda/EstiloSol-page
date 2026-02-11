@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { type MouseEvent, useEffect, useMemo, useState } from "react";
 import { TransformComponent, TransformWrapper } from "react-zoom-pan-pinch";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/presentation/view-models/useProductsStore";
@@ -19,8 +19,14 @@ export default function QuickViewModal({
 }: QuickViewModalProps) {
   const { addItem } = useCart();
   const [qty, setQty] = useState(1);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setCurrentImageIndex(0), 0);
+    return () => window.clearTimeout(timer);
+  }, [product]);
 
   useEffect(() => {
     if (!open) return;
@@ -52,7 +58,21 @@ export default function QuickViewModal({
 
   if (!open || !product) return null;
 
-  const thumb = product.images?.[0] || "";
+  const images = product.images ?? [];
+  const currentImage = images[currentImageIndex] || "";
+  const hasMultipleImages = images.length > 1;
+
+  const nextImage = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (!images.length) return;
+    setCurrentImageIndex((prev) => (prev + 1) % images.length);
+  };
+
+  const prevImage = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (!images.length) return;
+    setCurrentImageIndex((prev) => (prev - 1 + images.length) % images.length);
+  };
 
   return (
     <div
@@ -74,38 +94,94 @@ export default function QuickViewModal({
           <span aria-hidden="true" className="-mt-0.5">×</span>
         </button>
 
-        <div
-          className="group relative h-60 overflow-hidden bg-[#f7f7f7] sm:h-full sm:min-h-[420px]"
-          onMouseMove={(event) => {
-            const rect = event.currentTarget.getBoundingClientRect();
-            const x = ((event.clientX - rect.left) / rect.width) * 100;
-            const y = ((event.clientY - rect.top) / rect.height) * 100;
-            setZoomPosition({ x, y });
-          }}
-          onMouseLeave={() => setZoomPosition({ x: 50, y: 50 })}
-          onClick={() => setIsLightboxOpen(true)}
-          role="button"
-          tabIndex={0}
-          aria-label="Ampliar imagen del producto"
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              setIsLightboxOpen(true);
-            }
-          }}
-        >
-          {thumb ? (
-            <Image
-              src={thumb}
-              alt={product.name}
-              fill
-              className="object-cover transition-transform duration-300 ease-out md:group-hover:scale-110"
-              style={{ transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%` }}
-              sizes="(max-width:640px) 100vw, 50vw"
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[#777]">
-              Sin imagen
+        <div className="flex flex-col bg-[#f7f7f7] p-3 sm:min-h-[420px] sm:p-4">
+          <div
+            className="group relative h-60 overflow-hidden rounded-md bg-[#f7f7f7] sm:h-full sm:min-h-[320px]"
+            onMouseMove={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              const x = ((event.clientX - rect.left) / rect.width) * 100;
+              const y = ((event.clientY - rect.top) / rect.height) * 100;
+              setZoomPosition({ x, y });
+            }}
+            onMouseLeave={() => setZoomPosition({ x: 50, y: 50 })}
+            onClick={() => setIsLightboxOpen(true)}
+            role="button"
+            tabIndex={0}
+            aria-label="Ampliar imagen del producto"
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                setIsLightboxOpen(true);
+              }
+            }}
+          >
+            {currentImage ? (
+              <Image
+                src={currentImage}
+                alt={product.name}
+                fill
+                className="object-cover transition-transform duration-300 ease-out md:group-hover:scale-110"
+                style={{ transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%` }}
+                sizes="(max-width:640px) 100vw, 50vw"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[#777]">
+                Sin imagen
+              </div>
+            )}
+
+            {hasMultipleImages && (
+              <>
+                <button
+                  type="button"
+                  onClick={prevImage}
+                  className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/30 p-2 text-white transition hover:bg-black/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                  aria-label="Imagen anterior"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M15 18 9 12l6-6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={nextImage}
+                  className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/30 p-2 text-white transition hover:bg-black/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                  aria-label="Imagen siguiente"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="m9 18 6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </>
+            )}
+          </div>
+
+          {images.length > 0 && (
+            <div className="mt-4 flex gap-2 overflow-x-auto">
+              {images.map((image, index) => (
+                <button
+                  key={`${image}-${index}`}
+                  type="button"
+                  onClick={() => setCurrentImageIndex(index)}
+                  className="relative h-16 w-16 shrink-0 cursor-pointer overflow-hidden rounded-md transition-all"
+                  style={{
+                    border:
+                      index === currentImageIndex
+                        ? "2px solid var(--brand-violet-strong)"
+                        : "2px solid transparent",
+                    opacity: index === currentImageIndex ? 1 : 0.6,
+                  }}
+                  aria-label={`Ver imagen ${index + 1} de ${images.length}`}
+                >
+                  <Image
+                    src={image}
+                    alt={`${product.name} miniatura ${index + 1}`}
+                    fill
+                    className="object-cover"
+                    sizes="64px"
+                  />
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -166,7 +242,7 @@ export default function QuickViewModal({
                     name: product.name,
                     unitPrice: product.price,
                     qty,
-                    image: thumb,
+                    image: currentImage,
                   });
                   onClose();
                 }}
@@ -214,8 +290,9 @@ export default function QuickViewModal({
             >
               <span aria-hidden>×</span>
             </button>
-            {thumb ? (
+            {currentImage ? (
               <TransformWrapper
+                key={currentImageIndex}
                 initialScale={1}
                 minScale={1}
                 maxScale={4}
@@ -231,7 +308,7 @@ export default function QuickViewModal({
                   contentClass="flex h-full w-full items-center justify-center"
                 >
                   <img
-                    src={thumb}
+                    src={currentImage}
                     alt={product.name}
                     className="block max-h-[100dvh] max-w-[100dvw] object-contain"
                     style={{ willChange: "transform", touchAction: "none" }}
