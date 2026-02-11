@@ -36,7 +36,7 @@ export default function ProductCard({
 
   return (
     <article className="animate-fade-up flex flex-col rounded-3xl p-3 text-[var(--brand-cream)] shadow-[0_10px_30px_rgba(26,10,48,0.35)] transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl glass-panel sm:p-[var(--space-card-padding)]">
-      <div className="group relative mb-[var(--space-card-content-gap)] flex h-40 w-full items-center justify-center overflow-hidden rounded-2xl border border-[var(--brand-gold-400)]/30 bg-[rgba(255,255,255,0.03)] sm:h-44">
+      <div className="group relative mb-[var(--space-card-content-gap)] aspect-square w-full overflow-hidden rounded-2xl border border-[var(--brand-gold-400)]/30 bg-[rgba(255,255,255,0.03)]">
         {thumb ? (
           <Image
             src={thumb}
