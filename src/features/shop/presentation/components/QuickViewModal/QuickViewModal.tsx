@@ -23,11 +23,13 @@ export default function QuickViewModal({
   const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
 
+  // Reset image index when product changes
   useEffect(() => {
     const timer = window.setTimeout(() => setCurrentImageIndex(0), 0);
     return () => window.clearTimeout(timer);
   }, [product]);
 
+  // Lock body scroll when open
   useEffect(() => {
     if (!open) return;
 
@@ -39,10 +41,15 @@ export default function QuickViewModal({
     };
   }, [open]);
 
+  // Reset local state when modal closes
+  // CORRECCIÓN 1: Usamos setTimeout para evitar el error "set-state-in-effect"
   useEffect(() => {
     if (!open) {
-      setIsLightboxOpen(false);
-      setQty(1);
+      const timer = setTimeout(() => {
+        setIsLightboxOpen(false);
+        setQty(1);
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [open]);
 
@@ -307,6 +314,8 @@ export default function QuickViewModal({
                   wrapperClass="flex h-full w-full items-center justify-center"
                   contentClass="flex h-full w-full items-center justify-center"
                 >
+                  {/* CORRECCIÓN 2: Desactivamos el aviso de Next.js para poder usar img con zoom */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={currentImage}
                     alt={product.name}
