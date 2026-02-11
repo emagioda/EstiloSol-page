@@ -83,7 +83,7 @@ export default function QuickViewModal({
       aria-label={`Vista rápida de ${product.name}`}
     >
       <div
-        className="relative grid w-full max-w-4xl overflow-hidden border border-[var(--brand-violet-700)]/40 bg-[var(--brand-cream)] text-[var(--brand-violet-950)] shadow-[0_20px_80px_rgba(0,0,0,0.45)] sm:grid-cols-2"
+        className="relative grid h-auto w-full max-w-4xl overflow-hidden border border-[var(--brand-violet-700)]/40 bg-[var(--brand-cream)] text-[var(--brand-violet-950)] shadow-[0_20px_80px_rgba(0,0,0,0.45)] sm:grid-cols-2"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -94,9 +94,9 @@ export default function QuickViewModal({
           <span aria-hidden="true" className="-mt-0.5">×</span>
         </button>
 
-        <div className="flex flex-col bg-[#f7f7f7] p-3 sm:min-h-[420px] sm:p-4">
+        <div className="flex h-auto flex-col bg-[#f7f7f7] p-3 sm:p-4">
           <div
-            className="group relative h-60 overflow-hidden rounded-md bg-[#f7f7f7] sm:h-full sm:min-h-[320px]"
+            className="group relative aspect-square w-full overflow-hidden rounded-md bg-[#f7f7f7]"
             onMouseMove={(event) => {
               const rect = event.currentTarget.getBoundingClientRect();
               const x = ((event.clientX - rect.left) / rect.width) * 100;
@@ -157,7 +157,7 @@ export default function QuickViewModal({
           </div>
 
           {images.length > 0 && (
-            <div className="mt-4 flex gap-2 overflow-x-auto">
+            <div className="mt-4 hidden h-auto gap-2 md:flex md:flex-wrap">
               {images.map((image, index) => (
                 <button
                   key={`${image}-${index}`}
