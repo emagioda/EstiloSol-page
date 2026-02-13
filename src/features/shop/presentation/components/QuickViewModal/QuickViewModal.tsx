@@ -12,12 +12,14 @@ type QuickViewModalProps = {
   product: Product | null;
   open: boolean;
   onClose: () => void;
+  onAddFeedback?: (params: { ok: boolean; name: string }) => void;
 };
 
 export default function QuickViewModal({
   product,
   open,
   onClose,
+  onAddFeedback,
 }: QuickViewModalProps) {
   const { addItem } = useCart();
   const [qty, setQty] = useState(1);
@@ -286,13 +288,18 @@ export default function QuickViewModal({
                 <button
                   type="button"
                   onClick={() => {
-                    addItem({
-                      productId: product.id,
-                      name: product.name,
-                      unitPrice: product.price,
-                      qty,
-                      image: currentImage,
-                    });
+                    try {
+                      addItem({
+                        productId: product.id,
+                        name: product.name,
+                        unitPrice: product.price,
+                        qty,
+                        image: currentImage,
+                      });
+                      onAddFeedback?.({ ok: true, name: product.name });
+                    } catch {
+                      onAddFeedback?.({ ok: false, name: product.name });
+                    }
                     onClose();
                   }}
                   className="ml-3 h-10 rounded-md border border-[var(--brand-gold-400)] bg-[var(--brand-violet-800)] px-6 text-xs font-bold uppercase tracking-[0.08em] text-[var(--brand-cream)] shadow-sm transition hover:bg-[var(--brand-violet-700)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"

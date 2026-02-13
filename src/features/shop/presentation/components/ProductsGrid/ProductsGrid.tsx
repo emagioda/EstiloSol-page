@@ -5,9 +5,11 @@ import type { Product } from "../ProductCard/ProductCard";
 export default function ProductsGrid({
   products,
   onQuickView,
+  onAddFeedback,
 }: {
   products: Product[];
   onQuickView?: (product: Product) => void;
+  onAddFeedback?: (params: { ok: boolean; name: string }) => void;
 }) {
   if (!products || products.length === 0) {
     return (
@@ -19,9 +21,14 @@ export default function ProductsGrid({
   }
 
   return (
-    <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3 lg:grid-cols-4">
+    <div className="grid auto-rows-fr grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3 lg:grid-cols-4">
       {products.map((p) => (
-        <ProductCard key={p.id} product={p} onQuickView={onQuickView} />
+        <ProductCard
+          key={p.id}
+          product={p}
+          onQuickView={onQuickView}
+          onAddFeedback={onAddFeedback}
+        />
       ))}
     </div>
   );

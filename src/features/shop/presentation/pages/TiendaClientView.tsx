@@ -16,6 +16,11 @@ type TiendaClientViewProps = {
   storeDescription?: string;
 };
 
+type CartNotice = {
+  type: "success" | "error";
+  message: string;
+};
+
 type ShopWorld = "peluqueria" | "bijouterie";
 
 const worldKeywords: Record<ShopWorld, string[]> = {
@@ -60,6 +65,7 @@ export default function TiendaClientView({
   const { open: cartOpen, setOpen: setCartOpen } = useCartDrawer();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedWorld, setSelectedWorld] = useState<ShopWorld>("peluqueria");
+  const [cartNotice, setCartNotice] = useState<CartNotice | null>(null);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
 
   const categoryBelongsToWorld = (category: string, world: ShopWorld) => {
@@ -90,6 +96,21 @@ export default function TiendaClientView({
       setSuppressFloatingCart(false);
     };
   }, [isQuickViewOpen, setSuppressBadge, setSuppressFloatingCart]);
+
+  useEffect(() => {
+    if (!cartNotice) return;
+    const timer = window.setTimeout(() => setCartNotice(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [cartNotice]);
+
+  const handleAddFeedback = ({ ok, name }: { ok: boolean; name: string }) => {
+    setCartNotice({
+      type: ok ? "success" : "error",
+      message: ok
+        ? `${name} se agregó al carrito con éxito.`
+        : `No pudimos agregar ${name}. Intentá nuevamente.`,
+    });
+  };
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-8 text-[var(--brand-cream)]">
@@ -161,10 +182,30 @@ export default function TiendaClientView({
           {loading ? (
             <LoadingGrid />
           ) : (
-            <ProductsGrid products={worldFilteredProducts} onQuickView={openQuickView} />
+            <ProductsGrid
+              products={worldFilteredProducts}
+              onQuickView={openQuickView}
+              onAddFeedback={handleAddFeedback}
+            />
           )}
         </div>
       </section>
+
+      {cartNotice && (
+        <div className="pointer-events-none fixed inset-x-0 top-24 z-[70] flex justify-center px-4">
+          <div
+            className={`rounded-xl border px-4 py-2.5 text-sm font-medium shadow-[0_12px_30px_rgba(10,4,20,0.35)] backdrop-blur ${
+              cartNotice.type === "success"
+                ? "border-emerald-200/60 bg-emerald-600/85 text-white"
+                : "border-rose-200/60 bg-rose-600/85 text-white"
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {cartNotice.message}
+          </div>
+        </div>
+      )}
 
       {filtersOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
@@ -188,6 +229,7 @@ export default function TiendaClientView({
         open={isQuickViewOpen}
         product={selectedProduct}
         onClose={closeQuickView}
+        onAddFeedback={handleAddFeedback}
       />
 
       <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} />
