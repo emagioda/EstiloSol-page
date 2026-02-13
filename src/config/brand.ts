@@ -59,8 +59,8 @@ export const brandConfig = {
     body: "var(--font-brand-body)",
   },
   heroLeft: {
-    title: "Reserva tu Turno de Peluquería",
-    subtitle: "¡Haz tu cita para un nuevo look!",
+    title: "Estilo y Cuidado Profesional",
+    subtitle: "Reservá tu turno y potenciá tu look con expertos",
     image: {
       src: "/home/turnos.jpg",
       alt: "Turno de peluquería en Estilo Sol",
@@ -70,8 +70,8 @@ export const brandConfig = {
     ctaHref: "/turnos",
   } as BrandSection,
   heroRight: {
-    title: "E-Shop de Bijouterie",
-    subtitle: "Descubre nuestros accesorios",
+    title: "Productos Profesionales y Diseños Únicos",
+    subtitle: "Explorá nuestra tienda híbrida de Peluquería + Bijouterie",
     image: {
       src: "/home/tienda.jpg",
       alt: "Accesorios disponibles en Estilo Sol",
@@ -91,7 +91,7 @@ export const brandConfig = {
     },
     right: {
       src: "/home/joyas.png",
-      alt: "Joyas decorativas",
+      alt: "Diseños únicos decorativos",
       width: 120,
       height: 120,
       fallback: "💎",

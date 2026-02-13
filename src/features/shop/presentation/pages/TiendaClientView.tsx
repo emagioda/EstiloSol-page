@@ -12,9 +12,24 @@ import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-mo
 
 type TiendaClientViewProps = {
   initialProducts: Product[];
+  storeHeading?: string;
+  storeDescription?: string;
 };
 
-export default function TiendaClientView({ initialProducts }: TiendaClientViewProps) {
+type ShopWorld = "peluqueria" | "bijouterie";
+
+const worldKeywords: Record<ShopWorld, string[]> = {
+  peluqueria: ["pelo", "capilar", "shampoo", "acondicionador", "tratamiento", "peine", "tintura", "peluquer"],
+  bijouterie: ["bijou", "aro", "anillo", "pulsera", "collar", "accesorio", "joya"],
+};
+
+const normalizeText = (value: string) => value.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+
+export default function TiendaClientView({
+  initialProducts,
+  storeHeading = "Tienda Híbrida · Estilo y Cuidado",
+  storeDescription = "Comprá Productos Profesionales para peluquería y Diseños Únicos de bijouterie. Elegí tus favoritos y coordinamos el pago por transferencia o efectivo.",
+}: TiendaClientViewProps) {
   const {
     products,
     loading,
@@ -31,7 +46,28 @@ export default function TiendaClientView({ initialProducts }: TiendaClientViewPr
   } = useProductsStore({ initialProducts });
   const { open: cartOpen, setOpen: setCartOpen } = useCartDrawer();
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [selectedWorld, setSelectedWorld] = useState<ShopWorld>("peluqueria");
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
+
+  const categoryBelongsToWorld = (category: string, world: ShopWorld) => {
+    const normalizedCategory = normalizeText(category);
+    return worldKeywords[world].some((keyword) =>
+      normalizedCategory.includes(normalizeText(keyword))
+    );
+  };
+
+  const availableCategories = categories.filter((category) =>
+    categoryBelongsToWorld(category, selectedWorld)
+  );
+
+  const worldFilteredProducts = products.filter((product) => {
+    const searchable = normalizeText(
+      `${product.category ?? ""} ${product.name ?? ""} ${product.description ?? ""}`
+    );
+    return worldKeywords[selectedWorld].some((keyword) =>
+      searchable.includes(normalizeText(keyword))
+    );
+  });
 
   useEffect(() => {
     setSuppressBadge(isQuickViewOpen);
@@ -46,23 +82,27 @@ export default function TiendaClientView({ initialProducts }: TiendaClientViewPr
     <main className="mx-auto w-full max-w-7xl px-4 py-8 text-[var(--brand-cream)]">
       <header className="mb-8">
         <h1 className="text-3xl font-semibold text-[var(--brand-cream)]">
-          Tienda de Bijouterie
+          {storeHeading}
         </h1>
         <p className="mt-3 max-w-2xl text-sm text-[var(--brand-gold-300)]">
-          Elegí tus favoritos, armá tu carrito y coordinamos el pago por
-          transferencia o efectivo.
+          {storeDescription}
         </p>
       </header>
 
       <section className="flex flex-col gap-6 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.35)] p-4 shadow-[0_20px_50px_rgba(18,8,35,0.35)] md:flex-row md:gap-8 md:p-6">
         <div className="hidden md:block md:w-64">
           <FiltersSidebar
-            categories={categories}
+            categories={availableCategories}
             filters={filters}
             onFilterChange={{
               category: setCategory,
               search: setSearchTerm,
               sort: setSortBy,
+            }}
+            selectedWorld={selectedWorld}
+            onWorldChange={(world) => {
+              setSelectedWorld(world);
+              setCategory(null);
             }}
             onClearFilters={clearFilters}
           />
@@ -70,16 +110,16 @@ export default function TiendaClientView({ initialProducts }: TiendaClientViewPr
 
         <div className="flex-1">
           <StoreToolbar
-            searchTerm={filters.searchTerm}
-            onSearchChange={setSearchTerm}
-            onFiltersClick={() => setFiltersOpen(true)}
-            productCount={products.length}
-          />
+              searchTerm={filters.searchTerm}
+              onSearchChange={setSearchTerm}
+              onFiltersClick={() => setFiltersOpen(true)}
+              productCount={worldFilteredProducts.length}
+            />
 
           {loading ? (
             <LoadingGrid />
           ) : (
-            <ProductsGrid products={products} onQuickView={openQuickView} />
+            <ProductsGrid products={worldFilteredProducts} onQuickView={openQuickView} />
           )}
         </div>
       </section>
@@ -87,12 +127,17 @@ export default function TiendaClientView({ initialProducts }: TiendaClientViewPr
       {filtersOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
           <FiltersSidebar
-            categories={categories}
+            categories={availableCategories}
             filters={filters}
             onFilterChange={{
               category: setCategory,
               search: setSearchTerm,
               sort: setSortBy,
+            }}
+            selectedWorld={selectedWorld}
+            onWorldChange={(world) => {
+              setSelectedWorld(world);
+              setCategory(null);
             }}
             onClearFilters={clearFilters}
             isOpen={filtersOpen}

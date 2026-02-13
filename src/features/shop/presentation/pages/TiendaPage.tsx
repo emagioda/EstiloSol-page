@@ -11,5 +11,11 @@ export default async function TiendaPage() {
     console.error("Error fetching products on server:", error);
   }
 
-  return <TiendaClientView initialProducts={products} />;
+  return (
+    <TiendaClientView
+      initialProducts={products}
+      storeHeading="Productos Profesionales y Diseños Únicos"
+      storeDescription="Explorá nuestra tienda híbrida para Peluquería y Bijouterie con una experiencia de compra simple y profesional."
+    />
+  );
 }
