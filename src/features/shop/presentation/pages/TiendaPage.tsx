@@ -15,7 +15,7 @@ export default async function TiendaPage() {
     <TiendaClientView
       initialProducts={products}
       storeHeading="Productos Profesionales y Diseños Únicos"
-      storeDescription="Explorá nuestra tienda híbrida para Peluquería y Bijouterie con una experiencia de compra simple y profesional."
+      storeDescription="Encontrá todo para consentirte: cuidado profesional para tu cabello y bijouterie divina en un mismo lugar."
     />
   );
 }

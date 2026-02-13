@@ -2,8 +2,6 @@
 import { useState } from "react";
 import type { FilterState } from "../../view-models/useProductsStore";
 
-type ShopWorld = "peluqueria" | "bijouterie";
-
 interface FiltersSidebarProps {
   categories: string[];
   filters: FilterState;
@@ -13,8 +11,6 @@ interface FiltersSidebarProps {
     sort: (sort: FilterState["sortBy"]) => void;
   };
   onClearFilters: () => void;
-  selectedWorld: ShopWorld;
-  onWorldChange: (world: ShopWorld) => void;
   isOpen?: boolean;
   onClose?: () => void;
 }
@@ -24,8 +20,6 @@ export default function FiltersSidebar({
   filters,
   onFilterChange,
   onClearFilters,
-  selectedWorld,
-  onWorldChange,
   isOpen = true,
   onClose,
 }: FiltersSidebarProps) {
@@ -61,35 +55,6 @@ export default function FiltersSidebar({
               <span className="text-2xl text-[var(--brand-cream)]">✕</span>
             </button>
           )}
-
-          <div className="rounded-2xl border border-[var(--brand-gold-400)]/25 bg-black/10 p-2">
-            <p className="mb-2 text-xs uppercase tracking-[0.2em] text-[var(--brand-gold-300)]">
-              Explorá por rubro
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              {([
-                { key: "peluqueria", label: "Peluquería" },
-                { key: "bijouterie", label: "Bijouterie" },
-              ] as const).map((world) => {
-                const active = selectedWorld === world.key;
-                return (
-                  <button
-                    key={world.key}
-                    type="button"
-                    onClick={() => onWorldChange(world.key)}
-                    className={`rounded-xl border px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] transition ${
-                      active
-                        ? "border-[var(--brand-gold-400)] bg-[var(--brand-violet-800)] text-[var(--brand-cream)] shadow-[0_8px_20px_rgba(0,0,0,0.25)]"
-                        : "border-white/15 bg-white/5 text-[var(--brand-cream)]/75 hover:border-[var(--brand-gold-300)] hover:text-[var(--brand-gold-300)]"
-                    }`}
-                    aria-pressed={active}
-                  >
-                    {world.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
 
           {hasActiveFilters && (
             <button

@@ -25,6 +25,19 @@ const worldKeywords: Record<ShopWorld, string[]> = {
 
 const normalizeText = (value: string) => value.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 
+const worldOptions: { key: ShopWorld; label: string; description: string }[] = [
+  {
+    key: "peluqueria",
+    label: "Peluquería",
+    description: "Productos profesionales para cuidar y realzar tu cabello.",
+  },
+  {
+    key: "bijouterie",
+    label: "Bijouterie",
+    description: "Diseños únicos para complementar cada estilo con personalidad.",
+  },
+];
+
 export default function TiendaClientView({
   initialProducts,
   storeHeading = "Tienda Híbrida · Estilo y Cuidado",
@@ -87,6 +100,40 @@ export default function TiendaClientView({
         <p className="mt-3 max-w-2xl text-sm text-[var(--brand-gold-300)]">
           {storeDescription}
         </p>
+
+        <div className="mt-6 rounded-3xl border border-[var(--brand-gold-400)]/30 bg-[linear-gradient(145deg,rgba(83,52,126,0.72),rgba(41,24,66,0.82))] p-4 shadow-[0_18px_40px_rgba(18,8,35,0.32)] md:p-5">
+          <p className="mb-3 text-xs uppercase tracking-[0.22em] text-[var(--brand-gold-300)]">
+            Explorá por rubro
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {worldOptions.map((world) => {
+              const active = selectedWorld === world.key;
+              return (
+                <button
+                  key={world.key}
+                  type="button"
+                  onClick={() => {
+                    setSelectedWorld(world.key);
+                    setCategory(null);
+                  }}
+                  className={`rounded-2xl border p-4 text-left transition ${
+                    active
+                      ? "border-[var(--brand-gold-400)] bg-[rgba(255,255,255,0.12)] shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
+                      : "border-white/15 bg-[rgba(255,255,255,0.04)] hover:border-[var(--brand-gold-300)] hover:bg-[rgba(255,255,255,0.08)]"
+                  }`}
+                  aria-pressed={active}
+                >
+                  <span className="block text-sm font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)]">
+                    {world.label}
+                  </span>
+                  <span className="mt-1 block text-xs text-[var(--brand-cream)]/80">
+                    {world.description}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </header>
 
       <section className="flex flex-col gap-6 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.35)] p-4 shadow-[0_20px_50px_rgba(18,8,35,0.35)] md:flex-row md:gap-8 md:p-6">
@@ -98,11 +145,6 @@ export default function TiendaClientView({
               category: setCategory,
               search: setSearchTerm,
               sort: setSortBy,
-            }}
-            selectedWorld={selectedWorld}
-            onWorldChange={(world) => {
-              setSelectedWorld(world);
-              setCategory(null);
             }}
             onClearFilters={clearFilters}
           />
@@ -133,11 +175,6 @@ export default function TiendaClientView({
               category: setCategory,
               search: setSearchTerm,
               sort: setSortBy,
-            }}
-            selectedWorld={selectedWorld}
-            onWorldChange={(world) => {
-              setSelectedWorld(world);
-              setCategory(null);
             }}
             onClearFilters={clearFilters}
             isOpen={filtersOpen}

@@ -71,7 +71,7 @@ export const brandConfig = {
   } as BrandSection,
   heroRight: {
     title: "Productos Profesionales y Diseños Únicos",
-    subtitle: "Explorá nuestra tienda híbrida de Peluquería + Bijouterie",
+    subtitle: "Descubrí tus favoritos para mimarte: belleza y detalles que enamoran",
     image: {
       src: "/home/tienda.jpg",
       alt: "Accesorios disponibles en Estilo Sol",
