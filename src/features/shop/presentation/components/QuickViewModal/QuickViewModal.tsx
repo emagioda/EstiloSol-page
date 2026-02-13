@@ -83,18 +83,24 @@ export default function QuickViewModal({
     setCurrentImageIndex((prev) => (prev - 1 + images.length) % images.length);
   };
 
+  // the lightbox is rendered outside of the semi‑transparent overlay so that
+  // clicks on its controls don't bubble and accidentally close the quick‑view
+  // modal (the overlay used to have an onClick). we also disable closing on
+  // backdrop clicks via controller props so the only way to dismiss the
+  // enlarged view is the "×" toolbar button or the browser back action.
   return (
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Vista rápida de ${product.name}`}
-    >
+    <>
       <div
-        className="relative grid h-auto w-full max-w-4xl overflow-hidden border border-[var(--brand-violet-700)]/40 bg-[var(--brand-cream)] text-[var(--brand-violet-950)] shadow-[0_20px_80px_rgba(0,0,0,0.45)] sm:grid-cols-2"
-        onClick={(e) => e.stopPropagation()}
+        className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Vista rápida de ${product.name}`}
       >
+        <div
+          className="relative grid h-auto w-full max-w-4xl overflow-hidden border border-[var(--brand-violet-700)]/40 bg-[var(--brand-cream)] text-[var(--brand-violet-950)] shadow-[0_20px_80px_rgba(0,0,0,0.45)] sm:grid-cols-2"
+          // clicks inside the card should *not* close the modal
+          onClick={(e) => e.stopPropagation()}
+        >
         <button
           className="absolute right-0 top-0 z-20 flex h-10 w-10 items-center justify-center bg-[#3b3f45] text-2xl leading-none text-[#dce548] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#dce548]"
           onClick={onClose}
@@ -278,7 +284,9 @@ export default function QuickViewModal({
             </div>
           </div>
         </div>
+        </div>
       </div>
+
       <Lightbox
         open={isLightboxOpen}
         close={() => setIsLightboxOpen(false)}
@@ -288,7 +296,17 @@ export default function QuickViewModal({
         on={{
           view: ({ index }) => setCurrentImageIndex(index),
         }}
+        // prevent the Lightbox itself from closing when its backdrop is
+        // clicked; users should use the close button only
+        controller={{ closeOnBackdropClick: false }}
+        // hide navigation buttons when there's only a single picture
+        render={{
+          buttonPrev: hasMultipleImages ? undefined : () => null,
+          buttonNext: hasMultipleImages ? undefined : () => null,
+        }}
+        // toolbar defaults to only the close button; zoom controls are
+        // injected automatically by the Zoom plugin
       />
-    </div>
+    </>
   );
 }
