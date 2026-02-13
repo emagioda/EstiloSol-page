@@ -285,6 +285,13 @@ export default function QuickViewModal({
         slides={images.map((src) => ({ src }))}
         plugins={[Zoom]}
         index={currentImageIndex}
+        styles={{
+          container: { zIndex: 9999 },
+        }}
+        render={{
+          buttonPrev: images.length <= 1 ? () => null : undefined,
+          buttonNext: images.length <= 1 ? () => null : undefined,
+        }}
         on={{
           view: ({ index }) => setCurrentImageIndex(index),
         }}
