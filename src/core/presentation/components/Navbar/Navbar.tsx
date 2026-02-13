@@ -53,12 +53,17 @@ export default function Navbar() {
                   className="h-10 w-auto object-contain drop-shadow-[0_4px_10px_rgba(255,215,150,0.35)] md:h-12"
                 />
               ) : (
-                <span
-                  className="text-xl font-semibold text-[var(--brand-gold-300)] md:text-2xl"
-                  style={{ fontFamily: brandConfig.typography.display }}
-                >
-                  {brandName}
-                </span>
+                <div className="flex flex-col items-center">
+                  <span
+                    className="text-xl font-semibold text-[var(--brand-gold-300)] md:text-2xl"
+                    style={{ fontFamily: brandConfig.typography.display }}
+                  >
+                    {brandName}
+                  </span>
+                  <span className="hidden text-[10px] uppercase tracking-[0.2em] text-[var(--brand-cream)]/80 md:block">
+                    Estilo y Cuidado
+                  </span>
+                </div>
               )}
             </div>
           </Link>
@@ -107,7 +112,7 @@ export default function Navbar() {
                 href={link.href}
                 className="transition hover:text-[var(--brand-gold-300)]"
               >
-                {link.label}
+                {link.label === "Tienda" ? "Tienda Híbrida" : link.label}
               </Link>
             ))}
             {isTienda && (

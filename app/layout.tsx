@@ -26,8 +26,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Estilo Sol",
-  description: "Belleza, moda y accesorios en un solo lugar",
+  title: "Estilo Sol | Estilo y Cuidado",
+  description:
+    "Tienda híbrida con Productos Profesionales de peluquería y Diseños Únicos de bijouterie.",
 };
 
 export default function RootLayout({

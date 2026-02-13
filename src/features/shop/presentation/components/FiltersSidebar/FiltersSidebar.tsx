@@ -23,9 +23,7 @@ export default function FiltersSidebar({
   isOpen = true,
   onClose,
 }: FiltersSidebarProps) {
-  const [expandedSections, setExpandedSections] = useState<
-    Record<string, boolean>
-  >({
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     category: true,
     sort: true,
   });
@@ -41,53 +39,39 @@ export default function FiltersSidebar({
 
   return (
     <>
-      {/* Mobile Overlay */}
-      {!isOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/50 md:hidden"
-          onClick={onClose}
-        />
-      )}
+      {isOpen && <div className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={onClose} />}
 
-      {/* Sidebar */}
       <aside
-        className={`fixed left-0 top-0 z-40 h-screen w-64 transform bg-[var(--brand-violet-950)] transition-transform duration-300 md:relative md:top-auto md:h-auto md:transform-none md:bg-transparent md:transition-none md:rounded-3xl md:border md:border-[var(--brand-gold-400)]/20 md:bg-[rgba(58,31,95,0.35)] md:p-4 md:shadow-[0_18px_45px_rgba(18,8,35,0.3)] ${
+        className={`fixed left-0 top-0 z-40 h-screen w-72 transform bg-[linear-gradient(180deg,rgba(58,31,95,0.98)_0%,rgba(34,18,55,0.98)_100%)] transition-transform duration-300 md:relative md:top-auto md:h-auto md:w-full md:transform-none md:rounded-3xl md:border md:border-[var(--brand-gold-400)]/30 md:bg-[rgba(58,31,95,0.45)] md:p-5 md:shadow-[0_18px_45px_rgba(18,8,35,0.3)] ${
           isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         }`}
       >
-        <div className="flex flex-col gap-6 p-4 pt-16 md:p-0">
-          {/* Close button (mobile only) */}
+        <div className="flex flex-col gap-6 p-5 pt-16 md:p-0">
           {onClose && (
             <button
               onClick={onClose}
-              className="absolute right-4 top-4 md:hidden"
+              className="absolute right-4 top-4 rounded-full border border-[var(--brand-gold-400)]/40 p-1.5 transition hover:bg-white/10 md:hidden"
             >
               <span className="text-2xl text-[var(--brand-cream)]">✕</span>
             </button>
           )}
 
-          {/* Clear Filters */}
           {hasActiveFilters && (
             <button
               onClick={onClearFilters}
-              className="text-sm text-[var(--brand-gold-300)] underline transition-colors hover:text-[var(--brand-gold-400)]"
+              className="rounded-lg border border-[var(--brand-gold-400)]/30 px-3 py-1.5 text-left text-xs uppercase tracking-[0.12em] text-[var(--brand-gold-300)] transition-colors hover:border-[var(--brand-gold-400)] hover:bg-white/5 hover:text-[var(--brand-gold-400)]"
             >
               Limpiar filtros
             </button>
           )}
 
-          {/* Sort Section */}
-          <div className="border-b border-[var(--brand-violet-900)] pb-4">
+          <div className="border-b border-white/10 pb-4">
             <button
               onClick={() => toggleSection("sort")}
-              className="flex w-full items-center justify-between text-sm font-semibold text-[var(--brand-cream)] transition-colors hover:text-[var(--brand-gold-300)]"
+              className="flex w-full items-center justify-between text-sm font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)] transition-colors hover:text-[var(--brand-gold-300)]"
             >
               Ordenar
-              <span
-                className={`transition-transform ${
-                  expandedSections.sort ? "rotate-180" : ""
-                }`}
-              >
+              <span className={`transition-transform ${expandedSections.sort ? "rotate-180" : ""}`}>
                 ▼
               </span>
             </button>
@@ -102,7 +86,7 @@ export default function FiltersSidebar({
                 ].map((option) => (
                   <label
                     key={option.value}
-                    className="flex cursor-pointer items-center gap-2 text-sm text-[var(--brand-cream)]/80 transition-colors hover:text-[var(--brand-gold-300)]"
+                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition hover:border-white/10 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
                   >
                     <input
                       type="radio"
@@ -110,7 +94,7 @@ export default function FiltersSidebar({
                       value={option.value}
                       checked={filters.sortBy === option.value}
                       onChange={() => onFilterChange.sort(option.value)}
-                      className="cursor-pointer"
+                      className="h-4 w-4 cursor-pointer accent-[var(--brand-gold-400)]"
                     />
                     {option.label}
                   </label>
@@ -119,55 +103,49 @@ export default function FiltersSidebar({
             )}
           </div>
 
-          {/* Category Section */}
-          <div className="border-b border-[var(--brand-violet-900)] pb-4">
+          <div className="border-b border-white/10 pb-4">
             <button
               onClick={() => toggleSection("category")}
-              className="flex w-full items-center justify-between text-sm font-semibold text-[var(--brand-cream)] transition-colors hover:text-[var(--brand-gold-300)]"
+              className="flex w-full items-center justify-between text-sm font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)] transition-colors hover:text-[var(--brand-gold-300)]"
             >
               Categoría
-              <span
-                className={`transition-transform ${
-                  expandedSections.category ? "rotate-180" : ""
-                }`}
-              >
+              <span className={`transition-transform ${expandedSections.category ? "rotate-180" : ""}`}>
                 ▼
               </span>
             </button>
             {expandedSections.category && (
               <div className="mt-3 flex flex-col gap-2">
-                <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--brand-cream)]/80 transition-colors hover:text-[var(--brand-gold-300)]">
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition hover:border-white/10 hover:bg-white/5 hover:text-[var(--brand-gold-300)]">
                   <input
                     type="checkbox"
                     checked={filters.category === null}
                     onChange={() => onFilterChange.category(null)}
-                    className="cursor-pointer"
+                    className="h-4 w-4 cursor-pointer accent-[var(--brand-gold-400)]"
                   />
                   Todas
                 </label>
                 {categories.map((cat) => (
                   <label
                     key={cat}
-                    className="flex cursor-pointer items-center gap-2 text-sm text-[var(--brand-cream)]/80 transition-colors hover:text-[var(--brand-gold-300)]"
+                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition hover:border-white/10 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
                   >
                     <input
                       type="checkbox"
                       checked={filters.category === cat}
-                      onChange={() =>
-                        onFilterChange.category(
-                          filters.category === cat ? null : cat
-                        )
-                      }
-                      className="cursor-pointer"
+                      onChange={() => onFilterChange.category(filters.category === cat ? null : cat)}
+                      className="h-4 w-4 cursor-pointer accent-[var(--brand-gold-400)]"
                     />
                     {cat}
                   </label>
                 ))}
+                {categories.length === 0 && (
+                  <p className="px-2 py-1 text-xs text-[var(--brand-cream)]/60">
+                    No hay categorías disponibles para este rubro.
+                  </p>
+                )}
               </div>
             )}
           </div>
-
-          {/* Price filter removed */}
         </div>
       </aside>
     </>

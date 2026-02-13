@@ -20,9 +20,11 @@ const ACTION_SIZE_CLASS = "h-11 w-full max-w-[170px]";
 export default function ProductCard({
   product,
   onQuickView,
+  onAddFeedback,
 }: {
   product: Product;
   onQuickView?: (product: Product) => void;
+  onAddFeedback?: (params: { ok: boolean; name: string }) => void;
 }) {
   const { addItem, items, updateQty, removeItem } = useCart();
   const cartItem = items.find((it) => it.productId === product.id);
@@ -35,7 +37,7 @@ export default function ProductCard({
     product.images && product.images.length > 0 ? product.images[0] : undefined;
 
   return (
-    <article className="animate-fade-up flex flex-col rounded-3xl p-3 text-[var(--brand-cream)] shadow-[0_10px_30px_rgba(26,10,48,0.35)] transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl glass-panel sm:p-[var(--space-card-padding)]">
+    <article className="animate-fade-up flex h-full flex-col rounded-3xl p-3 text-[var(--brand-cream)] shadow-[0_10px_30px_rgba(26,10,48,0.35)] transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl glass-panel sm:p-[var(--space-card-padding)]">
       <div className="group relative mb-[var(--space-card-content-gap)] aspect-square w-full overflow-hidden rounded-2xl border border-[var(--brand-gold-400)]/30 bg-[rgba(255,255,255,0.03)]">
         {thumb ? (
           <Image
@@ -74,8 +76,8 @@ export default function ProductCard({
         </button>
       </div>
 
-      <div className="flex flex-col gap-[var(--space-card-content-gap)]">
-        <div className="space-y-1.5 sm:space-y-2">
+      <div className="flex flex-1 flex-col gap-[var(--space-card-content-gap)]">
+        <div className="min-h-[4.7rem] space-y-1.5 sm:space-y-2">
           <h3 className="line-clamp-2 text-sm font-semibold leading-snug sm:text-base">
             {product.name}
           </h3>
@@ -84,7 +86,7 @@ export default function ProductCard({
           </div>
         </div>
 
-        <div className="flex w-full justify-center">
+        <div className="mt-auto flex w-full justify-center">
           {cartItem ? (
             <div
               className={`${ACTION_SIZE_CLASS} flex items-center justify-between rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-violet-strong)] px-3 text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)]`}
@@ -123,15 +125,20 @@ export default function ProductCard({
                 aria-label={`Cantidad de ${product.name}`}
               />
               <button
-                onClick={() =>
-                  addItem({
-                    productId: product.id,
-                    name: product.name,
-                    unitPrice: product.price,
-                    qty: 1,
-                    image: thumb ?? "",
-                  })
-                }
+                onClick={() => {
+                  try {
+                    addItem({
+                      productId: product.id,
+                      name: product.name,
+                      unitPrice: product.price,
+                      qty: 1,
+                      image: thumb ?? "",
+                    });
+                    onAddFeedback?.({ ok: true, name: product.name });
+                  } catch {
+                    onAddFeedback?.({ ok: false, name: product.name });
+                  }
+                }}
                 className="flex h-8 w-8 items-center justify-center rounded-full text-base font-semibold transition hover:brightness-125 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
                 aria-label={`Agregar una unidad de ${product.name}`}
               >
@@ -140,15 +147,20 @@ export default function ProductCard({
             </div>
           ) : (
             <button
-              onClick={() =>
-                addItem({
-                  productId: product.id,
-                  name: product.name,
-                  unitPrice: product.price,
-                  qty: 1,
-                  image: thumb ?? "",
-                })
-              }
+              onClick={() => {
+                try {
+                  addItem({
+                    productId: product.id,
+                    name: product.name,
+                    unitPrice: product.price,
+                    qty: 1,
+                    image: thumb ?? "",
+                  });
+                  onAddFeedback?.({ ok: true, name: product.name });
+                } catch {
+                  onAddFeedback?.({ ok: false, name: product.name });
+                }
+              }}
               className={`${ACTION_SIZE_CLASS} flex items-center justify-center rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-violet-strong)] px-6 text-center text-sm font-semibold text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)] transition hover:brightness-110 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]`}
               aria-label={`Agregar ${product.name} al carrito`}
             >

@@ -11,5 +11,11 @@ export default async function TiendaPage() {
     console.error("Error fetching products on server:", error);
   }
 
-  return <TiendaClientView initialProducts={products} />;
+  return (
+    <TiendaClientView
+      initialProducts={products}
+      storeHeading="Productos Profesionales y Diseños Únicos"
+      storeDescription="Encontrá todo para consentirte: cuidado profesional para tu cabello y bijouterie divina en un mismo lugar."
+    />
+  );
 }
