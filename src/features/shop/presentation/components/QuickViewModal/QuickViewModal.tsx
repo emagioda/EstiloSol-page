@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { type MouseEvent, useEffect, useMemo, useState } from "react";
 import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
@@ -33,8 +32,22 @@ export default function QuickViewModal({
     return () => window.clearTimeout(timer);
   }, [product]);
 
-  const images = (product?.images ?? []).filter(
-    (image): image is string => typeof image === "string" && image.trim() !== ""
+  const images = useMemo(
+    () =>
+      (product?.images ?? []).filter((image): image is string => {
+        if (typeof image !== "string") return false;
+        const trimmed = image.trim();
+        if (!trimmed) return false;
+        if (trimmed.startsWith("/")) return true;
+
+        try {
+          const { protocol } = new URL(trimmed);
+          return protocol === "http:" || protocol === "https:";
+        } catch {
+          return false;
+        }
+      }),
+    [product?.images]
   );
 
   // Lock body scroll when open
@@ -62,17 +75,11 @@ export default function QuickViewModal({
   }, [open]);
 
   useEffect(() => {
-    if (!images.length) {
-      if (currentImageIndex !== 0) {
-        setCurrentImageIndex(0);
-      }
-      return;
-    }
-
-    setCurrentImageIndex((prev) =>
-      Math.min(Math.max(prev, 0), images.length - 1)
-    );
-  }, [images.length, currentImageIndex]);
+    setCurrentImageIndex((prev) => {
+      if (!images.length) return 0;
+      return Math.min(Math.max(prev, 0), images.length - 1);
+    });
+  }, [images.length]);
 
   const formatter = useMemo(
     () =>
@@ -86,11 +93,11 @@ export default function QuickViewModal({
 
   if (!open || !product) return null;
 
-  const currentImage = images[currentImageIndex] || "";
   const hasMultipleImages = images.length > 1;
   const safeIndex = images.length
     ? Math.min(Math.max(currentImageIndex, 0), images.length - 1)
     : 0;
+  const currentImage = images[safeIndex] || "";
 
   const nextImage = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -157,15 +164,14 @@ export default function QuickViewModal({
               }}
             >
               {currentImage ? (
-                <Image
+                <img
                   src={currentImage}
                   alt={product.name}
-                  fill
-                  className="object-cover transition-transform duration-300 ease-out md:group-hover:scale-110"
+                  className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out md:group-hover:scale-110"
                   style={{
                     transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%`,
                   }}
-                  sizes="(max-width:640px) 100vw, 50vw"
+                  loading="eager"
                 />
               ) : (
                 <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[#777]">
@@ -231,19 +237,18 @@ export default function QuickViewModal({
                     className="relative h-16 w-16 shrink-0 cursor-pointer overflow-hidden rounded-md transition-all hover:opacity-100"
                     style={{
                       border:
-                        index === currentImageIndex
+                        index === safeIndex
                           ? "2px solid var(--brand-violet-strong)"
                           : "2px solid transparent",
-                      opacity: index === currentImageIndex ? 1 : 0.6,
+                      opacity: index === safeIndex ? 1 : 0.6,
                     }}
                     aria-label={`Ver imagen ${index + 1} de ${images.length}`}
                   >
-                    <Image
+                    <img
                       src={image}
                       alt={`${product.name} miniatura ${index + 1}`}
-                      fill
-                      className="object-cover"
-                      sizes="64px"
+                      className="absolute inset-0 h-full w-full object-cover"
+                      loading="lazy"
                     />
                   </button>
                 ))}
