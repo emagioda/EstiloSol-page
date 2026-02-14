@@ -33,6 +33,10 @@ export default function QuickViewModal({
     return () => window.clearTimeout(timer);
   }, [product]);
 
+  const images = (product?.images ?? []).filter(
+    (image): image is string => typeof image === "string" && image.trim() !== ""
+  );
+
   // Lock body scroll when open
   useEffect(() => {
     if (!open) return;
@@ -57,6 +61,19 @@ export default function QuickViewModal({
     }
   }, [open]);
 
+  useEffect(() => {
+    if (!images.length) {
+      if (currentImageIndex !== 0) {
+        setCurrentImageIndex(0);
+      }
+      return;
+    }
+
+    setCurrentImageIndex((prev) =>
+      Math.min(Math.max(prev, 0), images.length - 1)
+    );
+  }, [images.length, currentImageIndex]);
+
   const formatter = useMemo(
     () =>
       new Intl.NumberFormat("es-AR", {
@@ -69,9 +86,11 @@ export default function QuickViewModal({
 
   if (!open || !product) return null;
 
-  const images = product.images ?? [];
   const currentImage = images[currentImageIndex] || "";
   const hasMultipleImages = images.length > 1;
+  const safeIndex = images.length
+    ? Math.min(Math.max(currentImageIndex, 0), images.length - 1)
+    : 0;
 
   const nextImage = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -122,13 +141,17 @@ export default function QuickViewModal({
                 setZoomPosition({ x, y });
               }}
               onMouseLeave={() => setZoomPosition({ x: 50, y: 50 })}
-              onClick={() => setIsLightboxOpen(true)}
+              onClick={() => {
+                if (!images.length) return;
+                setIsLightboxOpen(true);
+              }}
               role="button"
               tabIndex={0}
               aria-label="Ampliar imagen del producto"
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
+                  if (!images.length) return;
                   setIsLightboxOpen(true);
                 }
               }}
@@ -326,13 +349,16 @@ export default function QuickViewModal({
       </div>
 
       <Lightbox
-        open={isLightboxOpen}
+        open={isLightboxOpen && images.length > 0}
         close={() => setIsLightboxOpen(false)}
         slides={images.map((src) => ({ src }))}
         plugins={[Zoom]}
-        index={currentImageIndex}
+        index={safeIndex}
         on={{
-          view: ({ index }) => setCurrentImageIndex(index),
+          view: ({ index }) => {
+            if (typeof index !== "number") return;
+            setCurrentImageIndex(index);
+          },
         }}
         controller={{ closeOnBackdropClick: false }}
         render={{
