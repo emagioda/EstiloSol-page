@@ -50,6 +50,8 @@ export default function QuickViewModal({
     [product?.images]
   );
 
+  const slides = useMemo(() => images.map((src) => ({ src })), [images]);
+
   // Lock body scroll when open
   useEffect(() => {
     if (!open) return;
@@ -356,7 +358,7 @@ export default function QuickViewModal({
       <Lightbox
         open={isLightboxOpen && images.length > 0}
         close={() => setIsLightboxOpen(false)}
-        slides={images.map((src) => ({ src }))}
+        slides={slides}
         plugins={[Zoom]}
         index={safeIndex}
         on={{
