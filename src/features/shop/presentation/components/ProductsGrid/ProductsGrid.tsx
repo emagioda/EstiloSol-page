@@ -5,11 +5,9 @@ import type { Product } from "../ProductCard/ProductCard";
 export default function ProductsGrid({
   products,
   onQuickView,
-  onAddFeedback,
 }: {
   products: Product[];
   onQuickView?: (product: Product) => void;
-  onAddFeedback?: (params: { ok: boolean; name: string }) => void;
 }) {
   if (!products || products.length === 0) {
     return (
@@ -27,7 +25,6 @@ export default function ProductsGrid({
           key={p.id}
           product={p}
           onQuickView={onQuickView}
-          onAddFeedback={onAddFeedback}
         />
       ))}
     </div>
