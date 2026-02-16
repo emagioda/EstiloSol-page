@@ -22,6 +22,7 @@ const adaptSheetRowToProduct = (row: any): Product => {
     name: String(row.name || row.Nombre || "Producto sin nombre"),
     slug: row.slug ? String(row.slug) : undefined,
     description: String(row.description || row.Descripcion || ""),
+    short_description: String(row.short_description || row.ShortDescription || row.shortDescription || ""),
     category: String(row.category || row.Categoria || "General"),
     
     // Limpiamos el precio: quitamos símbolos de moneda y convertimos a número

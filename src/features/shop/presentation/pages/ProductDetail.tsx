@@ -16,9 +16,15 @@ const formatMoney = (value: number) =>
     currency: "ARS",
   }).format(value);
 
+const isValidPrice = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
 export default function ProductDetail({ product }: Props) {
   const images = useMemo(
-    () => (Array.isArray(product.images) ? product.images.filter(Boolean) : []),
+    () =>
+      Array.isArray(product.images)
+        ? product.images.filter((image): image is string => typeof image === "string" && image.trim().length > 0)
+        : [],
     [product.images]
   );
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
@@ -27,12 +33,14 @@ export default function ProductDetail({ product }: Props) {
   const { setOpen: setCartOpen } = useCartDrawer();
 
   const currentImage = images[currentImageIndex] ?? images[0] ?? null;
+  const safeUnitPrice = isValidPrice(product.price) ? product.price : 0;
+  const displayPrice = isValidPrice(product.price) ? formatMoney(product.price) : "Consultar";
 
   const handleAddToCart = () => {
     addItem({
       productId: product.id,
       name: product.name,
-      unitPrice: product.price,
+      unitPrice: safeUnitPrice,
       qty,
       image: images[0] ?? "",
     });
@@ -93,7 +101,7 @@ export default function ProductDetail({ product }: Props) {
           </p>
           <h1 className="text-3xl font-semibold leading-tight">{product.name}</h1>
           <p className="text-2xl font-semibold text-[var(--brand-cream)]">
-            {formatMoney(product.price)}
+            {displayPrice}
           </p>
 
           <p className="text-sm leading-relaxed text-[var(--brand-cream)]/85">
@@ -103,7 +111,7 @@ export default function ProductDetail({ product }: Props) {
           <dl className="grid gap-2 rounded-2xl border border-white/10 bg-black/10 p-4 text-sm">
             <div className="flex items-center justify-between gap-4">
               <dt className="text-[var(--brand-gold-300)]">SKU</dt>
-              <dd className="font-medium">{product.id}</dd>
+              <dd className="font-medium">{product.id || "N/A"}</dd>
             </div>
             <div className="flex items-center justify-between gap-4">
               <dt className="text-[var(--brand-gold-300)]">Slug</dt>
@@ -112,26 +120,35 @@ export default function ProductDetail({ product }: Props) {
           </dl>
 
           <div className="mt-2 flex flex-wrap items-center gap-3">
-            <label htmlFor="product-qty" className="text-sm text-[var(--brand-gold-300)]">
-              Cantidad
-            </label>
-            <input
-              id="product-qty"
-              type="number"
-              min={1}
-              inputMode="numeric"
-              value={qty}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (Number.isNaN(next)) return;
-                setQty(Math.max(1, Math.floor(next)));
-              }}
-              className="h-11 w-24 rounded-full border border-[var(--brand-gold-400)]/50 bg-transparent px-4 text-center text-sm font-semibold text-[var(--brand-cream)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
-            />
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setQty((prev) => Math.max(1, prev - 1))}
+                className="h-12 w-12 rounded-lg border border-[#ff6767] text-[#ff6767] transition active:scale-95"
+                aria-label="Reducir"
+              >
+                -
+              </button>
+              <div
+                className="flex h-12 w-16 items-center justify-center rounded-lg border border-white/20 text-center font-semibold"
+                aria-live="polite"
+                aria-label={`Cantidad seleccionada: ${qty}`}
+              >
+                {qty}
+              </div>
+              <button
+                type="button"
+                onClick={() => setQty((prev) => prev + 1)}
+                className="h-12 w-12 rounded-lg border border-[#6dc96d] text-[#4cae4c] transition active:scale-95"
+                aria-label="Aumentar"
+              >
+                +
+              </button>
+            </div>
             <button
               type="button"
               onClick={handleAddToCart}
-              className="h-11 min-w-[170px] rounded-full border border-[var(--brand-gold-400)] bg-[var(--brand-violet-strong)] px-6 text-sm font-semibold text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)] transition hover:brightness-110 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+              className="ml-auto h-12 min-w-[170px] rounded-xl border border-[var(--brand-gold-400)] bg-[var(--brand-violet-800)] px-6 text-sm font-semibold text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)] transition hover:bg-[var(--brand-violet-700)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
             >
               Comprar
             </button>
