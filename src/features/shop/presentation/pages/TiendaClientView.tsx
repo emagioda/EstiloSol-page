@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useProductsStore, type Product } from "../view-models/useProductsStore";
 import { useCartDrawer } from "../view-models/useCartDrawer";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
@@ -65,8 +65,18 @@ export default function TiendaClientView({
   const { open: cartOpen, setOpen: setCartOpen } = useCartDrawer();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedWorld, setSelectedWorld] = useState<ShopWorld>("peluqueria");
+  const [hasUserSelectedWorld, setHasUserSelectedWorld] = useState(false);
   const [cartNotice, setCartNotice] = useState<CartNotice | null>(null);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
+
+  const matchesWorld = useCallback((product: Product, world: ShopWorld) => {
+    const searchable = normalizeText(
+      `${product.category ?? ""} ${product.name ?? ""} ${product.description ?? ""}`
+    );
+    return worldKeywords[world].some((keyword) =>
+      searchable.includes(normalizeText(keyword))
+    );
+  }, []);
 
   const categoryBelongsToWorld = (category: string, world: ShopWorld) => {
     const normalizedCategory = normalizeText(category);
@@ -79,14 +89,38 @@ export default function TiendaClientView({
     categoryBelongsToWorld(category, selectedWorld)
   );
 
-  const worldFilteredProducts = products.filter((product) => {
-    const searchable = normalizeText(
-      `${product.category ?? ""} ${product.name ?? ""} ${product.description ?? ""}`
-    );
-    return worldKeywords[selectedWorld].some((keyword) =>
-      searchable.includes(normalizeText(keyword))
-    );
-  });
+  const worldFilteredProducts = products.filter((product) =>
+    matchesWorld(product, selectedWorld)
+  );
+
+  useEffect(() => {
+    if (loading || hasUserSelectedWorld || products.length === 0) return;
+
+    const countPeluqueria = products.filter((product) =>
+      matchesWorld(product, "peluqueria")
+    ).length;
+    const countBijouterie = products.filter((product) =>
+      matchesWorld(product, "bijouterie")
+    ).length;
+
+    let nextWorld: ShopWorld | null = null;
+
+    if (countPeluqueria === 0 && countBijouterie > 0) {
+      nextWorld = "bijouterie";
+    } else if (countBijouterie === 0 && countPeluqueria > 0) {
+      nextWorld = "peluqueria";
+    } else if (countPeluqueria > 0 && countBijouterie > 0) {
+      nextWorld = countBijouterie > countPeluqueria ? "bijouterie" : "peluqueria";
+    }
+
+    if (!nextWorld || nextWorld === selectedWorld) return;
+
+    const timer = window.setTimeout(() => {
+      setSelectedWorld(nextWorld);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [hasUserSelectedWorld, loading, matchesWorld, products, selectedWorld]);
 
   useEffect(() => {
     setSuppressBadge(isQuickViewOpen);
@@ -134,6 +168,7 @@ export default function TiendaClientView({
                   key={world.key}
                   type="button"
                   onClick={() => {
+                    setHasUserSelectedWorld(true);
                     setSelectedWorld(world.key);
                     setCategory(null);
                   }}
