@@ -7,6 +7,7 @@ export type Product = {
   name: string;
   slug?: string;
   description?: string;
+  short_description?: string;
   category?: string;
   price: number;
   currency?: string;
@@ -25,10 +26,13 @@ export default function ProductCard({
   product: Product;
   onQuickView?: (product: Product) => void;
 }) {
-  const formattedPrice = new Intl.NumberFormat("es-AR", {
-    style: "currency",
-    currency: "ARS",
-  }).format(product.price);
+  const formattedPrice =
+    typeof product.price === "number" && Number.isFinite(product.price)
+      ? new Intl.NumberFormat("es-AR", {
+          style: "currency",
+          currency: "ARS",
+        }).format(product.price)
+      : "Consultar";
   const detailHref = `/tienda/producto/${product.slug || product.id}`;
 
   const thumb =

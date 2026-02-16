@@ -52,6 +52,16 @@ export default function QuickViewModal({
 
   const slides = useMemo(() => images.map((src) => ({ src })), [images]);
 
+  const shortDescription = (product?.short_description ?? "").trim();
+  const formattedPrice =
+    typeof product?.price === "number" && Number.isFinite(product.price)
+      ? new Intl.NumberFormat("es-AR", {
+          style: "currency",
+          currency: product?.currency || "ARS",
+          maximumFractionDigits: 0,
+        }).format(product.price)
+      : "Consultar";
+
   // Lock body scroll when open
   useEffect(() => {
     if (!open) return;
@@ -75,23 +85,6 @@ export default function QuickViewModal({
       return () => clearTimeout(timer);
     }
   }, [open]);
-
-  useEffect(() => {
-    setCurrentImageIndex((prev) => {
-      if (!images.length) return 0;
-      return Math.min(Math.max(prev, 0), images.length - 1);
-    });
-  }, [images.length]);
-
-  const formatter = useMemo(
-    () =>
-      new Intl.NumberFormat("es-AR", {
-        style: "currency",
-        currency: product?.currency || "ARS",
-        maximumFractionDigits: 0,
-      }),
-    [product?.currency]
-  );
 
   if (!open || !product) return null;
 
@@ -265,14 +258,13 @@ export default function QuickViewModal({
                 {product.name}
               </h3>
               <p className="mt-4 border-b border-[#ececec] pb-4 text-4xl font-medium sm:text-[3rem]">
-                {formatter.format(product.price)}
+                {formattedPrice}
               </p>
             </div>
 
-            {/* SECCIÓN NUEVA: Descripción del producto */}
-            {product.description && (
-              <div className="text-sm leading-relaxed text-[#555] whitespace-pre-line">
-                {product.description}
+            {shortDescription.length > 0 && (
+              <div className="whitespace-pre-line text-sm leading-relaxed text-[#555]">
+                {shortDescription}
               </div>
             )}
 
@@ -341,7 +333,7 @@ export default function QuickViewModal({
               <div className="space-y-1 border-t border-[#ececec] pt-4 text-xs font-medium uppercase tracking-wide text-[#888]">
                 <p>
                   <span className="text-[#222]">SKU:</span>{" "}
-                  {product.id.toUpperCase()}
+                  {(product.id || "N/A").toUpperCase()}
                 </p>
                 {product.category && (
                   <p>
