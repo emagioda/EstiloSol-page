@@ -185,7 +185,6 @@ export default function TiendaClientView({
             <ProductsGrid
               products={worldFilteredProducts}
               onQuickView={openQuickView}
-              onAddFeedback={handleAddFeedback}
             />
           )}
         </div>

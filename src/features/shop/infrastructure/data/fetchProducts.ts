@@ -20,6 +20,7 @@ const adaptSheetRowToProduct = (row: any): Product => {
     
     // Aseguramos que siempre haya texto
     name: String(row.name || row.Nombre || "Producto sin nombre"),
+    slug: row.slug ? String(row.slug) : undefined,
     description: String(row.description || row.Descripcion || ""),
     category: String(row.category || row.Categoria || "General"),
     
