@@ -19,6 +19,31 @@ const formatMoney = (value: number) =>
 const isValidPrice = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
+const LONG_DESCRIPTION_PLACEHOLDER = "Sin descripción detallada por el momento.";
+
+const getShortDescription = (shortDescription?: string, description?: string) => {
+  if (typeof shortDescription === "string" && shortDescription.trim().length > 0) {
+    return shortDescription.trim();
+  }
+
+  if (typeof description !== "string") {
+    return "Sin descripción disponible por el momento.";
+  }
+
+  const normalizedDescription = description.trim();
+  if (!normalizedDescription) {
+    return "Sin descripción disponible por el momento.";
+  }
+
+  const firstSentence = normalizedDescription.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim();
+  if (firstSentence && firstSentence.length <= 140) {
+    return firstSentence;
+  }
+
+  const clipped = normalizedDescription.slice(0, 140).trim();
+  return clipped.length < normalizedDescription.length ? `${clipped}…` : clipped;
+};
+
 export default function ProductDetail({ product }: Props) {
   const images = useMemo(
     () =>
@@ -35,6 +60,14 @@ export default function ProductDetail({ product }: Props) {
   const currentImage = images[currentImageIndex] ?? images[0] ?? null;
   const safeUnitPrice = isValidPrice(product.price) ? product.price : 0;
   const displayPrice = isValidPrice(product.price) ? formatMoney(product.price) : "Consultar";
+  const shortDescription = useMemo(
+    () => getShortDescription(product.short_description, product.description),
+    [product.short_description, product.description]
+  );
+  const longDescription =
+    typeof product.description === "string" && product.description.trim().length > 0
+      ? product.description
+      : LONG_DESCRIPTION_PLACEHOLDER;
 
   const handleAddToCart = () => {
     addItem({
@@ -44,6 +77,7 @@ export default function ProductDetail({ product }: Props) {
       qty,
       image: images[0] ?? "",
     });
+    setQty(1);
     setCartOpen(true);
   };
 
@@ -104,9 +138,7 @@ export default function ProductDetail({ product }: Props) {
             {displayPrice}
           </p>
 
-          <p className="text-sm leading-relaxed text-[var(--brand-cream)]/85">
-            {product.description || "Sin descripción disponible por el momento."}
-          </p>
+          <p className="text-sm leading-relaxed text-[var(--brand-cream)]/85">{shortDescription}</p>
 
           <dl className="grid gap-2 rounded-2xl border border-white/10 bg-black/10 p-4 text-sm">
             <div className="flex items-center justify-between gap-4">
@@ -124,7 +156,8 @@ export default function ProductDetail({ product }: Props) {
               <button
                 type="button"
                 onClick={() => setQty((prev) => Math.max(1, prev - 1))}
-                className="h-12 w-12 rounded-lg border border-[#ff6767] text-[#ff6767] transition active:scale-95"
+                disabled={qty <= 1}
+                className="h-12 w-12 rounded-lg border border-[#ff6767] text-[#ff6767] transition active:scale-95 disabled:cursor-not-allowed disabled:border-[#ff6767]/40 disabled:text-[#ff6767]/45 disabled:active:scale-100"
                 aria-label="Reducir"
               >
                 -
@@ -154,6 +187,13 @@ export default function ProductDetail({ product }: Props) {
             </button>
           </div>
         </div>
+      </section>
+
+      <section className="mt-8 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.25)] p-5 shadow-[0_14px_32px_rgba(18,8,35,0.28)] lg:p-8">
+        <h2 className="text-lg font-semibold text-[var(--brand-gold-300)]">Descripción</h2>
+        <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[var(--brand-cream)]/85">
+          {longDescription}
+        </p>
       </section>
     </main>
   );
