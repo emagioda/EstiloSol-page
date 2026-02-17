@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { type MouseEvent, useMemo, useState } from "react";
+import { type MouseEvent, useMemo, useRef, useState } from "react";
 import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
@@ -26,8 +26,16 @@ export default function ProductImageGalleryZoom({
   theme = "pdp",
   thumbnailsDesktopOnly = false,
 }: Props) {
+  const SWIPE_THRESHOLD_PX = 40;
   const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
+  const pointerStartRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const swipeHandledRef = useRef(false);
+  const suppressClickRef = useRef(false);
 
   const hasMultipleImages = images.length > 1;
   const safeIndex = images.length
@@ -64,6 +72,7 @@ export default function ProductImageGalleryZoom({
     <>
       <div
         className={`group relative aspect-[3/4] w-full overflow-hidden ${surfaceClassName}`}
+        style={{ touchAction: "pan-y" }}
         onMouseMove={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           const x = ((event.clientX - rect.left) / rect.width) * 100;
@@ -71,7 +80,56 @@ export default function ProductImageGalleryZoom({
           setZoomPosition({ x, y });
         }}
         onMouseLeave={() => setZoomPosition({ x: 50, y: 50 })}
+        onPointerDown={(event) => {
+          if (!hasMultipleImages || event.pointerType === "mouse") return;
+          pointerStartRef.current = {
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+          };
+          swipeHandledRef.current = false;
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          const pointerStart = pointerStartRef.current;
+          if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
+          if (swipeHandledRef.current || !images.length) return;
+
+          const deltaX = event.clientX - pointerStart.x;
+          const deltaY = event.clientY - pointerStart.y;
+
+          if (
+            Math.abs(deltaX) >= SWIPE_THRESHOLD_PX &&
+            Math.abs(deltaX) > Math.abs(deltaY)
+          ) {
+            onImageIndexChange(
+              deltaX < 0
+                ? (safeIndex + 1) % images.length
+                : (safeIndex - 1 + images.length) % images.length,
+            );
+            swipeHandledRef.current = true;
+            suppressClickRef.current = true;
+          }
+        }}
+        onPointerUp={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+          pointerStartRef.current = null;
+          swipeHandledRef.current = false;
+        }}
+        onPointerCancel={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+          pointerStartRef.current = null;
+          swipeHandledRef.current = false;
+        }}
         onClick={() => {
+          if (suppressClickRef.current) {
+            suppressClickRef.current = false;
+            return;
+          }
           if (!images.length) return;
           setIsLightboxOpen(true);
         }}
