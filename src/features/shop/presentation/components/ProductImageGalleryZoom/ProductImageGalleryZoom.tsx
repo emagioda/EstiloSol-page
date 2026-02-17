@@ -115,6 +115,13 @@ export default function ProductImageGalleryZoom({
           if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
           }
+
+          if (suppressClickRef.current) {
+            window.setTimeout(() => {
+              suppressClickRef.current = false;
+            }, 0);
+          }
+
           pointerStartRef.current = null;
           swipeHandledRef.current = false;
         }}
@@ -122,6 +129,13 @@ export default function ProductImageGalleryZoom({
           if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
           }
+
+          if (suppressClickRef.current) {
+            window.setTimeout(() => {
+              suppressClickRef.current = false;
+            }, 0);
+          }
+
           pointerStartRef.current = null;
           swipeHandledRef.current = false;
         }}
