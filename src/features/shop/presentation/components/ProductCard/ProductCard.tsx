@@ -41,7 +41,7 @@ export default function ProductCard({
   return (
     <article className="animate-fade-up flex h-full flex-col rounded-3xl p-3 text-[var(--brand-cream)] shadow-[0_10px_30px_rgba(26,10,48,0.35)] transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl glass-panel sm:p-[var(--space-card-padding)]">
       <Link href={detailHref} className="group block" aria-label={`Ver detalle de ${product.name}`}>
-        <div className="relative mb-[var(--space-card-content-gap)] aspect-square w-full overflow-hidden rounded-2xl border border-[var(--brand-gold-400)]/30 bg-[rgba(255,255,255,0.03)]">
+        <div className="relative mb-[var(--space-card-content-gap)] aspect-[3/4] w-full overflow-hidden rounded-2xl border border-[var(--brand-gold-400)]/30 bg-[rgba(255,255,255,0.03)]">
           {thumb ? (
             <Image
               src={thumb}
