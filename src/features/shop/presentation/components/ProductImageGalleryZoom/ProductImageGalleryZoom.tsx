@@ -63,7 +63,7 @@ export default function ProductImageGalleryZoom({
   return (
     <>
       <div
-        className={`group relative aspect-square w-full overflow-hidden ${surfaceClassName}`}
+        className={`group relative aspect-[3/4] w-full overflow-hidden ${surfaceClassName}`}
         onMouseMove={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           const x = ((event.clientX - rect.left) / rect.width) * 100;
