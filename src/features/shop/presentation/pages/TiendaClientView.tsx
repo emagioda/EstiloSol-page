@@ -1,11 +1,9 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { useProductsStore, type Product } from "../view-models/useProductsStore";
-import { useCartDrawer } from "../view-models/useCartDrawer";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
 import FiltersSidebar from "@/src/features/shop/presentation/components/FiltersSidebar/FiltersSidebar";
 import StoreToolbar from "@/src/features/shop/presentation/components/StoreToolbar/StoreToolbar";
-import CartDrawer from "@/src/features/shop/presentation/components/CartDrawer/CartDrawer";
 import LoadingGrid from "@/src/features/shop/presentation/components/LoadingGrid/LoadingGrid";
 import QuickViewModal from "@/src/features/shop/presentation/components/QuickViewModal/QuickViewModal";
 import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
@@ -62,7 +60,6 @@ export default function TiendaClientView({
     openQuickView,
     closeQuickView,
   } = useProductsStore({ initialProducts });
-  const { open: cartOpen, setOpen: setCartOpen } = useCartDrawer();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedWorld, setSelectedWorld] = useState<ShopWorld>("peluqueria");
   const [hasUserSelectedWorld, setHasUserSelectedWorld] = useState(false);
@@ -265,8 +262,6 @@ export default function TiendaClientView({
         onClose={closeQuickView}
         onAddFeedback={handleAddFeedback}
       />
-
-      <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} />
     </main>
   );
 }
