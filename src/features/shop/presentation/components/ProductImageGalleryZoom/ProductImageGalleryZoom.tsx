@@ -1,0 +1,205 @@
+"use client";
+
+/* eslint-disable @next/next/no-img-element */
+
+import { type MouseEvent, useMemo, useState } from "react";
+import Lightbox from "yet-another-react-lightbox";
+import Zoom from "yet-another-react-lightbox/plugins/zoom";
+import "yet-another-react-lightbox/styles.css";
+
+type Theme = "quickview" | "pdp";
+
+type Props = {
+  images: string[];
+  productName: string;
+  currentImageIndex: number;
+  onImageIndexChange: (index: number) => void;
+  theme?: Theme;
+  thumbnailsDesktopOnly?: boolean;
+};
+
+export default function ProductImageGalleryZoom({
+  images,
+  productName,
+  currentImageIndex,
+  onImageIndexChange,
+  theme = "pdp",
+  thumbnailsDesktopOnly = false,
+}: Props) {
+  const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
+  const [isLightboxOpen, setIsLightboxOpen] = useState(false);
+
+  const hasMultipleImages = images.length > 1;
+  const safeIndex = images.length
+    ? Math.min(Math.max(currentImageIndex, 0), images.length - 1)
+    : 0;
+  const currentImage = images[safeIndex] ?? "";
+  const slides = useMemo(() => images.map((src) => ({ src })), [images]);
+
+  const nextImage = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (!images.length) return;
+    onImageIndexChange((safeIndex + 1) % images.length);
+  };
+
+  const prevImage = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (!images.length) return;
+    onImageIndexChange((safeIndex - 1 + images.length) % images.length);
+  };
+
+  const surfaceClassName =
+    theme === "quickview"
+      ? "bg-[#f7f7f7] shadow-sm rounded-md"
+      : "rounded-2xl border border-[var(--brand-gold-400)]/30 bg-[rgba(255,255,255,0.03)]";
+
+  const placeholderClassName =
+    theme === "quickview" ? "text-[#777]" : "text-[var(--brand-gold-300)]";
+
+  const thumbnailWrapperClassName = thumbnailsDesktopOnly
+    ? "mt-4 hidden h-auto gap-2 md:flex md:flex-wrap"
+    : "mt-4 grid grid-cols-5 gap-2";
+
+  return (
+    <>
+      <div
+        className={`group relative aspect-square w-full overflow-hidden ${surfaceClassName}`}
+        onMouseMove={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          const x = ((event.clientX - rect.left) / rect.width) * 100;
+          const y = ((event.clientY - rect.top) / rect.height) * 100;
+          setZoomPosition({ x, y });
+        }}
+        onMouseLeave={() => setZoomPosition({ x: 50, y: 50 })}
+        onClick={() => {
+          if (!images.length) return;
+          setIsLightboxOpen(true);
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label="Ampliar imagen del producto"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            if (!images.length) return;
+            setIsLightboxOpen(true);
+          }
+        }}
+      >
+        {currentImage ? (
+          <img
+            src={currentImage}
+            alt={productName}
+            className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out md:group-hover:scale-110"
+            style={{
+              transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%`,
+            }}
+            loading="eager"
+          />
+        ) : (
+          <div
+            className={`flex h-full w-full items-center justify-center text-xs uppercase ${placeholderClassName}`}
+          >
+            Sin imagen
+          </div>
+        )}
+
+        {hasMultipleImages && (
+          <>
+            <button
+              type="button"
+              onClick={prevImage}
+              className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/30 p-2 text-white transition hover:bg-black/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+              aria-label="Imagen anterior"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path
+                  d="M15 18 9 12l6-6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={nextImage}
+              className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/30 p-2 text-white transition hover:bg-black/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+              aria-label="Imagen siguiente"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path
+                  d="m9 18 6-6-6-6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </>
+        )}
+      </div>
+
+      {images.length > 0 && (
+        <div className={thumbnailWrapperClassName}>
+          {images.map((image, index) => (
+            <button
+              key={`${image}-${index}`}
+              type="button"
+              onClick={() => onImageIndexChange(index)}
+              className="relative aspect-square shrink-0 cursor-pointer overflow-hidden rounded-md transition-all hover:opacity-100"
+              style={{
+                width: thumbnailsDesktopOnly ? "4rem" : "auto",
+                height: thumbnailsDesktopOnly ? "4rem" : "auto",
+                border:
+                  index === safeIndex
+                    ? theme === "quickview"
+                      ? "2px solid var(--brand-violet-strong)"
+                      : "2px solid var(--brand-gold-400)"
+                    : "2px solid transparent",
+                opacity: index === safeIndex ? 1 : 0.6,
+              }}
+              aria-label={`Ver imagen ${index + 1} de ${images.length}`}
+            >
+              <img
+                src={image}
+                alt={`${productName} miniatura ${index + 1}`}
+                className="absolute inset-0 h-full w-full object-cover"
+                loading="lazy"
+              />
+            </button>
+          ))}
+        </div>
+      )}
+
+      <Lightbox
+        open={isLightboxOpen && images.length > 0}
+        close={() => setIsLightboxOpen(false)}
+        slides={slides}
+        plugins={[Zoom]}
+        index={safeIndex}
+        on={{
+          view: ({ index }) => {
+            if (typeof index !== "number") return;
+            onImageIndexChange(index);
+          },
+        }}
+        controller={{ closeOnBackdropClick: false }}
+        render={{
+          buttonPrev: hasMultipleImages ? undefined : () => null,
+          buttonNext: hasMultipleImages ? undefined : () => null,
+        }}
+      />
+    </>
+  );
+}

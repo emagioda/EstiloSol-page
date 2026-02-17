@@ -1,9 +1,7 @@
 "use client";
 
-import { type MouseEvent, useEffect, useMemo, useState } from "react";
-import Lightbox from "yet-another-react-lightbox";
-import Zoom from "yet-another-react-lightbox/plugins/zoom";
-import "yet-another-react-lightbox/styles.css";
+import { useEffect, useMemo, useState } from "react";
+import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/presentation/view-models/useProductsStore";
 
@@ -23,8 +21,6 @@ export default function QuickViewModal({
   const { addItem } = useCart();
   const [qty, setQty] = useState(1);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
-  const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
-  const [isLightboxOpen, setIsLightboxOpen] = useState(false);
 
   // Reset image index when product changes
   useEffect(() => {
@@ -49,8 +45,6 @@ export default function QuickViewModal({
       }),
     [product?.images]
   );
-
-  const slides = useMemo(() => images.map((src) => ({ src })), [images]);
 
   const shortDescription = (product?.short_description ?? "").trim();
   const formattedPrice =
@@ -79,7 +73,6 @@ export default function QuickViewModal({
   useEffect(() => {
     if (!open) {
       const timer = setTimeout(() => {
-        setIsLightboxOpen(false);
         setQty(1);
       }, 0);
       return () => clearTimeout(timer);
@@ -88,23 +81,10 @@ export default function QuickViewModal({
 
   if (!open || !product) return null;
 
-  const hasMultipleImages = images.length > 1;
   const safeIndex = images.length
     ? Math.min(Math.max(currentImageIndex, 0), images.length - 1)
     : 0;
   const currentImage = images[safeIndex] || "";
-
-  const nextImage = (event: MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    if (!images.length) return;
-    setCurrentImageIndex((prev) => (prev + 1) % images.length);
-  };
-
-  const prevImage = (event: MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    if (!images.length) return;
-    setCurrentImageIndex((prev) => (prev - 1 + images.length) % images.length);
-  };
 
   return (
     <>
@@ -134,121 +114,14 @@ export default function QuickViewModal({
 
           {/* Columna Izquierda: Imágenes */}
           <div className="flex h-auto flex-col bg-[#f7f7f7] p-3 sm:p-4">
-            <div
-              className="group relative aspect-square w-full overflow-hidden rounded-md bg-[#f7f7f7] shadow-sm"
-              onMouseMove={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                const x = ((event.clientX - rect.left) / rect.width) * 100;
-                const y = ((event.clientY - rect.top) / rect.height) * 100;
-                setZoomPosition({ x, y });
-              }}
-              onMouseLeave={() => setZoomPosition({ x: 50, y: 50 })}
-              onClick={() => {
-                if (!images.length) return;
-                setIsLightboxOpen(true);
-              }}
-              role="button"
-              tabIndex={0}
-              aria-label="Ampliar imagen del producto"
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  if (!images.length) return;
-                  setIsLightboxOpen(true);
-                }
-              }}
-            >
-              {currentImage ? (
-                <img
-                  src={currentImage}
-                  alt={product.name}
-                  className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out md:group-hover:scale-110"
-                  style={{
-                    transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%`,
-                  }}
-                  loading="eager"
-                />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[#777]">
-                  Sin imagen
-                </div>
-              )}
-
-              {/* Botones de navegación de imagen */}
-              {hasMultipleImages && (
-                <>
-                  <button
-                    type="button"
-                    onClick={prevImage}
-                    className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/30 p-2 text-white transition hover:bg-black/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-                    aria-label="Imagen anterior"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-5 w-5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <path
-                        d="M15 18 9 12l6-6"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={nextImage}
-                    className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/30 p-2 text-white transition hover:bg-black/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-                    aria-label="Imagen siguiente"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-5 w-5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <path
-                        d="m9 18 6-6-6-6"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-                </>
-              )}
-            </div>
-
-            {/* Miniaturas */}
-            {images.length > 0 && (
-              <div className="mt-4 hidden h-auto gap-2 md:flex md:flex-wrap">
-                {images.map((image, index) => (
-                  <button
-                    key={`${image}-${index}`}
-                    type="button"
-                    onClick={() => setCurrentImageIndex(index)}
-                    className="relative h-16 w-16 shrink-0 cursor-pointer overflow-hidden rounded-md transition-all hover:opacity-100"
-                    style={{
-                      border:
-                        index === safeIndex
-                          ? "2px solid var(--brand-violet-strong)"
-                          : "2px solid transparent",
-                      opacity: index === safeIndex ? 1 : 0.6,
-                    }}
-                    aria-label={`Ver imagen ${index + 1} de ${images.length}`}
-                  >
-                    <img
-                      src={image}
-                      alt={`${product.name} miniatura ${index + 1}`}
-                      className="absolute inset-0 h-full w-full object-cover"
-                      loading="lazy"
-                    />
-                  </button>
-                ))}
-              </div>
-            )}
+            <ProductImageGalleryZoom
+              images={images}
+              productName={product.name}
+              currentImageIndex={safeIndex}
+              onImageIndexChange={setCurrentImageIndex}
+              theme="quickview"
+              thumbnailsDesktopOnly
+            />
           </div>
 
           {/* Columna Derecha: Información */}
@@ -347,24 +220,6 @@ export default function QuickViewModal({
         </div>
       </div>
 
-      <Lightbox
-        open={isLightboxOpen && images.length > 0}
-        close={() => setIsLightboxOpen(false)}
-        slides={slides}
-        plugins={[Zoom]}
-        index={safeIndex}
-        on={{
-          view: ({ index }) => {
-            if (typeof index !== "number") return;
-            setCurrentImageIndex(index);
-          },
-        }}
-        controller={{ closeOnBackdropClick: false }}
-        render={{
-          buttonPrev: hasMultipleImages ? undefined : () => null,
-          buttonNext: hasMultipleImages ? undefined : () => null,
-        }}
-      />
     </>
   );
 }

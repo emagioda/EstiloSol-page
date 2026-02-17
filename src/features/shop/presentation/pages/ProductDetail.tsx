@@ -1,7 +1,7 @@
 "use client";
 
-import Image from "next/image";
 import { useMemo, useState } from "react";
+import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import type { Product } from "@/src/features/shop/presentation/view-models/useProductsStore";
@@ -57,7 +57,6 @@ export default function ProductDetail({ product }: Props) {
   const { addItem } = useCart();
   const { setOpen: setCartOpen } = useCartDrawer();
 
-  const currentImage = images[currentImageIndex] ?? images[0] ?? null;
   const safeUnitPrice = isValidPrice(product.price) ? product.price : 0;
   const displayPrice = isValidPrice(product.price) ? formatMoney(product.price) : "Consultar";
   const shortDescription = useMemo(
@@ -85,48 +84,13 @@ export default function ProductDetail({ product }: Props) {
     <main className="mx-auto w-full max-w-6xl px-4 py-8 text-[var(--brand-cream)]">
       <section className="grid gap-8 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.35)] p-5 shadow-[0_20px_50px_rgba(18,8,35,0.35)] lg:grid-cols-2 lg:p-8">
         <div>
-          <div className="relative aspect-square w-full overflow-hidden rounded-2xl border border-[var(--brand-gold-400)]/30 bg-[rgba(255,255,255,0.03)]">
-            {currentImage ? (
-              <Image
-                src={currentImage}
-                alt={product.name}
-                fill
-                priority
-                className="object-cover"
-                sizes="(max-width:1024px) 100vw, 50vw"
-              />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[var(--brand-gold-300)]">
-                Sin imagen
-              </div>
-            )}
-          </div>
-
-          {images.length > 1 && (
-            <div className="mt-4 grid grid-cols-5 gap-2">
-              {images.map((image, index) => (
-                <button
-                  key={`${image}-${index}`}
-                  type="button"
-                  onClick={() => setCurrentImageIndex(index)}
-                  className={`relative aspect-square overflow-hidden rounded-lg border transition ${
-                    index === currentImageIndex
-                      ? "border-[var(--brand-gold-400)]"
-                      : "border-white/10"
-                  }`}
-                  aria-label={`Ver imagen ${index + 1} de ${product.name}`}
-                >
-                  <Image
-                    src={image}
-                    alt={`${product.name} miniatura ${index + 1}`}
-                    fill
-                    className="object-cover"
-                    sizes="120px"
-                  />
-                </button>
-              ))}
-            </div>
-          )}
+          <ProductImageGalleryZoom
+            images={images}
+            productName={product.name}
+            currentImageIndex={currentImageIndex}
+            onImageIndexChange={setCurrentImageIndex}
+            theme="pdp"
+          />
         </div>
 
         <div className="flex flex-col gap-4">
@@ -140,18 +104,7 @@ export default function ProductDetail({ product }: Props) {
 
           <p className="text-sm leading-relaxed text-[var(--brand-cream)]/85">{shortDescription}</p>
 
-          <dl className="grid gap-2 rounded-2xl border border-white/10 bg-black/10 p-4 text-sm">
-            <div className="flex items-center justify-between gap-4">
-              <dt className="text-[var(--brand-gold-300)]">SKU</dt>
-              <dd className="font-medium">{product.id || "N/A"}</dd>
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <dt className="text-[var(--brand-gold-300)]">Slug</dt>
-              <dd className="font-medium">{product.slug || "(fallback por ID)"}</dd>
-            </div>
-          </dl>
-
-          <div className="mt-2 flex flex-wrap items-center gap-3">
+          <div className="mt-3 flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-3">
               <button
                 type="button"
