@@ -84,6 +84,7 @@ export default function ProductImageGalleryZoom({
         onMouseLeave={() => setZoomPosition({ x: 50, y: 50 })}
         onPointerDown={(event) => {
           if (!hasMultipleImages || event.pointerType === "mouse") return;
+          ignoreNextClickRef.current = 0;
           pointerStartRef.current = {
             pointerId: event.pointerId,
             x: event.clientX,
