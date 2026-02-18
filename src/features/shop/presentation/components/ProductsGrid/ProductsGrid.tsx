@@ -5,9 +5,11 @@ import type { Product } from "@/src/features/shop/domain/entities/Product";
 export default function ProductsGrid({
   products,
   onQuickView,
+  staticDetailHandles,
 }: {
   products: Product[];
   onQuickView?: (product: Product) => void;
+  staticDetailHandles?: string[];
 }) {
   if (!products || products.length === 0) {
     return (
@@ -25,6 +27,7 @@ export default function ProductsGrid({
           key={p.id}
           product={p}
           onQuickView={onQuickView}
+          staticDetailHandles={staticDetailHandles}
         />
       ))}
     </div>

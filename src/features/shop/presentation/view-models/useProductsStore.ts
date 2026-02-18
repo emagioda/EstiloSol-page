@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { fetchProductsFromSheets } from "@/src/features/shop/infrastructure/data/fetchProducts";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
@@ -9,14 +9,18 @@ export type FilterState = {
   sortBy: "price-asc" | "price-desc" | "name-asc" | "name-desc" | "newest";
 };
 
+type ProductsStatus = "idle" | "loading" | "success" | "error";
+
 export const useProductsStore = ({
   initialProducts,
 }: {
   initialProducts?: Product[];
 } = {}) => {
-  const hasInitialProducts = initialProducts !== undefined;
   const [products, setProducts] = useState<Product[]>(() => initialProducts ?? []);
-  const [loading, setLoading] = useState(!hasInitialProducts);
+  const [status, setStatus] = useState<ProductsStatus>(
+    initialProducts && initialProducts.length > 0 ? "success" : "idle"
+  );
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [filters, setFilters] = useState<FilterState>({
     searchTerm: "",
@@ -24,23 +28,28 @@ export const useProductsStore = ({
     sortBy: "newest",
   });
 
-  const fetchProducts = useCallback(async () => {
-    setLoading(true);
+  const loadProducts = useCallback(async () => {
+    setStatus("loading");
+    setErrorMessage(null);
+
     try {
-      const data = await fetchProductsFromSheets();
+      const data = await fetchProductsFromSheets({
+        cacheMode: "no-store",
+        cacheBust: true,
+      });
       setProducts(data);
+      setStatus("success");
     } catch (error) {
       console.error("Error fetching products:", error);
       setProducts([]);
-    } finally {
-      setLoading(false);
+      setStatus("error");
+      const message =
+        error instanceof Error
+          ? error.message
+          : "No se pudo cargar el catálogo. Verificá tu conexión e intentá nuevamente.";
+      setErrorMessage(message);
     }
   }, []);
-
-  useEffect(() => {
-    if (hasInitialProducts) return;
-    fetchProducts();
-  }, [fetchProducts, hasInitialProducts]);
 
   const getCategories = (): string[] => {
     const cats = new Set<string>();
@@ -117,17 +126,15 @@ export const useProductsStore = ({
     setSelectedProduct(null);
   };
 
-  const refresh = async () => {
-    await fetchProducts();
-  };
-
   return {
     products: filteredProducts,
     allProducts: products,
     selectedProduct,
     isQuickViewOpen: Boolean(selectedProduct),
-    loading,
-    refresh,
+    loading: status === "loading",
+    status,
+    errorMessage,
+    loadProducts,
     filters,
     setSearchTerm,
     setCategory,

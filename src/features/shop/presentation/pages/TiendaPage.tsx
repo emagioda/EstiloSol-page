@@ -3,16 +3,21 @@ import TiendaClientView from "./TiendaClientView";
 import { fetchProductsFromSheets } from "@/src/features/shop/infrastructure/data/fetchProducts";
 
 export default async function TiendaPage() {
-  let products: Product[] = [];
+  let staticProducts: Product[] = [];
   try {
-    products = await fetchProductsFromSheets();
+    staticProducts = await fetchProductsFromSheets();
   } catch (error) {
-    console.error("Error fetching products on server:", error);
+    console.error("No se pudieron generar handles estáticos de detalle:", error);
   }
+
+  const staticDetailHandles = staticProducts
+    .map((product) => String(product.slug || product.id))
+    .filter(Boolean);
 
   return (
     <TiendaClientView
-      initialProducts={products}
+      initialProducts={[]}
+      staticDetailHandles={staticDetailHandles}
       storeHeading="Productos Profesionales y Diseños Únicos"
       storeDescription="Encontrá todo para consentirte: cuidado profesional para tu cabello y bijouterie divina en un mismo lugar."
     />
