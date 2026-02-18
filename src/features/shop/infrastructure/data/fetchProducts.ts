@@ -106,15 +106,48 @@ const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null =>
   };
 };
 
+async function fetchLocalMock(): Promise<Product[]> {
+  try {
+    // dynamic import so webpack/nextjs can tree‑shake when not needed
+    const mock: unknown = (await import("./products.mock.json")).default;
+    if (Array.isArray(mock)) {
+      return mock
+        .map((row) =>
+          row && typeof row === "object"
+            ? adaptSheetRowToProduct(row as Record<string, unknown>)
+            : null
+        )
+        .filter((p): p is Product => p !== null);
+    }
+  } catch (err) {
+    // fall through to empty array
+    console.warn("could not load local mock products:", err);
+  }
+  return [];
+}
+
 export const fetchProductsFromSheets = async ({
-  cacheMode,
+  cacheMode = "force-cache",
   cacheBust = false,
 }: FetchProductsOptions = {}): Promise<Product[]> => {
-  const endpoint = getSheetsEndpoint();
-  const requestUrl = cacheBust ? withCacheBust(endpoint) : endpoint;
+  // if the environment variable is not defined we fall back to a bundled
+  // json file. this is useful for GitHub Pages or offline builds where we
+  // cannot hit the Apps Script endpoint at runtime. the `scripts/update-*
+  //` task (see package.json) can be used to refresh the file.
+  let endpoint: string | null = null;
+  try {
+    endpoint = getSheetsEndpoint();
+  } catch (_err) {
+    endpoint = null;
+  }
 
+  if (!endpoint) {
+    return fetchLocalMock();
+  }
+
+  const requestUrl = cacheBust ? withCacheBust(endpoint) : endpoint;
   const res = await fetch(requestUrl, {
-    cache: cacheMode,
+    cache: cacheMode ?? "force-cache",
   });
 
   if (!res.ok) {

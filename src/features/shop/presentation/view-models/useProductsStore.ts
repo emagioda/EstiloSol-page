@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useState, useEffect } from "react";
 import {
   fetchProductsFromSheets,
   isMissingSheetsEndpointError,
@@ -14,14 +14,33 @@ export type FilterState = {
 
 type ProductsStatus = "idle" | "loading" | "success" | "error";
 
+// simple in‑memory cache that survives component unmounts while the
+// page is still open. it doesn’t persist across full reloads, but it
+// guarantees that navigating between store/detail pages won’t trigger a
+// network request or a loading spinner.
+let cachedProducts: Product[] | null = null;
+
 export const useProductsStore = ({
   initialProducts,
 }: {
   initialProducts?: Product[];
 } = {}) => {
-  const [products, setProducts] = useState<Product[]>(() => initialProducts ?? []);
+  const [products, setProducts] = useState<Product[]>(() => {
+    if (cachedProducts && cachedProducts.length > 0) {
+      return cachedProducts;
+    }
+    return initialProducts ?? [];
+  });
+
   const [status, setStatus] = useState<ProductsStatus>(
-    initialProducts && initialProducts.length > 0 ? "success" : "idle"
+    // cache takes precedence, otherwise fall back to the value computed
+    // from the prop. status is used later so we can decide whether to run
+    // the loader effect.
+    cachedProducts && cachedProducts.length > 0
+      ? "success"
+      : initialProducts && initialProducts.length > 0
+      ? "success"
+      : "idle"
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -32,14 +51,26 @@ export const useProductsStore = ({
   });
 
   const loadProducts = useCallback(async () => {
+    // if we've already fetched once this session just reuse the data
+    if (cachedProducts && cachedProducts.length > 0) {
+      setProducts(cachedProducts);
+      setStatus("success");
+      return;
+    }
+
     setStatus("loading");
     setErrorMessage(null);
 
     try {
       const data = await fetchProductsFromSheets({
-        cacheMode: "no-store",
-        cacheBust: true,
+        // for a normal user journey we want the browser to cache the
+        // response; this avoids an extra HTTP request when the store
+        // component re‑mounts. we'll still allow manual busting if you
+        // expose a "refresh" button later.
+        cacheMode: "force-cache",
       });
+
+      cachedProducts = data;
       setProducts(data);
       setStatus("success");
     } catch (error) {
@@ -56,6 +87,14 @@ export const useProductsStore = ({
       setErrorMessage(message);
     }
   }, []);
+
+  // only fetch once per session; avoid resetting state when the
+  // component remounts during client‑side navigation.
+  useEffect(() => {
+    if (status === "idle") {
+      loadProducts();
+    }
+  }, [loadProducts, status]);
 
   const getCategories = (): string[] => {
     const cats = new Set<string>();

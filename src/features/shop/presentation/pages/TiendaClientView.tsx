@@ -97,8 +97,10 @@ export default function TiendaClientView({
   );
 
   useEffect(() => {
-    loadProducts();
-  }, [loadProducts]);
+    if (status === "idle") {
+      loadProducts();
+    }
+  }, [loadProducts, status]);
 
   useEffect(() => {
     if (loading || hasUserSelectedWorld || products.length === 0) return;

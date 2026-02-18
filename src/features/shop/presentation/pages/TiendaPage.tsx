@@ -27,7 +27,7 @@ export default async function TiendaPage() {
 
   return (
     <TiendaClientView
-      initialProducts={[]}
+      initialProducts={staticProducts}
       staticDetailHandles={staticDetailHandles}
       storeHeading="Productos Profesionales y Diseños Únicos"
       storeDescription="Encontrá todo para consentirte: cuidado profesional para tu cabello y bijouterie divina en un mismo lugar."
