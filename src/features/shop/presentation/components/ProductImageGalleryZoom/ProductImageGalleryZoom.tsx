@@ -35,7 +35,9 @@ export default function ProductImageGalleryZoom({
     y: number;
   } | null>(null);
   const swipeHandledRef = useRef(false);
-  const suppressClickRef = useRef(false);
+  const ignoreNextClickRef = useRef(0);
+  const lastSwipeAtRef = useRef(0);
+  const SWIPE_CLICK_SUPPRESS_WINDOW_MS = 350;
 
   const hasMultipleImages = images.length > 1;
   const safeIndex = images.length
@@ -108,18 +110,13 @@ export default function ProductImageGalleryZoom({
                 : (safeIndex - 1 + images.length) % images.length,
             );
             swipeHandledRef.current = true;
-            suppressClickRef.current = true;
+            ignoreNextClickRef.current = 1;
+            lastSwipeAtRef.current = performance.now();
           }
         }}
         onPointerUp={(event) => {
           if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
-          }
-
-          if (suppressClickRef.current) {
-            window.setTimeout(() => {
-              suppressClickRef.current = false;
-            }, 0);
           }
 
           pointerStartRef.current = null;
@@ -130,18 +127,16 @@ export default function ProductImageGalleryZoom({
             event.currentTarget.releasePointerCapture(event.pointerId);
           }
 
-          if (suppressClickRef.current) {
-            window.setTimeout(() => {
-              suppressClickRef.current = false;
-            }, 0);
-          }
-
           pointerStartRef.current = null;
           swipeHandledRef.current = false;
         }}
         onClick={() => {
-          if (suppressClickRef.current) {
-            suppressClickRef.current = false;
+          const now = performance.now();
+          if (
+            ignoreNextClickRef.current > 0 &&
+            now - lastSwipeAtRef.current < SWIPE_CLICK_SUPPRESS_WINDOW_MS
+          ) {
+            ignoreNextClickRef.current -= 1;
             return;
           }
           if (!images.length) return;
