@@ -1,15 +1,33 @@
 import ProductDetailClientPage from "./ProductDetailClientPage";
 
-export const dynamicParams = true;
+// URL to fetch products from Google Apps Script
+const SHEETS_URL = "https://script.google.com/macros/s/AKfycbz6DR8Q1sFG4CuZ0UtMn889EUQNQAUQjdDMbjt689wLfY45jWFvBkgkEKlgapYaQm1sIg/exec";
 
-export function generateStaticParams() {
-  return [];
+/**
+ * Generate static params for product detail pages.
+ * This fetches the complete product catalog at build time and extracts the slug for each product.
+ */
+export async function generateStaticParams() {
+  try {
+    const products: Array<{ slug: string }> = await fetch(SHEETS_URL).then((res) => res.json());
+    return products.map((product) => ({ slug: product.slug }));
+  } catch (error) {
+    console.error("Error fetching products for generateStaticParams", error);
+    return [];
+  }
 }
 
-type Props = { params: Promise<{ slug: string }> };
+// Props for the product detail page
+interface Props {
+  params: {
+    slug: string;
+  };
+}
 
-export default async function ProductDetailRoute({ params }: Props) {
-  const resolvedParams = await params;
-
-  return <ProductDetailClientPage slug={resolvedParams.slug} />;
+/**
+ * Product detail page. Renders the client component for a given slug.
+ */
+export default function ProductDetailPage({ params }: Props) {
+  const { slug } = params;
+  return <ProductDetailClientPage slug={slug} />;
 }
