@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useProductsStore } from "../view-models/useProductsStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
@@ -43,6 +43,13 @@ const worldOptions: { key: ShopWorld; label: string; description: string }[] = [
   },
 ];
 
+const wasBrowserReload = () => {
+  if (typeof window === "undefined") return false;
+
+  const [navigationEntry] = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
+  return navigationEntry?.type === "reload";
+};
+
 export default function TiendaClientView({
   initialProducts,
   staticDetailHandles = [],
@@ -51,7 +58,9 @@ export default function TiendaClientView({
 }: TiendaClientViewProps) {
   const {
     products,
+    allProducts,
     loading,
+    isRefreshing,
     status,
     errorMessage,
     loadProducts,
@@ -65,6 +74,8 @@ export default function TiendaClientView({
     isQuickViewOpen,
     openQuickView,
     closeQuickView,
+    shouldRefresh,
+    hydratedFromCache,
   } = useProductsStore({ initialProducts });
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedWorld, setSelectedWorld] = useState<ShopWorld>("peluqueria");
@@ -96,9 +107,47 @@ export default function TiendaClientView({
     matchesWorld(product, selectedWorld)
   );
 
+  const hasRenderableProducts = allProducts.length > 0;
+  const refreshLabel = useMemo(() => {
+    if (isRefreshing) return "Actualizando catálogo...";
+    if (hydratedFromCache) return "Mostrando catálogo guardado";
+    return "";
+  }, [hydratedFromCache, isRefreshing]);
+
   useEffect(() => {
-    loadProducts();
-  }, [loadProducts]);
+    const hasProducts = allProducts.length > 0;
+    const shouldRunBackgroundRefresh = hasProducts && (shouldRefresh() || wasBrowserReload());
+
+    if (!hasProducts) {
+      void loadProducts();
+      return;
+    }
+
+    if (shouldRunBackgroundRefresh) {
+      void loadProducts();
+    }
+  }, [allProducts.length, loadProducts, shouldRefresh]);
+
+  useEffect(() => {
+    const refreshIfNeeded = () => {
+      if (document.visibilityState === "hidden") return;
+      if (!shouldRefresh()) return;
+      void loadProducts();
+    };
+
+    const onFocus = () => {
+      if (!shouldRefresh()) return;
+      void loadProducts();
+    };
+
+    document.addEventListener("visibilitychange", refreshIfNeeded);
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      document.removeEventListener("visibilitychange", refreshIfNeeded);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [loadProducts, shouldRefresh]);
 
   useEffect(() => {
     if (loading || hasUserSelectedWorld || products.length === 0) return;
@@ -215,15 +264,20 @@ export default function TiendaClientView({
 
         <div className="flex-1">
           <StoreToolbar
-              searchTerm={filters.searchTerm}
-              onSearchChange={setSearchTerm}
-              onFiltersClick={() => setFiltersOpen(true)}
-              productCount={worldFilteredProducts.length}
-            />
+            searchTerm={filters.searchTerm}
+            onSearchChange={setSearchTerm}
+            onFiltersClick={() => setFiltersOpen(true)}
+            productCount={worldFilteredProducts.length}
+            onRefreshClick={() => {
+              void loadProducts({ force: true });
+            }}
+            refreshDisabled={loading || isRefreshing}
+            refreshLabel={refreshLabel}
+          />
 
-          {loading ? (
+          {loading && !hasRenderableProducts ? (
             <LoadingGrid />
-          ) : status === "error" ? (
+          ) : status === "error" && !hasRenderableProducts ? (
             <div className="rounded-2xl border border-rose-300/35 bg-rose-950/30 px-5 py-8 text-center">
               <h3 className="text-lg font-semibold text-[var(--brand-cream)]">
                 Catálogo no disponible
@@ -234,7 +288,7 @@ export default function TiendaClientView({
               <button
                 type="button"
                 onClick={() => {
-                  void loadProducts();
+                  void loadProducts({ force: true });
                 }}
                 className="mt-5 inline-flex items-center justify-center rounded-full border border-[var(--brand-gold-300)] px-5 py-2 text-sm font-semibold text-[var(--brand-cream)] transition hover:bg-[rgba(255,255,255,0.08)]"
               >

@@ -37,3 +37,19 @@
 
 - La lista `/tienda` refleja cambios de precio/productos al refrescar (CSR).
 - Las páginas de detalle nuevas (`/tienda/producto/[slug]`) requieren rebuild para existir como HTML estático.
+
+## Política de cache de catálogo (TTL + SWR)
+
+- Cache local versionado: `estilosol.products.cache.v1`.
+- Estructura persistida: `{ products, fetchedAt }` en `localStorage`.
+- TTL por defecto: `10 minutos` (`10 * 60 * 1000`).
+- Override opcional: `NEXT_PUBLIC_PRODUCTS_TTL_MS`.
+- Estrategia:
+  - Primera carga sin cache: muestra skeleton y pide red.
+  - Si hay cache: se renderiza instantáneamente.
+  - Refresh automático:
+    - al volver a la pestaña (`focus`/`visibility`) solo cuando vence TTL,
+    - o al recargar la página (SWR: muestra cache y refresca en background).
+- Refresh forzado:
+  - Botón **"Actualizar catálogo"** y **"Reintentar"** usan `force: true`.
+  - `force: true` activa `cacheBust` + `no-store` para pedir datos frescos inmediatamente.
