@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { useProductsStore, type Product } from "../view-models/useProductsStore";
+import { useProductsStore } from "../view-models/useProductsStore";
+import type { Product } from "@/src/features/shop/domain/entities/Product";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
 import FiltersSidebar from "@/src/features/shop/presentation/components/FiltersSidebar/FiltersSidebar";
 import StoreToolbar from "@/src/features/shop/presentation/components/StoreToolbar/StoreToolbar";

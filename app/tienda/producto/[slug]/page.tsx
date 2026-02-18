@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { fetchProductsFromSheets } from "@/src/features/shop/infrastructure/data/fetchProducts";
 import ProductDetail from "@/src/features/shop/presentation/pages/ProductDetail";
-import type { Product } from "@/src/features/shop/presentation/view-models/useProductsStore";
+import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 export async function generateStaticParams() {
   try {

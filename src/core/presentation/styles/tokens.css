@@ -3,6 +3,8 @@
   --brand-violet-900: #4b2a75;
   --brand-violet-800: #5e3a92;
   --brand-violet-700: #7a59b1;
+  --brand-violet-500: #6b4fa5;
+  --brand-violet-strong: #6b4fa5;
   --brand-gold-600: #c08a2e;
   --brand-gold-500: #d6a64b;
   --brand-gold-400: #f2c777;
@@ -148,4 +150,14 @@
   border-radius: 999px;
   background: var(--brand-gold-300);
   animation: pulse-dot 1.2s infinite;
+}
+
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
 }

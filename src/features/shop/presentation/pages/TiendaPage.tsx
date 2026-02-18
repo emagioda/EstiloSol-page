@@ -1,12 +1,11 @@
-import type { Product } from "../view-models/useProductsStore";
+import type { Product } from "@/src/features/shop/domain/entities/Product";
 import TiendaClientView from "./TiendaClientView";
 import { fetchProductsFromSheets } from "@/src/features/shop/infrastructure/data/fetchProducts";
 
 export default async function TiendaPage() {
   let products: Product[] = [];
   try {
-    const data = await fetchProductsFromSheets();
-    products = data as Product[];
+    products = await fetchProductsFromSheets();
   } catch (error) {
     console.error("Error fetching products on server:", error);
   }

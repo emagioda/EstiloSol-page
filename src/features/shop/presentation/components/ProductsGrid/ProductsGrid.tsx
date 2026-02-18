@@ -1,6 +1,6 @@
 "use client";
 import ProductCard from "../ProductCard/ProductCard";
-import type { Product } from "../ProductCard/ProductCard";
+import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 export default function ProductsGrid({
   products,

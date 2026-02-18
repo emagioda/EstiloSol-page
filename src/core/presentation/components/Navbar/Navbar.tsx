@@ -17,7 +17,8 @@ export default function Navbar() {
 
   const { setOpen: setCartOpen } = useCartDrawer();
   const pathname = usePathname();
-  const isTienda = pathname?.startsWith("/tienda");
+  const pathnameSegments = (pathname ?? "").split("/").filter(Boolean);
+  const isTienda = pathnameSegments.includes("tienda");
 
   return (
     <header className="w-full">
