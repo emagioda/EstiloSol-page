@@ -1,6 +1,9 @@
 "use client";
 import { useCallback, useState } from "react";
-import { fetchProductsFromSheets } from "@/src/features/shop/infrastructure/data/fetchProducts";
+import {
+  fetchProductsFromSheets,
+  isMissingSheetsEndpointError,
+} from "@/src/features/shop/infrastructure/data/fetchProducts";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 export type FilterState = {
@@ -40,7 +43,10 @@ export const useProductsStore = ({
       setProducts(data);
       setStatus("success");
     } catch (error) {
-      console.error("Error fetching products:", error);
+      if (!isMissingSheetsEndpointError(error)) {
+        console.error("Error fetching products:", error);
+      }
+
       setProducts([]);
       setStatus("error");
       const message =

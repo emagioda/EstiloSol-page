@@ -1,16 +1,24 @@
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
+export const MISSING_SHEETS_ENDPOINT_ERROR =
+  "NEXT_PUBLIC_SHEETS_ENDPOINT no está configurado. Definí la variable para cargar el catálogo en tiempo real.";
+
 const getSheetsEndpoint = () => {
   const endpoint = process.env.NEXT_PUBLIC_SHEETS_ENDPOINT?.trim();
 
   if (!endpoint) {
-    throw new Error(
-      "NEXT_PUBLIC_SHEETS_ENDPOINT no está configurado. Definí la variable para cargar el catálogo en tiempo real."
-    );
+    const error = new Error(MISSING_SHEETS_ENDPOINT_ERROR);
+    error.name = "MissingSheetsEndpointError";
+    throw error;
   }
 
   return endpoint;
 };
+
+export const isMissingSheetsEndpointError = (error: unknown) =>
+  error instanceof Error &&
+  (error.name === "MissingSheetsEndpointError" ||
+    error.message === MISSING_SHEETS_ENDPOINT_ERROR);
 
 type FetchProductsOptions = {
   cacheMode?: RequestCache;
