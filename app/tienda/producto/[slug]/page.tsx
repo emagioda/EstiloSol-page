@@ -3,6 +3,8 @@ import { fetchProductsFromSheets } from "@/src/features/shop/infrastructure/data
 import ProductDetail from "@/src/features/shop/presentation/pages/ProductDetail";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
+export const dynamicParams = false;
+
 export async function generateStaticParams() {
   try {
     const products = await fetchProductsFromSheets();

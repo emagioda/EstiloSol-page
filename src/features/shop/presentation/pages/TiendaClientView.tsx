@@ -11,6 +11,7 @@ import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-mo
 
 type TiendaClientViewProps = {
   initialProducts: Product[];
+  staticDetailHandles?: string[];
   storeHeading?: string;
   storeDescription?: string;
 };
@@ -44,12 +45,16 @@ const worldOptions: { key: ShopWorld; label: string; description: string }[] = [
 
 export default function TiendaClientView({
   initialProducts,
+  staticDetailHandles = [],
   storeHeading = "Tienda Híbrida · Estilo y Cuidado",
   storeDescription = "Comprá Productos Profesionales para peluquería y Diseños Únicos de bijouterie. Elegí tus favoritos y coordinamos el pago por transferencia o efectivo.",
 }: TiendaClientViewProps) {
   const {
     products,
     loading,
+    status,
+    errorMessage,
+    loadProducts,
     filters,
     setSearchTerm,
     setCategory,
@@ -90,6 +95,10 @@ export default function TiendaClientView({
   const worldFilteredProducts = products.filter((product) =>
     matchesWorld(product, selectedWorld)
   );
+
+  useEffect(() => {
+    loadProducts();
+  }, [loadProducts]);
 
   useEffect(() => {
     if (loading || hasUserSelectedWorld || products.length === 0) return;
@@ -214,10 +223,29 @@ export default function TiendaClientView({
 
           {loading ? (
             <LoadingGrid />
+          ) : status === "error" ? (
+            <div className="rounded-2xl border border-rose-300/35 bg-rose-950/30 px-5 py-8 text-center">
+              <h3 className="text-lg font-semibold text-[var(--brand-cream)]">
+                Catálogo no disponible
+              </h3>
+              <p className="mt-2 text-sm text-[var(--brand-gold-300)]">
+                {errorMessage ?? "No pudimos cargar los productos en este momento."}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  void loadProducts();
+                }}
+                className="mt-5 inline-flex items-center justify-center rounded-full border border-[var(--brand-gold-300)] px-5 py-2 text-sm font-semibold text-[var(--brand-cream)] transition hover:bg-[rgba(255,255,255,0.08)]"
+              >
+                Reintentar
+              </button>
+            </div>
           ) : (
             <ProductsGrid
               products={worldFilteredProducts}
               onQuickView={openQuickView}
+              staticDetailHandles={staticDetailHandles}
             />
           )}
         </div>

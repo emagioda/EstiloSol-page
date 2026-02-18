@@ -1,10 +1,34 @@
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
-const DEFAULT_SHEETS_ENDPOINT =
-  "https://script.google.com/macros/s/AKfycbz6DR8Q1sFG4CuZ0UtMn889EUQNQAUQjdDMbjt689wLfY45jWFvBkgkEKlgapYaQm1sIg/exec";
+export const MISSING_SHEETS_ENDPOINT_ERROR =
+  "NEXT_PUBLIC_SHEETS_ENDPOINT no está configurado. Definí la variable para cargar el catálogo en tiempo real.";
 
-const getSheetsEndpoint = () =>
-  process.env.NEXT_PUBLIC_SHEETS_ENDPOINT || DEFAULT_SHEETS_ENDPOINT;
+const getSheetsEndpoint = () => {
+  const endpoint = process.env.NEXT_PUBLIC_SHEETS_ENDPOINT?.trim();
+
+  if (!endpoint) {
+    const error = new Error(MISSING_SHEETS_ENDPOINT_ERROR);
+    error.name = "MissingSheetsEndpointError";
+    throw error;
+  }
+
+  return endpoint;
+};
+
+export const isMissingSheetsEndpointError = (error: unknown) =>
+  error instanceof Error &&
+  (error.name === "MissingSheetsEndpointError" ||
+    error.message === MISSING_SHEETS_ENDPOINT_ERROR);
+
+type FetchProductsOptions = {
+  cacheMode?: RequestCache;
+  cacheBust?: boolean;
+};
+
+const withCacheBust = (endpoint: string) => {
+  const separator = endpoint.includes("?") ? "&" : "?";
+  return `${endpoint}${separator}_ts=${Date.now()}`;
+};
 
 const getValidProductId = (row: Record<string, unknown>): string | null => {
   const rawId = row.id ?? row.ID ?? row.Id;
@@ -82,9 +106,15 @@ const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null =>
   };
 };
 
-export const fetchProductsFromSheets = async (): Promise<Product[]> => {
-  const res = await fetch(getSheetsEndpoint(), {
-    next: { revalidate: 60 },
+export const fetchProductsFromSheets = async ({
+  cacheMode,
+  cacheBust = false,
+}: FetchProductsOptions = {}): Promise<Product[]> => {
+  const endpoint = getSheetsEndpoint();
+  const requestUrl = cacheBust ? withCacheBust(endpoint) : endpoint;
+
+  const res = await fetch(requestUrl, {
+    cache: cacheMode,
   });
 
   if (!res.ok) {
