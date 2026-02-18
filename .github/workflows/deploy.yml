@@ -33,6 +33,7 @@ jobs:
       - name: Build
         env:
           NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}
+          NEXT_PUBLIC_SHEETS_ENDPOINT: ${{ vars.NEXT_PUBLIC_SHEETS_ENDPOINT }}
         run: npm run build
 
       - name: Upload Pages artifact
