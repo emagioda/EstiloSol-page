@@ -1,9 +1,6 @@
 "use client";
-import { useCallback, useState } from "react";
-import {
-  fetchProductsFromSheets,
-  isMissingSheetsEndpointError,
-} from "@/src/features/shop/infrastructure/data/fetchProducts";
+import { useEffect, useMemo, useState } from "react";
+import { useProductsStore as useProductsCatalogStore } from "@/src/features/shop/presentation/stores/useProductsStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 export type FilterState = {
@@ -12,18 +9,15 @@ export type FilterState = {
   sortBy: "price-asc" | "price-desc" | "name-asc" | "name-desc" | "newest";
 };
 
-type ProductsStatus = "idle" | "loading" | "success" | "error";
-
 export const useProductsStore = ({
   initialProducts,
 }: {
   initialProducts?: Product[];
 } = {}) => {
-  const [products, setProducts] = useState<Product[]>(() => initialProducts ?? []);
-  const [status, setStatus] = useState<ProductsStatus>(
-    initialProducts && initialProducts.length > 0 ? "success" : "idle"
-  );
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const products = useProductsCatalogStore((state) => state.products);
+  const status = useProductsCatalogStore((state) => state.status);
+  const errorMessage = useProductsCatalogStore((state) => state.errorMessage);
+  const loadProducts = useProductsCatalogStore((state) => state.loadProducts);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [filters, setFilters] = useState<FilterState>({
     searchTerm: "",
@@ -31,41 +25,25 @@ export const useProductsStore = ({
     sortBy: "newest",
   });
 
-  const loadProducts = useCallback(async () => {
-    setStatus("loading");
-    setErrorMessage(null);
+  useEffect(() => {
+    if (!initialProducts || initialProducts.length === 0 || products.length > 0) return;
 
-    try {
-      const data = await fetchProductsFromSheets({
-        cacheMode: "no-store",
-        cacheBust: true,
-      });
-      setProducts(data);
-      setStatus("success");
-    } catch (error) {
-      if (!isMissingSheetsEndpointError(error)) {
-        console.error("Error fetching products:", error);
-      }
+    useProductsCatalogStore.setState({
+      products: initialProducts,
+      status: "success",
+      lastFetch: Date.now(),
+    });
+  }, [initialProducts, products.length]);
 
-      setProducts([]);
-      setStatus("error");
-      const message =
-        error instanceof Error
-          ? error.message
-          : "No se pudo cargar el catálogo. Verificá tu conexión e intentá nuevamente.";
-      setErrorMessage(message);
-    }
-  }, []);
-
-  const getCategories = (): string[] => {
+  const categories = useMemo(() => {
     const cats = new Set<string>();
     products.forEach((p) => {
       if (p.category) cats.add(p.category);
     });
     return Array.from(cats).sort();
-  };
+  }, [products]);
 
-  const applyFilters = (products: Product[]): Product[] => {
+  const filteredProducts = useMemo(() => {
     let filtered = [...products];
 
     if (filters.searchTerm) {
@@ -100,9 +78,7 @@ export const useProductsStore = ({
     }
 
     return filtered;
-  };
-
-  const filteredProducts = applyFilters(products);
+  }, [filters, products]);
 
   const setSearchTerm = (term: string) => {
     setFilters((prev) => ({ ...prev, searchTerm: term }));
@@ -148,6 +124,6 @@ export const useProductsStore = ({
     clearFilters,
     openQuickView,
     closeQuickView,
-    categories: getCategories(),
+    categories,
   } as const;
 };

@@ -20,16 +20,6 @@ export const isMissingSheetsEndpointError = (error: unknown) =>
   (error.name === "MissingSheetsEndpointError" ||
     error.message === MISSING_SHEETS_ENDPOINT_ERROR);
 
-type FetchProductsOptions = {
-  cacheMode?: RequestCache;
-  cacheBust?: boolean;
-};
-
-const withCacheBust = (endpoint: string) => {
-  const separator = endpoint.includes("?") ? "&" : "?";
-  return `${endpoint}${separator}_ts=${Date.now()}`;
-};
-
 const getValidProductId = (row: Record<string, unknown>): string | null => {
   const rawId = row.id ?? row.ID ?? row.Id;
 
@@ -106,16 +96,10 @@ const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null =>
   };
 };
 
-export const fetchProductsFromSheets = async ({
-  cacheMode,
-  cacheBust = false,
-}: FetchProductsOptions = {}): Promise<Product[]> => {
+export const fetchProductsFromSheets = async (): Promise<Product[]> => {
   const endpoint = getSheetsEndpoint();
-  const requestUrl = cacheBust ? withCacheBust(endpoint) : endpoint;
 
-  const res = await fetch(requestUrl, {
-    cache: cacheMode,
-  });
+  const res = await fetch(endpoint);
 
   if (!res.ok) {
     throw new Error(`Failed to fetch products: ${res.status}`);
