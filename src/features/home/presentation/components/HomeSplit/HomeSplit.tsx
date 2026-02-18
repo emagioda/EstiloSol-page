@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import brandConfig from "@/src/config/brand";
@@ -6,23 +5,10 @@ import brandConfig from "@/src/config/brand";
 const heroSections = [brandConfig.heroLeft, brandConfig.heroRight];
 
 export default function HomeSplit() {
-  const { palette, typography } = brandConfig;
-
-  const brandStyles = {
-    "--brand-violet-950": palette.violet.deepest,
-    "--brand-violet-900": palette.violet.deep,
-    "--brand-violet-800": palette.violet.base,
-    "--brand-violet-700": palette.violet.light,
-    "--brand-violet-strong": palette.violet.strong,
-    "--brand-gold-600": palette.gold.deep,
-    "--brand-gold-500": palette.gold.base,
-    "--brand-gold-400": palette.gold.light,
-    "--brand-gold-300": palette.gold.glow,
-    "--brand-cream": palette.cream,
-  } as CSSProperties;
+  const { typography } = brandConfig;
 
   return (
-    <div style={brandStyles} className="flex min-h-screen flex-col bg-[var(--brand-violet-950)]">
+    <div className="flex min-h-screen flex-col bg-[var(--brand-violet-950)]">
       <main className="sparkle-bg flex-1">
         <section className="flex w-full flex-col md:grid md:grid-cols-2 md:gap-6 md:px-6 md:py-8">
           {heroSections.map((section, index) => {

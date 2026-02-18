@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
-import type { Product } from "@/src/features/shop/presentation/view-models/useProductsStore";
+import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 type Props = {
   product: Product;

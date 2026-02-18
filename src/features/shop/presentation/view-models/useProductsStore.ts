@@ -1,19 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { fetchProductsFromSheets } from "@/src/features/shop/infrastructure/data/fetchProducts";
-
-export type Product = {
-  id: string;
-  name: string;
-  slug?: string;
-  description?: string;
-  short_description?: string;
-  category?: string;
-  price: number;
-  currency?: string;
-  images?: string[];
-  [k: string]: unknown;
-};
+import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 export type FilterState = {
   searchTerm: string;
@@ -40,7 +28,7 @@ export const useProductsStore = ({
     setLoading(true);
     try {
       const data = await fetchProductsFromSheets();
-      setProducts(data as Product[]);
+      setProducts(data);
     } catch (error) {
       console.error("Error fetching products:", error);
       setProducts([]);

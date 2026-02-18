@@ -43,6 +43,8 @@ export default function RootLayout({
     --brand-violet-900: ${palette.violet.deep};
     --brand-violet-800: ${palette.violet.base};
     --brand-violet-700: ${palette.violet.light};
+    --brand-violet-500: ${palette.violet.strong};
+    --brand-violet-strong: ${palette.violet.strong};
     --brand-gold-600: ${palette.gold.deep};
     --brand-gold-500: ${palette.gold.base};
     --brand-gold-400: ${palette.gold.light};

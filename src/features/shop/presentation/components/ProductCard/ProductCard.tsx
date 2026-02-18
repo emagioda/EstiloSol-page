@@ -1,21 +1,7 @@
 "use client";
 import Image from "next/image";
 import Link from "next/link";
-
-export type Product = {
-  id: string;
-  name: string;
-  slug?: string;
-  description?: string;
-  short_description?: string;
-  category?: string;
-  price: number;
-  currency?: string;
-  images?: string[];
-  is_new?: boolean;
-  is_sale?: boolean;
-  [k: string]: unknown;
-};
+import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 const ACTION_SIZE_CLASS = "h-11 w-full max-w-[170px]";
 

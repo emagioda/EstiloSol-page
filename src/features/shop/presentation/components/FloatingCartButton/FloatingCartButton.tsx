@@ -11,7 +11,8 @@ const NAVBAR_ID = "main-navbar";
 export default function FloatingCartButton() {
   const [showFloating, setShowFloating] = useState(false);
   const pathname = usePathname();
-  const isTienda = pathname?.startsWith("/tienda");
+  const pathnameSegments = (pathname ?? "").split("/").filter(Boolean);
+  const isTienda = pathnameSegments.includes("tienda");
   const { open: isCartOpen, setOpen: setCartOpen } = useCartDrawer();
   const { suppressFloatingCart } = useCartBadgeVisibility();
 
