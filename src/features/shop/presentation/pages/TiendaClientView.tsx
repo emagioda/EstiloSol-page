@@ -122,7 +122,7 @@ export default function TiendaClientView({
   };
 
   return (
-    <main className="sparkle-bg min-h-screen">
+    <main className="min-h-screen bg-[var(--brand-violet-950)]">
       <div className="mx-auto max-w-6xl px-4 pb-16 pt-10 text-[var(--brand-cream)] md:pt-14">
         <header className="mb-10">
           <h1 className="text-4xl font-semibold tracking-wide text-[var(--brand-cream)] md:text-5xl">
