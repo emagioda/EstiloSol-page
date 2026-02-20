@@ -40,10 +40,10 @@ export default function ProductCard({
     : undefined;
 
   return (
-    <article className="animate-fade-up flex h-full flex-col rounded-2xl border border-white/15 bg-white/10 p-5 text-[var(--brand-cream)] shadow-lg shadow-black/20 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/60 hover:shadow-2xl hover:shadow-black/30">
+    <article className="animate-fade-up flex h-full flex-col rounded-2xl border border-white/15 bg-white/10 text-[var(--brand-cream)] shadow-lg shadow-black/20 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/60 hover:shadow-2xl hover:shadow-black/30 overflow-hidden">
       {canOpenStaticDetail ? (
-        <Link href={detailHref} className="group block" aria-label={`Ver detalle de ${product.name}`}>
-          <div className="relative mb-4 aspect-[4/5] w-full overflow-hidden rounded-xl">
+        <Link href={detailHref} className="group block flex flex-col h-full" aria-label={`Ver detalle de ${product.name}`}>
+          <div className="relative aspect-[4/5] w-full overflow-hidden rounded-t-2xl">
             {badgeText && (
               <span className="absolute left-3 top-3 z-10 rounded-lg bg-gradient-to-r from-[var(--brand-gold-400)] to-[var(--brand-gold-300)] px-2 py-1 text-xs font-semibold text-[var(--brand-violet-950)] shadow-sm">
                 {badgeText}
@@ -64,7 +64,7 @@ export default function ProductCard({
             )}
           </div>
 
-          <div className="flex flex-1 flex-col gap-3">
+          <div className="flex flex-1 flex-col gap-3 p-4 md:p-4">
             <div className="flex-1">
               <div className="mb-1 text-xl font-extrabold text-[var(--brand-gold-300)]">
                 {formattedPrice}
@@ -76,8 +76,8 @@ export default function ProductCard({
           </div>
         </Link>
       ) : (
-        <div className="group block" aria-label={`${product.name} requiere actualización del sitio`}> 
-          <div className="relative mb-4 aspect-[4/5] w-full overflow-hidden rounded-xl">
+        <div className="group block flex flex-col h-full" aria-label={`${product.name} requiere actualización del sitio`}> 
+          <div className="relative aspect-[4/5] w-full overflow-hidden rounded-t-2xl">
             {badgeText && (
               <span className="absolute left-3 top-3 z-10 rounded-lg bg-gradient-to-r from-[var(--brand-gold-400)] to-[var(--brand-gold-300)] px-2 py-1 text-xs font-semibold text-[var(--brand-violet-950)] shadow-sm">
                 {badgeText}
@@ -98,7 +98,7 @@ export default function ProductCard({
             )}
           </div>
 
-          <div className="flex flex-1 flex-col gap-3">
+          <div className="flex flex-1 flex-col gap-3 p-4 md:p-4">
             <div className="flex-1">
               <div className="mb-1 text-xl font-extrabold text-[var(--brand-gold-300)]">
                 {formattedPrice}
@@ -111,7 +111,7 @@ export default function ProductCard({
         </div>
       )}
 
-      <div className="mt-auto flex w-full justify-center pt-3">
+      <div className="mt-auto flex w-full justify-center pt-3 px-4 md:px-4 md:pt-3 pb-4 md:pb-4">
         <button
           type="button"
           onClick={(event) => {
