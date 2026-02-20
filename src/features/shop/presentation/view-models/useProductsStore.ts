@@ -8,6 +8,7 @@ import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 export type FilterState = {
   searchTerm: string;
+  departament: string | null;
   category: string | null;
   sortBy: "price-asc" | "price-desc" | "name-asc" | "name-desc" | "newest";
 };
@@ -46,6 +47,7 @@ export const useProductsStore = ({
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [filters, setFilters] = useState<FilterState>({
     searchTerm: "",
+    departament: null,
     category: null,
     sortBy: "newest",
   });
@@ -91,14 +93,29 @@ export const useProductsStore = ({
   // only fetch once per session; avoid resetting state when the
   // component remounts during client‑side navigation.
   useEffect(() => {
-    if (status === "idle") {
-      loadProducts();
-    }
+    if (status !== "idle") return;
+
+    const timer = window.setTimeout(() => {
+      void loadProducts();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
   }, [loadProducts, status]);
+
+  const getDepartaments = (): string[] => {
+    const departaments = new Set<string>();
+    products.forEach((p) => {
+      if (p.departament) departaments.add(p.departament);
+    });
+    return Array.from(departaments).sort();
+  };
 
   const getCategories = (): string[] => {
     const cats = new Set<string>();
     products.forEach((p) => {
+      if (filters.departament && p.departament !== filters.departament) {
+        return;
+      }
       if (p.category) cats.add(p.category);
     });
     return Array.from(cats).sort();
@@ -114,6 +131,10 @@ export const useProductsStore = ({
           p.name?.toLowerCase().includes(term) ||
           p.description?.toLowerCase().includes(term)
       );
+    }
+
+    if (filters.departament) {
+      filtered = filtered.filter((p) => p.departament === filters.departament);
     }
 
     if (filters.category) {
@@ -147,6 +168,10 @@ export const useProductsStore = ({
     setFilters((prev) => ({ ...prev, searchTerm: term }));
   };
 
+  const setDepartament = (departament: string | null) => {
+    setFilters((prev) => ({ ...prev, departament, category: null }));
+  };
+
   const setCategory = (category: string | null) => {
     setFilters((prev) => ({ ...prev, category }));
   };
@@ -158,6 +183,7 @@ export const useProductsStore = ({
   const clearFilters = () => {
     setFilters({
       searchTerm: "",
+      departament: null,
       category: null,
       sortBy: "newest",
     });
@@ -182,11 +208,13 @@ export const useProductsStore = ({
     loadProducts,
     filters,
     setSearchTerm,
+    setDepartament,
     setCategory,
     setSortBy,
     clearFilters,
     openQuickView,
     closeQuickView,
+    departaments: getDepartaments(),
     categories: getCategories(),
   } as const;
 };

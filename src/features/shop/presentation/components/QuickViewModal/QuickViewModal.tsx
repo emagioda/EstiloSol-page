@@ -214,6 +214,18 @@ export default function QuickViewModal({
                     {product.category}
                   </p>
                 )}
+                {product.departament && (
+                  <p>
+                    <span className="text-[#222]">Departamento:</span>{" "}
+                    {product.departament}
+                  </p>
+                )}
+                {product.product_type && (
+                  <p>
+                    <span className="text-[#222]">Tipo:</span>{" "}
+                    {product.product_type}
+                  </p>
+                )}
               </div>
             </div>
           </div>

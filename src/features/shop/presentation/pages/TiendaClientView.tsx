@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useProductsStore } from "../view-models/useProductsStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
@@ -21,28 +21,6 @@ type CartNotice = {
   message: string;
 };
 
-type ShopWorld = "peluqueria" | "bijouterie";
-
-const worldKeywords: Record<ShopWorld, string[]> = {
-  peluqueria: ["pelo", "capilar", "shampoo", "acondicionador", "tratamiento", "peine", "tintura", "peluquer"],
-  bijouterie: ["bijou", "aro", "anillo", "pulsera", "collar", "accesorio", "joya"],
-};
-
-const normalizeText = (value: string) => value.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
-
-const worldOptions: { key: ShopWorld; label: string; description: string }[] = [
-  {
-    key: "peluqueria",
-    label: "Peluquería",
-    description: "Productos profesionales para cuidar y realzar tu cabello.",
-  },
-  {
-    key: "bijouterie",
-    label: "Bijouterie",
-    description: "Diseños únicos para complementar cada estilo con personalidad.",
-  },
-];
-
 export default function TiendaClientView({
   initialProducts,
   staticDetailHandles = [],
@@ -57,9 +35,11 @@ export default function TiendaClientView({
     loadProducts,
     filters,
     setSearchTerm,
+    setDepartament,
     setCategory,
     setSortBy,
     clearFilters,
+    departaments,
     categories,
     selectedProduct,
     isQuickViewOpen,
@@ -67,33 +47,12 @@ export default function TiendaClientView({
     closeQuickView,
   } = useProductsStore({ initialProducts });
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [selectedWorld, setSelectedWorld] = useState<ShopWorld>("peluqueria");
-  const [hasUserSelectedWorld, setHasUserSelectedWorld] = useState(false);
   const [cartNotice, setCartNotice] = useState<CartNotice | null>(null);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
 
-  const matchesWorld = useCallback((product: Product, world: ShopWorld) => {
-    const searchable = normalizeText(
-      `${product.category ?? ""} ${product.name ?? ""} ${product.description ?? ""}`
-    );
-    return worldKeywords[world].some((keyword) =>
-      searchable.includes(normalizeText(keyword))
-    );
-  }, []);
-
-  const categoryBelongsToWorld = (category: string, world: ShopWorld) => {
-    const normalizedCategory = normalizeText(category);
-    return worldKeywords[world].some((keyword) =>
-      normalizedCategory.includes(normalizeText(keyword))
-    );
-  };
-
-  const availableCategories = categories.filter((category) =>
-    categoryBelongsToWorld(category, selectedWorld)
-  );
-
-  const worldFilteredProducts = products.filter((product) =>
-    matchesWorld(product, selectedWorld)
+  const normalizedDepartaments = useMemo(
+    () => departaments.map((dep) => dep.trim()).filter(Boolean),
+    [departaments]
   );
 
   useEffect(() => {
@@ -101,35 +60,6 @@ export default function TiendaClientView({
       loadProducts();
     }
   }, [loadProducts, status]);
-
-  useEffect(() => {
-    if (loading || hasUserSelectedWorld || products.length === 0) return;
-
-    const countPeluqueria = products.filter((product) =>
-      matchesWorld(product, "peluqueria")
-    ).length;
-    const countBijouterie = products.filter((product) =>
-      matchesWorld(product, "bijouterie")
-    ).length;
-
-    let nextWorld: ShopWorld | null = null;
-
-    if (countPeluqueria === 0 && countBijouterie > 0) {
-      nextWorld = "bijouterie";
-    } else if (countBijouterie === 0 && countPeluqueria > 0) {
-      nextWorld = "peluqueria";
-    } else if (countPeluqueria > 0 && countBijouterie > 0) {
-      nextWorld = countBijouterie > countPeluqueria ? "bijouterie" : "peluqueria";
-    }
-
-    if (!nextWorld || nextWorld === selectedWorld) return;
-
-    const timer = window.setTimeout(() => {
-      setSelectedWorld(nextWorld);
-    }, 0);
-
-    return () => window.clearTimeout(timer);
-  }, [hasUserSelectedWorld, loading, matchesWorld, products, selectedWorld]);
 
   useEffect(() => {
     setSuppressBadge(isQuickViewOpen);
@@ -165,48 +95,52 @@ export default function TiendaClientView({
           {storeDescription}
         </p>
 
-        <div className="mt-6 rounded-3xl border border-[var(--brand-gold-400)]/30 bg-[linear-gradient(145deg,rgba(83,52,126,0.72),rgba(41,24,66,0.82))] p-4 shadow-[0_18px_40px_rgba(18,8,35,0.32)] md:p-5">
-          <p className="mb-3 text-xs uppercase tracking-[0.22em] text-[var(--brand-gold-300)]">
-            Explorá por rubro
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {worldOptions.map((world) => {
-              const active = selectedWorld === world.key;
-              return (
-                <button
-                  key={world.key}
-                  type="button"
-                  onClick={() => {
-                    setHasUserSelectedWorld(true);
-                    setSelectedWorld(world.key);
-                    setCategory(null);
-                  }}
-                  className={`rounded-2xl border p-4 text-left transition ${
-                    active
-                      ? "border-[var(--brand-gold-400)] bg-[rgba(255,255,255,0.12)] shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
-                      : "border-white/15 bg-[rgba(255,255,255,0.04)] hover:border-[var(--brand-gold-300)] hover:bg-[rgba(255,255,255,0.08)]"
-                  }`}
-                  aria-pressed={active}
-                >
-                  <span className="block text-sm font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)]">
-                    {world.label}
-                  </span>
-                  <span className="mt-1 block text-xs text-[var(--brand-cream)]/80">
-                    {world.description}
-                  </span>
-                </button>
-              );
-            })}
+        {normalizedDepartaments.length > 0 && (
+          <div className="mt-6 rounded-3xl border border-[var(--brand-gold-400)]/30 bg-[linear-gradient(145deg,rgba(83,52,126,0.72),rgba(41,24,66,0.82))] p-4 shadow-[0_18px_40px_rgba(18,8,35,0.32)] md:p-5">
+            <p className="mb-3 text-xs uppercase tracking-[0.22em] text-[var(--brand-gold-300)]">
+              Explorá por departamento
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {normalizedDepartaments.map((departament) => {
+                const active = filters.departament === departament;
+                return (
+                  <button
+                    key={departament}
+                    type="button"
+                    onClick={() => {
+                      setDepartament(active ? null : departament);
+                    }}
+                    className={`rounded-2xl border p-4 text-left transition ${
+                      active
+                        ? "border-[var(--brand-gold-400)] bg-[rgba(255,255,255,0.12)] shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
+                        : "border-white/15 bg-[rgba(255,255,255,0.04)] hover:border-[var(--brand-gold-300)] hover:bg-[rgba(255,255,255,0.08)]"
+                    }`}
+                    aria-pressed={active}
+                  >
+                    <span className="block text-sm font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)]">
+                      {departament}
+                    </span>
+                    <span className="mt-1 block text-xs text-[var(--brand-cream)]/80">
+                      {active
+                        ? "Mostrando productos de este departamento."
+                        : "Filtrar productos de este departamento."}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
       </header>
 
       <section className="flex flex-col gap-6 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.35)] p-4 shadow-[0_20px_50px_rgba(18,8,35,0.35)] md:flex-row md:gap-8 md:p-6">
         <div className="hidden md:block md:w-64">
           <FiltersSidebar
-            categories={availableCategories}
+            departaments={normalizedDepartaments}
+            categories={categories}
             filters={filters}
             onFilterChange={{
+              departament: setDepartament,
               category: setCategory,
               search: setSearchTerm,
               sort: setSortBy,
@@ -217,11 +151,11 @@ export default function TiendaClientView({
 
         <div className="flex-1">
           <StoreToolbar
-              searchTerm={filters.searchTerm}
-              onSearchChange={setSearchTerm}
-              onFiltersClick={() => setFiltersOpen(true)}
-              productCount={worldFilteredProducts.length}
-            />
+            searchTerm={filters.searchTerm}
+            onSearchChange={setSearchTerm}
+            onFiltersClick={() => setFiltersOpen(true)}
+            productCount={products.length}
+          />
 
           {loading ? (
             <LoadingGrid />
@@ -245,7 +179,7 @@ export default function TiendaClientView({
             </div>
           ) : (
             <ProductsGrid
-              products={worldFilteredProducts}
+              products={products}
               onQuickView={openQuickView}
               staticDetailHandles={staticDetailHandles}
             />
@@ -272,9 +206,11 @@ export default function TiendaClientView({
       {filtersOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
           <FiltersSidebar
-            categories={availableCategories}
+            departaments={normalizedDepartaments}
+            categories={categories}
             filters={filters}
             onFilterChange={{
+              departament: setDepartament,
               category: setCategory,
               search: setSearchTerm,
               sort: setSortBy,
