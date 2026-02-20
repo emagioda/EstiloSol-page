@@ -1,4 +1,5 @@
 "use client";
+import "@/src/core/presentation/styles/tokens.css";
 import { useMemo, useState } from "react";
 import { useCart } from "../../view-models/useCartStore";
 import CheckoutModal from "../CheckoutModal/CheckoutModal";
@@ -6,22 +7,31 @@ import CheckoutModal from "../CheckoutModal/CheckoutModal";
 export default function CartDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { items, updateQty, removeItem, clear } = useCart();
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
+  const handleClose = () => {
+    setIsClosing(true);
+    setTimeout(() => {
+      onClose();
+      setIsClosing(false);
+    }, 300);
+  };
 
   const subtotal = useMemo(() => items.reduce((s, it) => s + it.unitPrice * it.qty, 0), [items]);
 
-  if (!open) return null;
+  if (!open && !isClosing) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex">
-      <div className="fixed inset-0 bg-black/40" onClick={onClose} />
-      <aside className="relative ml-auto w-full max-w-sm bg-[var(--brand-violet-950)] p-4 text-[var(--brand-cream)] shadow-[0_20px_45px_rgba(18,8,35,0.5)]">
+      <div className={`fixed inset-0 bg-black/40 ${isClosing ? 'animate-fadeOutBackdrop' : 'animate-fadeInBackdrop'}`} onClick={handleClose} />
+      <aside className={`relative ml-auto w-full max-w-sm bg-[var(--brand-violet-950)] p-4 text-[var(--brand-cream)] shadow-[0_20px_45px_rgba(18,8,35,0.5)] ${isClosing ? 'animate-slideOutDrawer' : 'animate-slideInDrawer'}`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-2xl">🛒</span>
             <h2 className="text-lg font-semibold">Tu carrito</h2>
           </div>
-          <button onClick={onClose} className="text-xl transition-transform hover:scale-110">✕</button>
+          <button onClick={handleClose} className="text-xl transition-transform hover:scale-110">✕</button>
         </div>
 
         <div className="mt-4 flex max-h-[60vh] flex-col gap-3 overflow-y-auto">

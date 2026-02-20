@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { type MouseEvent, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
@@ -29,13 +29,56 @@ export default function ProductImageGalleryZoom({
   const SWIPE_THRESHOLD_PX = 40;
   const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
+  const [animationKey, setAnimationKey] = useState(0);
+  const [slideDirection, setSlideDirection] = useState<'left' | 'right'>('right');
+  const [isInitialRender, setIsInitialRender] = useState(true);
+  const prevIndexRef = useRef(currentImageIndex);
   const pointerStartRef = useRef<{
     pointerId: number;
     x: number;
     y: number;
   } | null>(null);
   const swipeHandledRef = useRef(false);
-  // swipeHandledRef prevents multiple index changes during a single drag.
+
+  // Update animation direction and key when image index changes. We also
+  // watch for the underlying `images` array changing so that opening a new
+  // product (or a fresh modal) will display its first picture without any
+  // sliding animation. The `isInitialRender` flag is used to suppress the
+  // transition on the very first visible image.
+  const prevImagesRef = useRef<string[]>(images);
+
+  useEffect(() => {
+    // if the images list itself is different, treat this as a new gallery
+    if (prevImagesRef.current !== images) {
+      prevImagesRef.current = images;
+      setIsInitialRender(true);
+      prevIndexRef.current = currentImageIndex;
+      return;
+    }
+
+    if (isInitialRender) {
+      setIsInitialRender(false);
+      prevIndexRef.current = currentImageIndex;
+      return;
+    }
+
+    const prevIndex = prevIndexRef.current;
+    const len = images.length;
+
+    // calculate forward/backward distance on the circular album. this gives a
+    // direction that matches the user’s swipe regardless of numeric order.
+    let isMovingForward = true;
+    if (len > 0) {
+      const forwardSteps = (currentImageIndex - prevIndex + len) % len;
+      const backwardSteps = (prevIndex - currentImageIndex + len) % len;
+      isMovingForward = forwardSteps <= backwardSteps;
+    }
+
+    setSlideDirection(isMovingForward ? 'left' : 'right');
+    prevIndexRef.current = currentImageIndex;
+    setAnimationKey((prev) => prev + 1);
+  }, [currentImageIndex, images]);
+
   // we intentionally **do not** suppress clicks after a swipe; the goal is
   // that a user can swipe to a new picture and then tap once (even very
   // quickly) to open the zoom view. the browser rarely delivers a click
@@ -63,20 +106,24 @@ export default function ProductImageGalleryZoom({
   const surfaceClassName =
     theme === "quickview"
       ? "bg-[#f7f7f7] shadow-sm rounded-md"
-      : "rounded-2xl border border-[var(--brand-gold-400)]/30 bg-[rgba(255,255,255,0.03)]";
-
+      : "rounded-2xl bg-[rgba(255,255,255,0.03)]";
   const placeholderClassName =
     theme === "quickview" ? "text-[#777]" : "text-[var(--brand-gold-300)]";
 
   const thumbnailWrapperClassName = thumbnailsDesktopOnly
-    ? "mt-4 hidden h-auto gap-2 md:flex md:flex-wrap"
-    : "mt-4 grid grid-cols-5 gap-2";
+    ? "mt-4 gap-2 md:mt-0 md:flex md:flex-col md:w-16 md:order-first"
+    : "mt-4 grid grid-cols-5 gap-2 md:mt-0 md:w-16 md:flex-col md:flex md:order-first";
+
+  const galleryLayoutClassName = thumbnailsDesktopOnly || images.length > 1 
+    ? "flex flex-col md:flex-row md:gap-4 md:items-start"
+    : "flex flex-col";
 
   return (
     <>
-      <div
-        className={`group relative aspect-[3/4] w-full overflow-hidden ${surfaceClassName}`}
-        style={{ touchAction: "pan-y" }}
+      <div className={galleryLayoutClassName}>
+        <div
+          className={`group relative aspect-[3/4] w-full md:flex-1 overflow-hidden md:order-last ${surfaceClassName}`}
+          style={{ touchAction: "pan-y" }}
         onMouseMove={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           const x = ((event.clientX - rect.left) / rect.width) * 100;
@@ -166,9 +213,16 @@ export default function ProductImageGalleryZoom({
       >
         {currentImage ? (
           <img
+            key={`${currentImage}-${animationKey}`}
             src={currentImage}
             alt={productName}
-            className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out md:group-hover:scale-110"
+            className={`absolute inset-0 h-full w-full object-cover transition-all duration-500 ease-out md:group-hover:scale-110 ${
+              !isInitialRender
+                ? slideDirection === 'left'
+                  ? 'animate-slideInRight'
+                  : 'animate-slideInLeft'
+                : ''
+            }`}
             style={{
               transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%`,
             }}
@@ -239,10 +293,10 @@ export default function ProductImageGalleryZoom({
               key={`${image}-${index}`}
               type="button"
               onClick={() => onImageIndexChange(index)}
-              className="relative aspect-square shrink-0 cursor-pointer overflow-hidden rounded-md transition-all hover:opacity-100"
+              className="relative aspect-square shrink-0 cursor-pointer overflow-hidden rounded-md transition-all hover:opacity-100 md:border-2"
               style={{
-                width: thumbnailsDesktopOnly ? "4rem" : "auto",
-                height: thumbnailsDesktopOnly ? "4rem" : "auto",
+                width: thumbnailsDesktopOnly ? "3.5rem" : "auto",
+                height: thumbnailsDesktopOnly ? "3.5rem" : "auto",
                 border:
                   index === safeIndex
                     ? theme === "quickview"
@@ -263,6 +317,7 @@ export default function ProductImageGalleryZoom({
           ))}
         </div>
       )}
+      </div>
 
       <Lightbox
         open={isLightboxOpen && images.length > 0}

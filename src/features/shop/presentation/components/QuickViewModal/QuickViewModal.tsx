@@ -131,7 +131,7 @@ export default function QuickViewModal({
               <h3 className="text-3xl font-bold uppercase leading-tight tracking-[0.02em] sm:text-[2.2rem]">
                 {product.name}
               </h3>
-              <p className="mt-4 border-b border-[#ececec] pb-4 text-3xl font-extrabold text-amber-900 sm:text-[3rem]">
+              <p className="mt-4 border-b border-[#ececec] pb-4 text-3xl font-extrabold text-black sm:text-[3rem]">
                 {formattedPrice}
               </p>
             </div>
