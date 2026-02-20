@@ -1,9 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useProductsStore } from "../view-models/useProductsStore";
-import { useRouter } from "next/navigation";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs";
 import FormattedDescription from "@/src/features/shop/presentation/components/FormattedDescription";
@@ -141,30 +139,30 @@ export default function ProductDetail({ product, slug }: Props) {
           />
         </div>
 
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-5">
           <p className="text-xs uppercase tracking-[0.22em] text-[var(--brand-gold-300)]">
             {currentProduct.category || "General"}
           </p>
           <h1 className="text-3xl font-semibold leading-tight">{currentProduct.name}</h1>
-          <p className="text-2xl font-semibold text-[var(--brand-cream)]">
+          <p className="text-3xl font-extrabold text-yellow-100">
             {displayPrice}
           </p>
 
           <p className="text-sm leading-relaxed text-[var(--brand-cream)]/85">{shortDescription}</p>
 
-          <div className="mt-3 flex flex-nowrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+          <div className="mt-3 flex flex-nowrap items-center justify-between gap-3">
+            <div className="inline-flex items-center rounded-2xl bg-white/10 border border-white/15 p-1 backdrop-blur-sm">
               <button
                 type="button"
                 onClick={() => setQty((prev) => Math.max(1, prev - 1))}
                 disabled={qty <= 1}
-                className="h-10 w-10 rounded-lg border border-[#ff6767] text-[#ff6767] transition active:scale-95 disabled:cursor-not-allowed disabled:border-[#ff6767]/40 disabled:text-[#ff6767]/45 disabled:active:scale-100 sm:h-12 sm:w-12"
-                aria-label="Reducir"
+                className="h-11 w-11 grid place-items-center rounded-xl bg-white/85 text-violet-900 shadow-sm border border-white/60 hover:bg-white active:scale-[0.98] transition disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Reducir cantidad"
               >
-                -
+                −
               </button>
               <div
-                className="flex h-10 w-12 items-center justify-center rounded-lg border border-white/20 text-center font-semibold sm:h-12 sm:w-16"
+                className="text-white font-semibold text-center min-w-[3rem]"
                 aria-live="polite"
                 aria-label={`Cantidad seleccionada: ${qty}`}
               >
@@ -173,8 +171,8 @@ export default function ProductDetail({ product, slug }: Props) {
               <button
                 type="button"
                 onClick={() => setQty((prev) => prev + 1)}
-                className="h-10 w-10 rounded-lg border border-[#6dc96d] text-[#4cae4c] transition active:scale-95 sm:h-12 sm:w-12"
-                aria-label="Aumentar"
+                className="h-11 w-11 grid place-items-center rounded-xl bg-white/85 text-violet-900 shadow-sm border border-white/60 hover:bg-white active:scale-[0.98] transition"
+                aria-label="Aumentar cantidad"
               >
                 +
               </button>
@@ -182,10 +180,28 @@ export default function ProductDetail({ product, slug }: Props) {
             <button
               type="button"
               onClick={handleAddToCart}
-              className="h-10 flex-1 rounded-xl border border-[var(--brand-gold-400)] bg-[var(--brand-violet-800)] px-4 text-sm font-semibold text-[var(--brand-cream)] shadow-[0_10px_25px_rgba(26,10,48,0.35)] transition hover:bg-[var(--brand-violet-700)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] sm:h-12 sm:min-w-[170px] sm:flex-none sm:px-6"
+              className="w-full h-12 rounded-2xl bg-gradient-to-r from-yellow-200 to-amber-100 text-violet-950 font-semibold shadow-lg shadow-black/20 ring-1 ring-white/30 hover:brightness-105 active:scale-[0.99] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
             >
               Comprar
             </button>
+          </div>
+
+          {/* info panel below buy button */}
+          <div className="mt-5 rounded-2xl bg-white/10 border border-white/15 p-4 text-white/90">
+            <ul className="space-y-2 text-sm">
+              <li className="flex items-center gap-2">
+                <span className="text-lg">✔</span>
+                <span>Stock disponible</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="text-lg">🚚</span>
+                <span>Entrega en Rosario</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="text-lg">💳</span>
+                <span>Pago por transferencia o efectivo</span>
+              </li>
+            </ul>
           </div>
         </div>
       </section>

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
@@ -130,7 +131,7 @@ export default function QuickViewModal({
               <h3 className="text-3xl font-bold uppercase leading-tight tracking-[0.02em] sm:text-[2.2rem]">
                 {product.name}
               </h3>
-              <p className="mt-4 border-b border-[#ececec] pb-4 text-4xl font-medium sm:text-[3rem]">
+              <p className="mt-4 border-b border-[#ececec] pb-4 text-3xl font-extrabold text-amber-900 sm:text-[3rem]">
                 {formattedPrice}
               </p>
             </div>
@@ -142,44 +143,34 @@ export default function QuickViewModal({
             )}
 
             {/* Acciones de compra */}
-            <div className="mt-auto flex flex-col gap-5 pt-4">
-              <div className="flex w-fit items-center gap-2">
-                <button
-                  type="button"
-                  className="flex h-10 w-10 items-center justify-center border border-[#ff6767] text-lg leading-none text-[#ff6767] transition active:scale-95 active:bg-[#ff6767] active:text-white rounded-l-md"
-                  onClick={() => setQty((prev) => Math.max(1, prev - 1))}
-                  aria-label="Reducir cantidad"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  min={1}
-                  inputMode="numeric"
-                  className="h-10 w-12 border-y border-[#d9d9d9] text-center text-sm font-semibold focus:outline-none focus:ring-1 focus:ring-[var(--brand-violet-500)]"
-                  value={qty}
-                  onChange={(event) => {
-                    const nextQty = Number(event.target.value);
-                    if (Number.isNaN(nextQty)) return;
-                    setQty(Math.max(1, Math.floor(nextQty)));
-                  }}
-                  onBlur={(event) => {
-                    const nextQty = Number(event.target.value);
-                    if (Number.isNaN(nextQty) || nextQty < 1) {
-                      setQty(1);
-                    }
-                  }}
-                  aria-label="Cantidad"
-                />
-                <button
-                  type="button"
-                  className="flex h-10 w-10 items-center justify-center border border-[#6dc96d] text-lg leading-none text-[#4cae4c] transition active:scale-95 active:bg-[#6dc96d] active:text-white rounded-r-md"
-                  onClick={() => setQty((prev) => prev + 1)}
-                  aria-label="Aumentar cantidad"
-                >
-                  +
-                </button>
-
+            <div className="mt-auto flex flex-col gap-4 pt-4">
+              <div className="flex flex-nowrap items-center justify-between gap-3 w-full">
+                <div className="inline-flex items-center rounded-2xl bg-[var(--brand-violet-950)]/10 border border-[var(--brand-violet-950)]/15 p-1 backdrop-blur-sm">
+                  <button
+                    type="button"
+                    onClick={() => setQty((prev) => Math.max(1, prev - 1))}
+                    disabled={qty <= 1}
+                    className="h-11 w-11 grid place-items-center rounded-xl bg-[var(--brand-violet-950)] text-white shadow-sm border border-[var(--brand-violet-800)] hover:bg-[var(--brand-violet-800)] active:scale-[0.98] transition disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label="Reducir cantidad"
+                  >
+                    −
+                  </button>
+                  <div
+                    className="text-[var(--brand-violet-950)] font-semibold text-center min-w-[3rem]"
+                    aria-live="polite"
+                    aria-label={`Cantidad seleccionada: ${qty}`}
+                  >
+                    {qty}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setQty((prev) => prev + 1)}
+                    className="h-11 w-11 grid place-items-center rounded-xl bg-[var(--brand-violet-950)] text-white shadow-sm border border-[var(--brand-violet-800)] hover:bg-[var(--brand-violet-800)] active:scale-[0.98] transition"
+                    aria-label="Aumentar cantidad"
+                  >
+                    +
+                  </button>
+                </div>
                 <button
                   type="button"
                   onClick={() => {
@@ -197,24 +188,36 @@ export default function QuickViewModal({
                     }
                     onClose();
                   }}
-                  className="ml-3 h-10 rounded-md border border-[var(--brand-gold-400)] bg-[var(--brand-violet-800)] px-6 text-xs font-bold uppercase tracking-[0.08em] text-[var(--brand-cream)] shadow-sm transition hover:bg-[var(--brand-violet-700)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                  className="w-full h-12 rounded-2xl bg-gradient-to-r from-amber-300 to-yellow-200 text-[var(--brand-violet-950)] font-semibold shadow-lg shadow-black/10 ring-1 ring-amber-400/50 hover:brightness-110 active:scale-[0.99] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
                 >
                   Comprar
                 </button>
               </div>
 
-              <div className="space-y-1 border-t border-[#ececec] pt-4 text-xs font-medium uppercase tracking-wide text-[#888]">
-                <p>
-                  <span className="text-[#222]">SKU:</span>{" "}
-                  {(product.id || "N/A").toUpperCase()}
-                </p>
-                {product.category && (
-                  <p>
-                    <span className="text-[#222]">Categoría:</span>{" "}
-                    {product.category}
-                  </p>
-                )}
+              <div className="mt-5 rounded-2xl bg-[var(--brand-violet-950)]/5 border border-[var(--brand-violet-950)]/15 p-4 text-[var(--brand-violet-900)]">
+                <ul className="space-y-2 text-sm">
+                  <li className="flex items-center gap-2">
+                    <span className="text-lg">✔</span>
+                    <span>Stock disponible</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="text-lg">🚚</span>
+                    <span>Entrega en Rosario</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="text-lg">💳</span>
+                    <span>Pago por transferencia o efectivo</span>
+                  </li>
+                </ul>
               </div>
+
+              <Link
+                href={`/tienda/producto/${product.slug || encodeURIComponent(String(product.id))}`}
+                onClick={onClose}
+                className="block w-full text-center py-3 px-4 rounded-2xl border border-[var(--brand-violet-950)]/30 bg-[var(--brand-violet-950)]/5 text-[var(--brand-violet-900)] font-semibold hover:bg-[var(--brand-violet-950)]/10 transition"
+              >
+                Ver más detalles
+              </Link>
             </div>
           </div>
         </div>
