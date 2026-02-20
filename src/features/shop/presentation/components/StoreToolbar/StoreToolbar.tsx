@@ -22,7 +22,7 @@ export default function StoreToolbar({
   };
 
   return (
-    <div className="mb-6 flex flex-col gap-4 rounded-2xl border border-[var(--brand-gold-400)]/15 bg-[rgba(58,31,95,0.35)] p-4 shadow-[0_15px_35px_rgba(18,8,35,0.25)] md:flex-row md:items-center md:justify-between">
+    <div className="mb-6 flex flex-col items-center gap-4 rounded-2xl border border-white/10 bg-white/5 p-4 shadow-[0_15px_35px_rgba(18,8,35,0.25)] md:flex-row md:justify-between">
       {/* Search Input */}
       <div className="relative flex-1">
         <input
@@ -30,9 +30,9 @@ export default function StoreToolbar({
           placeholder="Buscar productos..."
           value={localSearch}
           onChange={(e) => handleSearchChange(e.target.value)}
-          className="w-full rounded-lg border border-[var(--brand-violet-800)] bg-[var(--brand-violet-950)]/60 px-4 py-2 text-sm text-[var(--brand-cream)] placeholder-[var(--brand-cream)]/50 shadow-[inset_0_0_18px_rgba(18,8,35,0.35)] transition focus:border-[var(--brand-gold-300)] focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold-300)]/40"
+          className="w-full rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-sm text-[var(--brand-cream)] placeholder-[var(--brand-cream)]/55 shadow-[inset_0_0_18px_rgba(18,8,35,0.25)] backdrop-blur-sm transition focus:border-[var(--brand-gold-300)] focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold-300)]/25"
         />
-        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--brand-gold-300)]">
+        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--brand-gold-300)]/90">
           🔍
         </span>
       </div>

@@ -40,12 +40,12 @@ export default function ProductCard({
     : undefined;
 
   return (
-    <article className="animate-fade-up flex h-full flex-col rounded-2xl p-5 text-[var(--brand-cream)] bg-white/5 backdrop-blur-sm border border-[var(--brand-gold-400)]/30 shadow-md shadow-black/20 transition-all duration-300 hover:scale-[1.02] hover:shadow-xl hover:shadow-black/30 hover:border-[var(--brand-gold-300)]/60">
+    <article className="animate-fade-up flex h-full flex-col rounded-2xl border border-white/15 bg-white/10 p-5 text-[var(--brand-cream)] shadow-lg shadow-black/20 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/60 hover:shadow-2xl hover:shadow-black/30">
       {canOpenStaticDetail ? (
         <Link href={detailHref} className="group block" aria-label={`Ver detalle de ${product.name}`}>
           <div className="relative mb-4 aspect-[4/5] w-full overflow-hidden rounded-xl">
             {badgeText && (
-              <span className="absolute top-3 left-3 z-10 bg-[var(--brand-gold-300)] text-violet-900 text-xs font-semibold px-2 py-1 rounded-lg">
+              <span className="absolute left-3 top-3 z-10 rounded-lg bg-gradient-to-r from-[var(--brand-gold-400)] to-[var(--brand-gold-300)] px-2 py-1 text-xs font-semibold text-[var(--brand-violet-950)] shadow-sm">
                 {badgeText}
               </span>
             )}
@@ -66,10 +66,10 @@ export default function ProductCard({
 
           <div className="flex flex-1 flex-col gap-3">
             <div className="flex-1">
-              <div className="text-2xl font-extrabold text-[var(--brand-gold-300)] mb-1">
+              <div className="mb-1 text-xl font-extrabold text-[var(--brand-gold-300)]">
                 {formattedPrice}
               </div>
-              <h3 className="text-sm font-medium text-white/90 leading-snug line-clamp-2">
+              <h3 className="text-sm font-medium leading-snug text-[var(--brand-cream)]/90 line-clamp-2">
                 {product.name}
               </h3>
             </div>
@@ -79,7 +79,7 @@ export default function ProductCard({
         <div className="group block" aria-label={`${product.name} requiere actualización del sitio`}> 
           <div className="relative mb-4 aspect-[4/5] w-full overflow-hidden rounded-xl">
             {badgeText && (
-              <span className="absolute top-3 left-3 z-10 bg-[var(--brand-gold-300)] text-violet-900 text-xs font-semibold px-2 py-1 rounded-lg">
+              <span className="absolute left-3 top-3 z-10 rounded-lg bg-gradient-to-r from-[var(--brand-gold-400)] to-[var(--brand-gold-300)] px-2 py-1 text-xs font-semibold text-[var(--brand-violet-950)] shadow-sm">
                 {badgeText}
               </span>
             )}
@@ -100,10 +100,10 @@ export default function ProductCard({
 
           <div className="flex flex-1 flex-col gap-3">
             <div className="flex-1">
-              <div className="text-2xl font-extrabold text-[var(--brand-gold-300)] mb-1">
+              <div className="mb-1 text-xl font-extrabold text-[var(--brand-gold-300)]">
                 {formattedPrice}
               </div>
-              <h3 className="text-sm font-medium text-white/90 leading-snug line-clamp-2">
+              <h3 className="text-sm font-medium leading-snug text-[var(--brand-cream)]/90 line-clamp-2">
                 {product.name}
               </h3>
             </div>
@@ -119,7 +119,7 @@ export default function ProductCard({
             event.stopPropagation();
             onQuickView?.(product);
           }}
-          className="w-full h-11 rounded-xl bg-gradient-to-r from-yellow-200 to-amber-100 text-violet-950 font-semibold shadow-md shadow-black/20 ring-1 ring-white/30 transition hover:brightness-105 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+          className="h-11 w-full rounded-xl bg-gradient-to-r from-[var(--brand-gold-300)] to-[var(--brand-gold-400)] font-semibold text-[var(--brand-violet-950)] shadow-md shadow-black/20 ring-1 ring-white/30 transition hover:brightness-105 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
           aria-label={`Comprar ${product.name}`}
         >
           Comprar

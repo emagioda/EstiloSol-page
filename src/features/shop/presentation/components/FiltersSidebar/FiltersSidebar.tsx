@@ -45,11 +45,11 @@ export default function FiltersSidebar({
       {isOpen && <div className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={() => onClose?.()} />}
 
       <aside
-        className={`fixed left-0 top-0 z-40 h-screen w-72 transform bg-[linear-gradient(180deg,rgba(58,31,95,0.98)_0%,rgba(34,18,55,0.98)_100%)] transition-transform duration-300 md:relative md:top-auto md:h-auto md:w-full md:transform-none md:rounded-3xl md:border md:border-[var(--brand-gold-400)]/30 md:bg-[rgba(58,31,95,0.45)] md:p-5 md:shadow-[0_18px_45px_rgba(18,8,35,0.3)] ${
+        className={`fixed left-0 top-0 z-40 h-screen w-72 transform bg-violet-900/90 backdrop-blur-sm transition-transform duration-300 md:relative md:top-auto md:h-auto md:w-full md:transform-none md:rounded-3xl md:border md:border-white/10 md:bg-violet-900/50 md:p-5 md:shadow-[0_20px_45px_rgba(0,0,0,0.25)] ${
           isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         }`}
       >
-        <div className="flex flex-col gap-6 p-5 pt-16 md:p-0">
+        <div className="flex flex-col gap-6 p-5 pt-16 md:p-0 md:px-6 md:py-6">
           {onClose && (
             <button
               onClick={onClose}
@@ -72,7 +72,7 @@ export default function FiltersSidebar({
           <div className="border-b border-white/10 pb-4">
             <button
               onClick={() => toggleSection("departament")}
-              className="flex w-full items-center justify-between text-sm font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)] transition-colors hover:text-[var(--brand-gold-300)]"
+              className="flex w-full items-center justify-between text-sm font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/85 transition-colors hover:text-[var(--brand-gold-300)]"
             >
               Rubro
               <span className={`transition-transform ${expandedSections.departament ? "rotate-180" : ""}`}>
@@ -88,7 +88,7 @@ export default function FiltersSidebar({
                 ].map((opt) => (
                   <label
                     key={String(opt.value)}
-                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition hover:border-white/10 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
+                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition-colors hover:text-[var(--brand-gold-300)]"
                   >
                     <input
                       type="radio"
@@ -108,7 +108,7 @@ export default function FiltersSidebar({
           <div className="border-b border-white/10 pb-4">
             <button
               onClick={() => toggleSection("sort")}
-              className="flex w-full items-center justify-between text-sm font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)] transition-colors hover:text-[var(--brand-gold-300)]"
+              className="flex w-full items-center justify-between text-sm font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/85 transition-colors hover:text-[var(--brand-gold-300)]"
             >
               Ordenar
               <span className={`transition-transform ${expandedSections.sort ? "rotate-180" : ""}`}>
@@ -126,7 +126,7 @@ export default function FiltersSidebar({
                 ].map((option) => (
                   <label
                     key={option.value}
-                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition hover:border-white/10 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
+                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition-colors hover:text-[var(--brand-gold-300)]"
                   >
                     <input
                       type="radio"
@@ -146,7 +146,7 @@ export default function FiltersSidebar({
           <div className="border-b border-white/10 pb-4">
             <button
               onClick={() => toggleSection("category")}
-              className="flex w-full items-center justify-between text-sm font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)] transition-colors hover:text-[var(--brand-gold-300)]"
+              className="flex w-full items-center justify-between text-sm font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/85 transition-colors hover:text-[var(--brand-gold-300)]"
             >
               Categoría
               <span className={`transition-transform ${expandedSections.category ? "rotate-180" : ""}`}>
@@ -155,7 +155,7 @@ export default function FiltersSidebar({
             </button>
             {expandedSections.category && (
               <div className="mt-3 flex flex-col gap-2">
-                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition hover:border-white/10 hover:bg-white/5 hover:text-[var(--brand-gold-300)]">
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition-colors hover:text-[var(--brand-gold-300)]">
                   <input
                     type="checkbox"
                     checked={filters.category === null}
@@ -167,7 +167,7 @@ export default function FiltersSidebar({
                 {categories.map((cat) => (
                   <label
                     key={cat}
-                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition hover:border-white/10 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
+                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition-colors hover:text-[var(--brand-gold-300)]"
                   >
                     <input
                       type="checkbox"
