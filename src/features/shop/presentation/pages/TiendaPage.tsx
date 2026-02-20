@@ -5,6 +5,10 @@ import {
   isMissingSheetsEndpointError,
 } from "@/src/features/shop/infrastructure/data/fetchProducts";
 
+// This page is statically exported for GitHub Pages. it will
+// include whatever catalog was available at build time, but the
+// client bundle will immediately re‑fetch on load so users always see
+// up‑to‑date data when they manually reload.
 export default async function TiendaPage() {
   const hasSheetsEndpoint = Boolean(
     process.env.NEXT_PUBLIC_SHEETS_ENDPOINT?.trim()
@@ -13,7 +17,8 @@ export default async function TiendaPage() {
   let staticProducts: Product[] = [];
   if (hasSheetsEndpoint) {
     try {
-      staticProducts = await fetchProductsFromSheets();
+      // always request fresh data on each page load
+      staticProducts = await fetchProductsFromSheets({ cacheMode: "force-cache" });
     } catch (error) {
       if (!isMissingSheetsEndpointError(error)) {
         console.error("No se pudieron generar handles estáticos de detalle:", error);

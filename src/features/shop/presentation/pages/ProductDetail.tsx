@@ -1,12 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useProductsStore } from "../view-models/useProductsStore";
+import { useRouter } from "next/navigation";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
+import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs";
+import FormattedDescription from "@/src/features/shop/presentation/components/FormattedDescription";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 type Props = {
   product: Product;
+  // slug is passed by the route; used to re-find product after a reload
+  slug?: string;
 };
 
 type CartNotice = {
@@ -48,28 +55,49 @@ const getShortDescription = (shortDescription?: string, description?: string) =>
   return clipped.length < normalizedDescription.length ? `${clipped}…` : clipped;
 };
 
-export default function ProductDetail({ product }: Props) {
+export default function ProductDetail({ product, slug }: Props) {
+  // keep a local copy that we can update when the catalog arrives from the
+  // sheet. this ensures a manual reload on a detail page will fetch the
+  // latest catalog and refresh the displayed item.
+  const [currentProduct, setCurrentProduct] = useState<Product>(product);
+
+  // load full catalog and sync; slug param is optional fallback if we
+  // don't have the original product prop (e.g. client-side navigation).
+  const { products, status } = useProductsStore({
+    initialProducts: product ? [product] : []
+  });
+
+  useEffect(() => {
+    if (status === "success" && products.length > 0) {
+      const idMatch = (p: Product) => p.id === product.id;
+      const slugMatch = slug
+        ? (p: Product) => p.slug === slug
+        : () => false;
+      const updated = products.find((p) => idMatch(p) || slugMatch(p));
+      if (updated) setCurrentProduct(updated);
+    }
+  }, [status, products, product.id, slug]);
   const images = useMemo(
     () =>
-      Array.isArray(product.images)
-        ? product.images.filter((image): image is string => typeof image === "string" && image.trim().length > 0)
+      Array.isArray(currentProduct.images)
+        ? currentProduct.images.filter((image): image is string => typeof image === "string" && image.trim().length > 0)
         : [],
-    [product.images]
+    [currentProduct.images]
   );
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [qty, setQty] = useState(1);
   const [cartNotice, setCartNotice] = useState<CartNotice | null>(null);
   const { addItem } = useCart();
 
-  const safeUnitPrice = isValidPrice(product.price) ? product.price : 0;
-  const displayPrice = isValidPrice(product.price) ? formatMoney(product.price) : "Consultar";
+  const safeUnitPrice = isValidPrice(currentProduct.price) ? currentProduct.price : 0;
+  const displayPrice = isValidPrice(currentProduct.price) ? formatMoney(currentProduct.price) : "Consultar";
   const shortDescription = useMemo(
-    () => getShortDescription(product.short_description, product.description),
-    [product.short_description, product.description]
+    () => getShortDescription(currentProduct.short_description, currentProduct.description),
+    [currentProduct.short_description, currentProduct.description]
   );
   const longDescription =
-    typeof product.description === "string" && product.description.trim().length > 0
-      ? product.description
+    typeof currentProduct.description === "string" && currentProduct.description.trim().length > 0
+      ? currentProduct.description
       : LONG_DESCRIPTION_PLACEHOLDER;
 
   useEffect(() => {
@@ -80,8 +108,8 @@ export default function ProductDetail({ product }: Props) {
 
   const handleAddToCart = () => {
     addItem({
-      productId: product.id,
-      name: product.name,
+      productId: currentProduct.id,
+      name: currentProduct.name,
       unitPrice: safeUnitPrice,
       qty,
       image: images[0] ?? "",
@@ -89,17 +117,24 @@ export default function ProductDetail({ product }: Props) {
     setQty(1);
     setCartNotice({
       type: "success",
-      message: `${product.name} se agregó al carrito.`,
+      message: `${currentProduct.name} se agregó al carrito.`,
     });
   };
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-8 text-[var(--brand-cream)]">
+      <Breadcrumbs
+        items={[
+          { label: "Tienda", href: "/tienda" },
+          { label: currentProduct.departament || "Productos", href: `/tienda?departament=${currentProduct.departament}` },
+          { label: currentProduct.name },
+        ]}
+      />
       <section className="grid gap-8 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.35)] p-5 shadow-[0_20px_50px_rgba(18,8,35,0.35)] lg:grid-cols-2 lg:p-8">
         <div>
           <ProductImageGalleryZoom
             images={images}
-            productName={product.name}
+            productName={currentProduct.name}
             currentImageIndex={currentImageIndex}
             onImageIndexChange={setCurrentImageIndex}
             theme="pdp"
@@ -108,9 +143,9 @@ export default function ProductDetail({ product }: Props) {
 
         <div className="flex flex-col gap-4">
           <p className="text-xs uppercase tracking-[0.22em] text-[var(--brand-gold-300)]">
-            {product.category || "General"}
+            {currentProduct.category || "General"}
           </p>
-          <h1 className="text-3xl font-semibold leading-tight">{product.name}</h1>
+          <h1 className="text-3xl font-semibold leading-tight">{currentProduct.name}</h1>
           <p className="text-2xl font-semibold text-[var(--brand-cream)]">
             {displayPrice}
           </p>
@@ -171,22 +206,18 @@ export default function ProductDetail({ product }: Props) {
         </div>
       )}
 
-      {product.product_type === "KIT" && Array.isArray(product.includes) && product.includes.length > 0 && (
+      {currentProduct.product_type === "KIT" && Array.isArray(currentProduct.includes) && currentProduct.includes.length > 0 && (
         <section className="mt-8 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.25)] p-5 shadow-[0_14px_32px_rgba(18,8,35,0.28)] lg:p-8">
-          <h2 className="text-lg font-semibold text-[var(--brand-gold-300)]">Incluye</h2>
-          <ul className="mt-3 list-disc pl-5 text-sm leading-relaxed text-[var(--brand-cream)]/85">
-            {product.includes.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
+          <h2 className="text-lg font-semibold text-[var(--brand-gold-300)] mb-4">INCLUYE</h2>
+          <div className="h-px bg-gradient-to-r from-[var(--brand-gold-400)]/40 via-[var(--brand-gold-300)]/20 to-transparent mb-6" />
+          <FormattedDescription description={currentProduct.includes.join("\n")} />
         </section>
       )}
 
       <section className="mt-8 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.25)] p-5 shadow-[0_14px_32px_rgba(18,8,35,0.28)] lg:p-8">
-        <h2 className="text-lg font-semibold text-[var(--brand-gold-300)]">Descripción</h2>
-        <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[var(--brand-cream)]/85">
-          {longDescription}
-        </p>
+        <h2 className="text-lg font-semibold text-[var(--brand-gold-300)] mb-4">DESCRIPCIÓN</h2>
+        <div className="h-px bg-gradient-to-r from-[var(--brand-gold-400)]/40 via-[var(--brand-gold-300)]/20 to-transparent mb-6" />
+        <FormattedDescription description={longDescription} />
       </section>
     </main>
   );

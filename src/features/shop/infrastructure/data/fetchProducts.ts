@@ -25,6 +25,12 @@ type FetchProductsOptions = {
   cacheBust?: boolean;
 };
 
+// NOTE: we switch default cacheMode to `no-store`. with a very short
+// CACHE_TTL on the Apps Script side the browser will still make a
+// request on every navigation, but the script itself will only run at
+// most once per minute. this mimics an "always‑fresh" catalog while
+// keeping the endpoint under control.
+
 const withCacheBust = (endpoint: string) => {
   const separator = endpoint.includes("?") ? "&" : "?";
   return `${endpoint}${separator}_ts=${Date.now()}`;
@@ -168,7 +174,7 @@ async function fetchLocalMock(): Promise<Product[]> {
 }
 
 export const fetchProductsFromSheets = async ({
-  cacheMode = "force-cache",
+  cacheMode = "no-store",
   cacheBust = false,
 }: FetchProductsOptions = {}): Promise<Product[]> => {
   // if the environment variable is not defined we fall back to a bundled

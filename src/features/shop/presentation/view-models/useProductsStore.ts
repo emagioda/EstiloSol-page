@@ -65,11 +65,10 @@ export const useProductsStore = ({
 
     try {
       const data = await fetchProductsFromSheets({
-        // for a normal user journey we want the browser to cache the
-        // response; this avoids an extra HTTP request when the store
-        // component re‑mounts. we'll still allow manual busting if you
-        // expose a "refresh" button later.
-        cacheMode: "force-cache",
+        // we've shortened the server TTL so the endpoint runs at most
+        // once per minute. on the client we disable caching too so every
+        // navigation triggers a fresh request.
+        cacheMode: "no-store",
       });
 
       cachedProducts = data;
@@ -90,17 +89,14 @@ export const useProductsStore = ({
     }
   }, []);
 
-  // only fetch once per session; avoid resetting state when the
-  // component remounts during client‑side navigation.
-  // the effect invokes an async loader that sets state; runtime loop is prevented
-  // by the `status` guard. we disable the warning because it is intentional.
-  /* eslint-disable react-hooks/set-state-in-effect */
+  // fetch on every mount. `loadProducts` itself is smart enough to
+  // bail out early if we already have cached data, so repeated
+  // navigation won't hit the network. but a full page reload resets
+  // the JS state and (crucially) clears `cachedProducts`, which means
+  // this effect will trigger a fresh request to the sheet.
   useEffect(() => {
-    if (status === "idle") {
-      loadProducts();
-    }
-  }, [loadProducts, status]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+    loadProducts();
+  }, [loadProducts]);
 
   const getCategories = (): string[] => {
     const cats = new Set<string>();

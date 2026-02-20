@@ -4,10 +4,13 @@ import ProductDetail from "@/src/features/shop/presentation/pages/ProductDetail"
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 export const dynamicParams = false;
+// page is statically generated; dynamic rendering isn't possible with
+// `output: "export"` (GitHub Pages). data freshness is handled on the
+// client side instead.
 
 export async function generateStaticParams() {
   try {
-    const products = await fetchProductsFromSheets();
+    const products = await fetchProductsFromSheets({ cacheMode: "force-cache" });
     const handles = products
       .map((p) => (p.slug && p.slug.trim() ? p.slug.trim() : String(p.id)))
       .filter((h) => h && h.length > 0);
@@ -59,15 +62,18 @@ export default async function ProductDetailRoute({ params }: Props) {
 
   let product: Product | undefined;
   try {
-    const products = await fetchProductsFromSheets();
+    const products = await fetchProductsFromSheets({ cacheMode: "force-cache" });
     product = findProductBySlugOrId(products, resolvedParams.slug);
   } catch (error) {
     console.error("Error obteniendo producto:", error);
   }
 
+  // note: the client component will re‑query the store on mount and may
+  // replace this product if the sheet has changed.
+
   if (!product) {
     notFound();
   }
 
-  return <ProductDetail product={product} />;
+  return <ProductDetail product={product} slug={resolvedParams.slug} />;
 }
