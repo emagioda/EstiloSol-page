@@ -25,29 +25,6 @@ const isValidPrice = (value: unknown): value is number =>
 
 const LONG_DESCRIPTION_PLACEHOLDER = "Sin descripción detallada por el momento.";
 
-const getShortDescription = (shortDescription?: string, description?: string) => {
-  if (typeof shortDescription === "string" && shortDescription.trim().length > 0) {
-    return shortDescription.trim();
-  }
-
-  if (typeof description !== "string") {
-    return "Sin descripción disponible por el momento.";
-  }
-
-  const normalizedDescription = description.trim();
-  if (!normalizedDescription) {
-    return "Sin descripción disponible por el momento.";
-  }
-
-  const firstSentence = normalizedDescription.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim();
-  if (firstSentence && firstSentence.length <= 140) {
-    return firstSentence;
-  }
-
-  const clipped = normalizedDescription.slice(0, 140).trim();
-  return clipped.length < normalizedDescription.length ? `${clipped}…` : clipped;
-};
-
 export default function ProductDetail({ product }: Props) {
   const images = useMemo(
     () =>
@@ -63,10 +40,6 @@ export default function ProductDetail({ product }: Props) {
 
   const safeUnitPrice = isValidPrice(product.price) ? product.price : 0;
   const displayPrice = isValidPrice(product.price) ? formatMoney(product.price) : "Consultar";
-  const shortDescription = useMemo(
-    () => getShortDescription(product.short_description, product.description),
-    [product.short_description, product.description]
-  );
   const longDescription =
     typeof product.description === "string" && product.description.trim().length > 0
       ? product.description.trim()
@@ -118,8 +91,6 @@ export default function ProductDetail({ product }: Props) {
           <p className="text-2xl font-semibold text-[var(--brand-cream)]">
             {displayPrice}
           </p>
-
-          <p className="text-sm leading-relaxed text-[var(--brand-cream)]/85">{shortDescription}</p>
 
           <div className="mt-3 flex flex-nowrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">

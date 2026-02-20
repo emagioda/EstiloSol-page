@@ -55,22 +55,29 @@ const toBoolean = (value: unknown): boolean => {
   return false;
 };
 
+const toOptionalString = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+};
+
 const toImagesArray = (rawImages: unknown): string[] => {
+  const rawCandidates: string[] = [];
+
   if (Array.isArray(rawImages)) {
-    return rawImages
-      .filter((image): image is string => typeof image === "string")
-      .map((image) => image.trim())
-      .filter(Boolean);
+    rawCandidates.push(
+      ...rawImages.filter((image): image is string => typeof image === "string")
+    );
+  } else if (typeof rawImages === "string") {
+    rawCandidates.push(rawImages);
   }
 
-  if (typeof rawImages === "string") {
-    return rawImages
-      .split(",")
-      .map((image) => image.trim())
-      .filter(Boolean);
-  }
+  const parsed = rawCandidates
+    .flatMap((chunk) => chunk.match(/https?:\/\/[^\s,]+/g) ?? chunk.split(","))
+    .map((image) => image.trim().replace(/[.;]+$/g, ""))
+    .filter((image) => /^https?:\/\//.test(image));
 
-  return [];
+  return Array.from(new Set(parsed));
 };
 
 // --- ADAPTADOR: Convierte datos "sucios" del Excel a "limpios" para la App ---
@@ -89,15 +96,27 @@ const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null =>
       ? priceRaw
       : Number(String(priceRaw).replace(/[^0-9.-]+/g, ""));
 
+  const productTypeRaw =
+    row.product_type ?? row.productType ?? row.tipo ?? row.Tipo ?? row.producto_tipo;
+  const productTypeNormalized = toOptionalString(productTypeRaw)
+    ?.normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toUpperCase();
+
   return {
     id,
     name: String(row.name ?? row.Nombre ?? "Producto sin nombre"),
     slug: row.slug ? String(row.slug) : undefined,
-    description: String(row.description ?? row.Descripcion ?? ""),
-    short_description: String(
-      row.short_description ?? row.ShortDescription ?? row.shortDescription ?? ""
+    description: toOptionalString(row.description ?? row.Descripcion),
+    short_description: toOptionalString(
+      row.short_description ?? row.ShortDescription ?? row.shortDescription
     ),
-    category: String(row.category ?? row.Categoria ?? "General"),
+    departament: toOptionalString(
+      row.departament ?? row.department ?? row.departamento ?? row.Departamento
+    ),
+    category: toOptionalString(row.category ?? row.Categoria),
+    product_type: productTypeNormalized,
+    includes: toOptionalString(row.includes ?? row.incluye ?? row.Incluye),
     price: Number.isFinite(price) ? price : 0,
     currency: String(row.currency ?? row.Moneda ?? "ARS"),
     images: toImagesArray(rawImages),
