@@ -73,6 +73,33 @@ const toImagesArray = (rawImages: unknown): string[] => {
   return [];
 };
 
+const getFirstDefinedValue = (row: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    if (key in row) {
+      return row[key];
+    }
+  }
+  return undefined;
+};
+
+const toTagsArray = (rawTags: unknown): string[] => {
+  if (Array.isArray(rawTags)) {
+    return rawTags
+      .filter((tag): tag is string => typeof tag === "string")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+
+  if (typeof rawTags !== "string") {
+    return [];
+  }
+
+  return rawTags
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+};
+
 // --- ADAPTADOR: Convierte datos "sucios" del Excel a "limpios" para la App ---
 const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null => {
   const id = getValidProductId(row);
@@ -82,6 +109,27 @@ const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null =>
   }
 
   const rawImages = row.images ?? row.images_csv;
+  const rawActive = getFirstDefinedValue(row, ["active", "Active", "activo"]);
+  const hasExplicitActive =
+    rawActive !== undefined && !(typeof rawActive === "string" && rawActive.trim().length === 0);
+
+  if (hasExplicitActive && !toBoolean(rawActive)) {
+    return null;
+  }
+
+  const rawDepartment = getFirstDefinedValue(row, [
+    "department",
+    "Department",
+    "departament",
+    "Departament",
+  ]);
+  const department =
+    typeof rawDepartment === "string" && rawDepartment.trim().length > 0
+      ? rawDepartment.trim()
+      : undefined;
+
+  const rawProductType = getFirstDefinedValue(row, ["product_type", "ProductType", "productType"]);
+  const rawIncludes = getFirstDefinedValue(row, ["includes", "Includes"]);
 
   const priceRaw = row.price ?? row.Precio ?? "0";
   const price =
@@ -93,11 +141,22 @@ const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null =>
     id,
     name: String(row.name ?? row.Nombre ?? "Producto sin nombre"),
     slug: row.slug ? String(row.slug) : undefined,
+    active: hasExplicitActive ? toBoolean(rawActive) : undefined,
+    department,
     description: String(row.description ?? row.Descripcion ?? ""),
     short_description: String(
       row.short_description ?? row.ShortDescription ?? row.shortDescription ?? ""
     ),
     category: String(row.category ?? row.Categoria ?? "General"),
+    product_type:
+      typeof rawProductType === "string" && rawProductType.trim().length > 0
+        ? rawProductType.trim()
+        : undefined,
+    includes:
+      typeof rawIncludes === "string" && rawIncludes.trim().length > 0
+        ? rawIncludes
+        : null,
+    tags: toTagsArray(getFirstDefinedValue(row, ["tags_csv", "tags", "Tags"])),
     price: Number.isFinite(price) ? price : 0,
     currency: String(row.currency ?? row.Moneda ?? "ARS"),
     images: toImagesArray(rawImages),
@@ -137,7 +196,7 @@ export const fetchProductsFromSheets = async ({
   let endpoint: string | null = null;
   try {
     endpoint = getSheetsEndpoint();
-  } catch (_err) {
+  } catch {
     endpoint = null;
   }
 

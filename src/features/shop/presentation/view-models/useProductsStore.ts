@@ -109,11 +109,18 @@ export const useProductsStore = ({
 
     if (filters.searchTerm) {
       const term = filters.searchTerm.toLowerCase();
-      filtered = filtered.filter(
-        (p) =>
+      filtered = filtered.filter((p) => {
+        const tagsSearchable = Array.isArray(p.tags)
+          ? p.tags.join(" ").toLowerCase()
+          : "";
+
+        return (
           p.name?.toLowerCase().includes(term) ||
-          p.description?.toLowerCase().includes(term)
-      );
+          p.description?.toLowerCase().includes(term) ||
+          p.short_description?.toLowerCase().includes(term) ||
+          tagsSearchable.includes(term)
+        );
+      });
     }
 
     if (filters.category) {

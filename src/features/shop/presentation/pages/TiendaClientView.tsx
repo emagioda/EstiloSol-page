@@ -30,6 +30,16 @@ const worldKeywords: Record<ShopWorld, string[]> = {
 
 const normalizeText = (value: string) => value.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 
+const getNormalizedDepartment = (department?: string) => {
+  if (typeof department !== "string") return "";
+  return normalizeText(department.trim());
+};
+
+const worldDepartmentMap: Record<ShopWorld, string[]> = {
+  peluqueria: ["peluqueria"],
+  bijouterie: ["bijouterie"],
+};
+
 const worldOptions: { key: ShopWorld; label: string; description: string }[] = [
   {
     key: "peluqueria",
@@ -60,7 +70,7 @@ export default function TiendaClientView({
     setCategory,
     setSortBy,
     clearFilters,
-    categories,
+    allProducts,
     selectedProduct,
     isQuickViewOpen,
     openQuickView,
@@ -73,6 +83,12 @@ export default function TiendaClientView({
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
 
   const matchesWorld = useCallback((product: Product, world: ShopWorld) => {
+    const normalizedDepartment = getNormalizedDepartment(product.department);
+
+    if (normalizedDepartment) {
+      return worldDepartmentMap[world].includes(normalizedDepartment);
+    }
+
     const searchable = normalizeText(
       `${product.category ?? ""} ${product.name ?? ""} ${product.description ?? ""}`
     );
@@ -81,16 +97,17 @@ export default function TiendaClientView({
     );
   }, []);
 
-  const categoryBelongsToWorld = (category: string, world: ShopWorld) => {
-    const normalizedCategory = normalizeText(category);
-    return worldKeywords[world].some((keyword) =>
-      normalizedCategory.includes(normalizeText(keyword))
-    );
-  };
-
-  const availableCategories = categories.filter((category) =>
-    categoryBelongsToWorld(category, selectedWorld)
+  const productsForSelectedWorld = allProducts.filter((product) =>
+    matchesWorld(product, selectedWorld)
   );
+
+  const availableCategories = Array.from(
+    new Set(
+      productsForSelectedWorld
+        .map((product) => product.category)
+        .filter((category): category is string => typeof category === "string" && category.trim().length > 0)
+    )
+  ).sort();
 
   const worldFilteredProducts = products.filter((product) =>
     matchesWorld(product, selectedWorld)

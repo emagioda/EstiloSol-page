@@ -71,6 +71,11 @@ export default function ProductDetail({ product }: Props) {
     typeof product.description === "string" && product.description.trim().length > 0
       ? product.description
       : LONG_DESCRIPTION_PLACEHOLDER;
+  const isKit = String(product.product_type ?? "").trim().toLowerCase() === "kit";
+  const includesText =
+    typeof product.includes === "string" && product.includes.trim().length > 0
+      ? product.includes
+      : null;
 
   useEffect(() => {
     if (!cartNotice) return;
@@ -176,6 +181,15 @@ export default function ProductDetail({ product }: Props) {
         <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[var(--brand-cream)]/85">
           {longDescription}
         </p>
+
+        {isKit && includesText && (
+          <div className="mt-6 border-t border-[var(--brand-gold-400)]/20 pt-5">
+            <h3 className="text-base font-semibold text-[var(--brand-gold-300)]">Incluye</h3>
+            <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-[var(--brand-cream)]/85">
+              {includesText}
+            </p>
+          </div>
+        )}
       </section>
     </main>
   );
