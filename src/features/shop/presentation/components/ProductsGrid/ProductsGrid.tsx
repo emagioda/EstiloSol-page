@@ -21,7 +21,7 @@ export default function ProductsGrid({
   }
 
   return (
-    <div className="grid auto-rows-fr grid-cols-2 gap-6 md:gap-8 lg:grid-cols-3">
+    <div className="grid auto-rows-fr grid-cols-2 gap-3 md:gap-4 lg:grid-cols-3">
       {products.map((p) => (
         <ProductCard
           key={p.id}
