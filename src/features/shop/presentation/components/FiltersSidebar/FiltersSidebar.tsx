@@ -6,6 +6,7 @@ interface FiltersSidebarProps {
   categories: string[];
   filters: FilterState;
   onFilterChange: {
+    departament: (dep: string | null) => void;
     category: (cat: string | null) => void;
     search: (term: string) => void;
     sort: (sort: FilterState["sortBy"]) => void;
@@ -24,6 +25,7 @@ export default function FiltersSidebar({
   onClose,
 }: FiltersSidebarProps) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    departament: true,
     category: true,
     sort: true,
   });
@@ -35,11 +37,12 @@ export default function FiltersSidebar({
     }));
   };
 
-  const hasActiveFilters = filters.category || filters.searchTerm;
+  const hasActiveFilters =
+    filters.category || filters.searchTerm || filters.departament;
 
   return (
     <>
-      {isOpen && <div className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={onClose} />}
+      {isOpen && <div className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={() => onClose?.()} />}
 
       <aside
         className={`fixed left-0 top-0 z-40 h-screen w-72 transform bg-[linear-gradient(180deg,rgba(58,31,95,0.98)_0%,rgba(34,18,55,0.98)_100%)] transition-transform duration-300 md:relative md:top-auto md:h-auto md:w-full md:transform-none md:rounded-3xl md:border md:border-[var(--brand-gold-400)]/30 md:bg-[rgba(58,31,95,0.45)] md:p-5 md:shadow-[0_18px_45px_rgba(18,8,35,0.3)] ${
@@ -64,6 +67,43 @@ export default function FiltersSidebar({
               Limpiar filtros
             </button>
           )}
+
+          {/* departament section */}
+          <div className="border-b border-white/10 pb-4">
+            <button
+              onClick={() => toggleSection("departament")}
+              className="flex w-full items-center justify-between text-sm font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)] transition-colors hover:text-[var(--brand-gold-300)]"
+            >
+              Rubro
+              <span className={`transition-transform ${expandedSections.departament ? "rotate-180" : ""}`}>
+                ▼
+              </span>
+            </button>
+            {expandedSections.departament && (
+              <div className="mt-3 flex flex-col gap-2">
+                {[
+                  { value: null, label: "Todos" },
+                  { value: "PELUQUERIA", label: "Peluquería" },
+                  { value: "BIJOUTERIE", label: "Bijouterie" },
+                ].map((opt) => (
+                  <label
+                    key={String(opt.value)}
+                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/80 transition hover:border-white/10 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
+                  >
+                    <input
+                      type="radio"
+                      name="departament"
+                      value={opt.value ?? ""}
+                      checked={filters.departament === opt.value}
+                      onChange={() => onFilterChange.departament(opt.value)}
+                      className="h-4 w-4 cursor-pointer accent-[var(--brand-gold-400)]"
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
 
           <div className="border-b border-white/10 pb-4">
             <button

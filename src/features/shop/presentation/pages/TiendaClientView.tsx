@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useProductsStore } from "../view-models/useProductsStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
@@ -21,26 +21,11 @@ type CartNotice = {
   message: string;
 };
 
-type ShopWorld = "peluqueria" | "bijouterie";
-
-const worldKeywords: Record<ShopWorld, string[]> = {
-  peluqueria: ["pelo", "capilar", "shampoo", "acondicionador", "tratamiento", "peine", "tintura", "peluquer"],
-  bijouterie: ["bijou", "aro", "anillo", "pulsera", "collar", "accesorio", "joya"],
-};
-
-const normalizeText = (value: string) => value.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
-
-const worldOptions: { key: ShopWorld; label: string; description: string }[] = [
-  {
-    key: "peluqueria",
-    label: "Peluquería",
-    description: "Productos profesionales para cuidar y realzar tu cabello.",
-  },
-  {
-    key: "bijouterie",
-    label: "Bijouterie",
-    description: "Diseños únicos para complementar cada estilo con personalidad.",
-  },
+// el proyecto distingue dos rubros que vienen de la hoja: PELUQUERIA o BIJOUTERIE
+// estos dos objetos sirven para construir los botones grandes al inicio
+const departamentOptions = [
+  { value: "PELUQUERIA", label: "Peluquería", description: "Productos profesionales para cuidar y realzar tu cabello." },
+  { value: "BIJOUTERIE", label: "Bijouterie", description: "Diseños únicos para complementar cada estilo con personalidad." },
 ];
 
 export default function TiendaClientView({
@@ -57,6 +42,7 @@ export default function TiendaClientView({
     loadProducts,
     filters,
     setSearchTerm,
+    setDepartament,
     setCategory,
     setSortBy,
     clearFilters,
@@ -67,34 +53,25 @@ export default function TiendaClientView({
     closeQuickView,
   } = useProductsStore({ initialProducts });
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [selectedWorld, setSelectedWorld] = useState<ShopWorld>("peluqueria");
-  const [hasUserSelectedWorld, setHasUserSelectedWorld] = useState(false);
+  const [selectedWorld, setSelectedWorld] = useState<string>("PELUQUERIA");
   const [cartNotice, setCartNotice] = useState<CartNotice | null>(null);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
 
-  const matchesWorld = useCallback((product: Product, world: ShopWorld) => {
-    const searchable = normalizeText(
-      `${product.category ?? ""} ${product.name ?? ""} ${product.description ?? ""}`
-    );
-    return worldKeywords[world].some((keyword) =>
-      searchable.includes(normalizeText(keyword))
-    );
-  }, []);
+  // cuando el usuario elige rubro guardamos en el estado local
+  // pero el filtro real se aplica directamente en el store
 
-  const categoryBelongsToWorld = (category: string, world: ShopWorld) => {
-    const normalizedCategory = normalizeText(category);
-    return worldKeywords[world].some((keyword) =>
-      normalizedCategory.includes(normalizeText(keyword))
-    );
-  };
+  const availableCategories = categories; // el hook ya considera departament
 
-  const availableCategories = categories.filter((category) =>
-    categoryBelongsToWorld(category, selectedWorld)
-  );
-
-  const worldFilteredProducts = products.filter((product) =>
-    matchesWorld(product, selectedWorld)
-  );
+  const departamentFilteredProducts = !filters.departament
+    ? products
+    : (() => {
+        const depFilter = filters.departament;
+        return products.filter(
+          (p) =>
+            typeof p.departament === "string" &&
+            p.departament.toLowerCase() === depFilter.toLowerCase()
+        );
+      })();
 
   useEffect(() => {
     if (status === "idle") {
@@ -102,34 +79,24 @@ export default function TiendaClientView({
     }
   }, [loadProducts, status]);
 
+  // si todavía no hay rubro seleccionado elegimos el que tenga más productos
   useEffect(() => {
-    if (loading || hasUserSelectedWorld || products.length === 0) return;
-
-    const countPeluqueria = products.filter((product) =>
-      matchesWorld(product, "peluqueria")
-    ).length;
-    const countBijouterie = products.filter((product) =>
-      matchesWorld(product, "bijouterie")
-    ).length;
-
-    let nextWorld: ShopWorld | null = null;
-
-    if (countPeluqueria === 0 && countBijouterie > 0) {
-      nextWorld = "bijouterie";
-    } else if (countBijouterie === 0 && countPeluqueria > 0) {
-      nextWorld = "peluqueria";
-    } else if (countPeluqueria > 0 && countBijouterie > 0) {
-      nextWorld = countBijouterie > countPeluqueria ? "bijouterie" : "peluqueria";
+    if (filters.departament || products.length === 0) return;
+    const counts: Record<string, number> = {};
+    products.forEach((p) => {
+      if (typeof p.departament === "string") {
+        counts[p.departament] = (counts[p.departament] || 0) + 1;
+      }
+    });
+    const winner = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map((entry) => entry[0])[0];
+    if (winner && winner !== selectedWorld) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSelectedWorld(winner);
     }
-
-    if (!nextWorld || nextWorld === selectedWorld) return;
-
-    const timer = window.setTimeout(() => {
-      setSelectedWorld(nextWorld);
-    }, 0);
-
-    return () => window.clearTimeout(timer);
-  }, [hasUserSelectedWorld, loading, matchesWorld, products, selectedWorld]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products]);
 
   useEffect(() => {
     setSuppressBadge(isQuickViewOpen);
@@ -170,16 +137,16 @@ export default function TiendaClientView({
             Explorá por rubro
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
-            {worldOptions.map((world) => {
-              const active = selectedWorld === world.key;
+            {departamentOptions.map((opt) => {
+              const active = selectedWorld === opt.value;
               return (
                 <button
-                  key={world.key}
+                  key={opt.value}
                   type="button"
                   onClick={() => {
-                    setHasUserSelectedWorld(true);
-                    setSelectedWorld(world.key);
+                    setSelectedWorld(opt.value);
                     setCategory(null);
+                    setDepartament(opt.value);
                   }}
                   className={`rounded-2xl border p-4 text-left transition ${
                     active
@@ -189,10 +156,10 @@ export default function TiendaClientView({
                   aria-pressed={active}
                 >
                   <span className="block text-sm font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)]">
-                    {world.label}
+                    {opt.label}
                   </span>
                   <span className="mt-1 block text-xs text-[var(--brand-cream)]/80">
-                    {world.description}
+                    {opt.description}
                   </span>
                 </button>
               );
@@ -207,6 +174,7 @@ export default function TiendaClientView({
             categories={availableCategories}
             filters={filters}
             onFilterChange={{
+              departament: setDepartament,
               category: setCategory,
               search: setSearchTerm,
               sort: setSortBy,
@@ -220,7 +188,7 @@ export default function TiendaClientView({
               searchTerm={filters.searchTerm}
               onSearchChange={setSearchTerm}
               onFiltersClick={() => setFiltersOpen(true)}
-              productCount={worldFilteredProducts.length}
+              productCount={departamentFilteredProducts.length}
             />
 
           {loading ? (
@@ -245,7 +213,7 @@ export default function TiendaClientView({
             </div>
           ) : (
             <ProductsGrid
-              products={worldFilteredProducts}
+              products={departamentFilteredProducts}
               onQuickView={openQuickView}
               staticDetailHandles={staticDetailHandles}
             />
@@ -275,6 +243,7 @@ export default function TiendaClientView({
             categories={availableCategories}
             filters={filters}
             onFilterChange={{
+              departament: setDepartament,
               category: setCategory,
               search: setSearchTerm,
               sort: setSortBy,

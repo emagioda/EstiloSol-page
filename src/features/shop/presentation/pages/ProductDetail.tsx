@@ -171,6 +171,17 @@ export default function ProductDetail({ product }: Props) {
         </div>
       )}
 
+      {product.product_type === "KIT" && Array.isArray(product.includes) && product.includes.length > 0 && (
+        <section className="mt-8 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.25)] p-5 shadow-[0_14px_32px_rgba(18,8,35,0.28)] lg:p-8">
+          <h2 className="text-lg font-semibold text-[var(--brand-gold-300)]">Incluye</h2>
+          <ul className="mt-3 list-disc pl-5 text-sm leading-relaxed text-[var(--brand-cream)]/85">
+            {product.includes.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="mt-8 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.25)] p-5 shadow-[0_14px_32px_rgba(18,8,35,0.28)] lg:p-8">
         <h2 className="text-lg font-semibold text-[var(--brand-gold-300)]">Descripción</h2>
         <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[var(--brand-cream)]/85">

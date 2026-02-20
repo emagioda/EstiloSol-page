@@ -1,1 +1,213 @@
-[]
+[
+  {
+    "id": "1",
+    "name": "Ampollita Bye Frizz - con Aceite de Argán",
+    "slug": "ampollita-capilar-bye-frizz-argan",
+    "departament": "PELUQUERIA",
+    "category": "Ampollitas",
+    "price": 3500,
+    "currency": "ARS",
+    "short_description": "Ampolla capilar antifrizz con aceite de argán que aporta brillo, suavidad y mejora la manejabilidad desde la primera aplicación.",
+    "description": "La Ampollita Capilar Bye Frizz está formulada para ayudar a reducir el frizz y mejorar el aspecto general del cabello, aportando brillo, suavidad y mayor control. Su fórmula concentrada con aceite de argán actúa sobre la fibra capilar, ayudando a suavizar la cutícula y mejorar la textura del cabello sin dejarlo pesado.\n\nEs apta para todo tipo de cabellos y especialmente recomendada para cabellos con frizz, opacos o difíciles de manejar. Su uso semanal ayuda a mantener el cabello más suave, brillante y saludable.\n\n¿Qué contiene?\n\nAceite de Argán\nIngrediente reconocido por sus propiedades nutritivas y suavizantes. Ayuda a mejorar la textura del cabello, aportando brillo, elasticidad y control del frizz.\n\nBeneficios clave:\n\n- Ayuda a reducir el frizz\n- Aporta brillo inmediato\n- Mejora la suavidad y la textura del cabello\n- Facilita el peinado y la manejabilidad\n- Ideal para complementar la rutina capilar semanal\n- Apta para todo tipo de cabellos\n\nModo de uso:\n\nAplicar directamente sobre el cabello limpio y húmedo. Distribuir uniformemente, peinar y dejar actuar durante 5 minutos. Enjuagar con agua tibia.\nSe recomienda utilizarla durante el lavado, luego del shampoo. Después del tiempo de exposición, enjuagar y aplicar acondicionador para completar el tratamiento.\n\nInformación adicional:\nPresentación: 15 ml",
+    "product_type": "UNICO",
+    "includes": [],
+    "images": [
+      "https://i.ibb.co/9Hz8HpwL/P1-1.webp",
+      "https://i.ibb.co/5hpSMb9Y/P1-2.webp",
+      "https://i.ibb.co/1JzGwtVd/P1-3.webp"
+    ],
+    "tags": [],
+    "is_featured": true,
+    "is_new": false,
+    "is_sale": true,
+    "stock_status": "preorder",
+    "stock_qty": 0,
+    "active": true
+  },
+  {
+    "id": "2",
+    "name": "Ampollita Hyaluronic - con Ácido Hialurónico",
+    "slug": "ampollita-capilar-hyaluronic-acido-hialuronico",
+    "departament": "PELUQUERIA",
+    "category": "Ampollitas",
+    "price": 3500,
+    "currency": "ARS",
+    "short_description": "Ampolla capilar con ácido hialurónico que aporta hidratación profunda, mejora la elasticidad y devuelve vitalidad al cabello deshidratado.",
+    "description": "La Ampollita Capilar Hyaluronic está desarrollada para restaurar la hidratación del cabello deshidratado, ayudando a mejorar su elasticidad, suavidad y brillo. Su fórmula con ácido hialurónico y activos de hidratación intensa actúa sobre la fibra capilar, contribuyendo a recuperar el equilibrio hídrico del cabello.\n\nEs ideal para cabellos que han sido sometidos a procesos de alisado, decoloración o uso frecuente de herramientas de calor, ayudando a devolver vitalidad y mejorar visiblemente su apariencia.\n\nSu uso semanal contribuye a mantener el cabello más hidratado, suave y manejable.\n\n¿Qué contiene?\n\nÁcido Hialurónico\nActivo reconocido por su capacidad de retener la hidratación, ayuda a mejorar la elasticidad del cabello, aportando suavidad, flexibilidad y brillo.\n\nActivos de hidratación intensa\nContribuyen a restaurar la hidratación del cabello, mejorando su textura y ayudando a recuperar su aspecto saludable.\n\nBeneficios clave:\n\n- Aporta hidratación profunda\n- Mejora la elasticidad del cabello\n- Devuelve vitalidad a cabellos deshidratados\n- Aporta brillo y suavidad\n- Mejora la manejabilidad del cabello\n- Ideal para complementar la rutina capilar semanal\n\nModo de uso:\n\nAplicar directamente sobre el cabello limpio y húmedo. Distribuir uniformemente, peinar y dejar actuar durante 5 minutos. Enjuagar con agua tibia.\nSe recomienda utilizarla durante el lavado, luego del shampoo. Después del tiempo de exposición, enjuagar y aplicar acondicionador para completar el tratamiento.\n\nInformación adicional:\nPresentación: 15 ml",
+    "product_type": "UNICO",
+    "includes": [],
+    "images": [
+      "https://i.ibb.co/fz3wMVbP/P2-1.webp",
+      "https://i.ibb.co/m5bkzm39/P2-2.webp",
+      "https://i.ibb.co/TMBbBgPX/P2-3.webp"
+    ],
+    "tags": [],
+    "is_featured": false,
+    "is_new": false,
+    "is_sale": false,
+    "stock_status": "in_stock",
+    "stock_qty": 0,
+    "active": true
+  },
+  {
+    "id": "3",
+    "name": "Ampollita Repair - con Nanoesferas",
+    "slug": "ampollita-capilar-repair-nanoesferas",
+    "departament": "PELUQUERIA",
+    "category": "Ampollitas",
+    "price": 3500,
+    "currency": "ARS",
+    "short_description": "Ampolla capilar reparadora con nanoesferas que ayuda a restaurar la fibra capilar, aportando suavidad, fuerza y mayor resistencia.",
+    "description": "La Ampollita Capilar Repair está formulada para ayudar a restaurar la fuerza y resistencia del cabello dañado, mejorando su estructura y apariencia desde la primera aplicación. Su fórmula con nanoesferas actúa en profundidad sobre la fibra capilar, contribuyendo a reparar el daño y fortalecer el cabello.\n\nEs ideal para cabellos debilitados, dañados o sensibilizados por procesos químicos o el uso frecuente de herramientas de calor. Su uso semanal ayuda a mejorar la textura, aportando suavidad, mayor resistencia y un aspecto más saludable.\n\n¿Qué contiene?\n\nNanoesferas reparadoras\nActivos diseñados para actuar en profundidad sobre la fibra capilar, ayudando a fortalecer el cabello, mejorar su resistencia y restaurar su estructura.\n\nBeneficios clave:\n\n-Ayuda a restaurar cabellos dañados\n-Mejora la fuerza y resistencia capilar\n-Aporta suavidad y mejor textura\n-Contribuye a fortalecer la fibra capilar\n-Mejora el aspecto general del cabello\n-Ideal para complementar la rutina capilar semanal\n\nModo de uso:\n\nAplicar directamente sobre el cabello limpio y húmedo. Distribuir uniformemente, peinar y dejar actuar durante 5 minutos. Enjuagar con agua tibia.\nSe recomienda utilizarla durante el lavado, luego del shampoo. Después del tiempo de exposición, enjuagar y aplicar acondicionador para completar el tratamiento.\n\nInformación adicional:\nPresentación: 15 ml",
+    "product_type": "UNICO",
+    "includes": [],
+    "images": [
+      "https://i.ibb.co/Wp0GDBxw/P3-1.webp",
+      "https://i.ibb.co/k2r0X7sY/P3-2.webp",
+      "https://i.ibb.co/V0W6BWDH/P3-3.webp"
+    ],
+    "tags": [],
+    "is_featured": true,
+    "is_new": false,
+    "is_sale": true,
+    "stock_status": "preorder",
+    "stock_qty": 0,
+    "active": true
+  },
+  {
+    "id": "4",
+    "name": "Serum Reparador Jojoba RepairPLEX",
+    "slug": "serum-capilar-jojoba-repairplex",
+    "departament": "PELUQUERIA",
+    "category": "Serums",
+    "price": 12000,
+    "currency": "ARS",
+    "short_description": "Sérum capilar reparador con aceite de jojoba que nutre, controla el frizz y aporta brillo sin dejar efecto graso, ideal para puntas secas y cabellos dañados.",
+    "description": "Sérum liviano de uso diario desarrollado para nutrir, reparar y proteger el cabello sin dejar efecto graso. Su fórmula concentrada con aceite de jojoba actúa en profundidad sobre la fibra capilar, aportando suavidad, brillo y manejabilidad desde la primera aplicación.\n\nEs especialmente recomendado para puntas resecas, cabellos finos, con frizz o falta de brillo, ayudando a mejorar visiblemente la textura y el aspecto general del cabello sin apelmazarlo.\n\n¿Qué contiene?\n\nAceite de Jojoba\nRico en ceramidas, vitamina E y ácidos grasos esenciales, se absorbe fácilmente sin dejar residuos, nutre en profundidad, mejora la elasticidad y ayuda a prevenir la deshidratación de las puntas.\n\nVitamina E (Tocoferol)\nAntioxidante que ayuda a combatir el daño causado por el calor, la radiación UV y la polución ambiental, contribuyendo a mantener el cabello saludable y protegido.\n\nEmolientes livianos de alto rendimiento\nProporcionan una textura suave y sedosa sin aportar peso, ayudan a controlar el frizz, reducen la estática y mejoran la manejabilidad, dejando un acabado brillante y natural.\n\nBeneficios clave:\n\n- Nutre y ayuda a reparar puntas secas o abiertas\n- Aporta brillo y suavidad sin sensación pesada\n- Ayuda a controlar el frizz y la estática\n- Mejora la textura del cabello fino\n- Protege frente a factores externos como calor, viento y humedad\n- Ideal como finalizador luego del brushing o alisado\n\nModo de uso:\n\nAplicar 1 a 2 gotas en las palmas de las manos, frotar y distribuir en largos y puntas sobre el cabello seco o húmedo. No enjuagar. Puede utilizarse diariamente o como toque final después de la planchita.\n\nInformación adicional:\n\nProducto Cruelty Free y Libre de parabenos\nPresentación: 30 ml",
+    "product_type": "UNICO",
+    "includes": [],
+    "images": [
+      "https://i.ibb.co/fwGpWsX/P4-1.webp",
+      "https://i.ibb.co/dwPR4W3g/P4-2.webp"
+    ],
+    "tags": [],
+    "is_featured": true,
+    "is_new": true,
+    "is_sale": false,
+    "stock_status": "in_stock",
+    "stock_qty": 0,
+    "active": true
+  },
+  {
+    "id": "5",
+    "name": "Thermo Protector",
+    "slug": "thermo-protector-spray-leave-in",
+    "departament": "PELUQUERIA",
+    "category": "Protectores",
+    "price": 10500,
+    "currency": "ARS",
+    "short_description": "Spray protector térmico con ácido hialurónico que protege el cabello del calor, aporta brillo y ayuda a mantener la hidratación.",
+    "description": "Spray protector térmico formulado para proteger el cabello frente a altas temperaturas generadas por secadores, planchitas y otras herramientas de calor. Su fórmula crea una barrera protectora que ayuda a reducir el daño térmico y preservar la salud de la fibra capilar.\n\nAdemás de proteger, aporta brillo, suavidad y mejora la manejabilidad del cabello sin dejar residuos pesados. Su acción hidratante ayuda a mantener el equilibrio natural del cabello, incluso con el uso frecuente de herramientas térmicas.\n\nContiene filtro UV que contribuye a proteger el cabello frente a la radiación solar y ácido hialurónico, que aporta hidratación y ayuda a mantener el cabello suave, flexible y saludable.\n\nEs ideal para todo tipo de cabellos, especialmente aquellos expuestos regularmente al calor o sometidos a procesos de peinado frecuentes, tanto en uso personal como profesional.\n\nBeneficios clave:\n\n- Protege el cabello frente al calor de secadores y planchitas\n- Reduce el daño térmico y ayuda a preservar la fibra capilar\n- Aporta brillo y suavidad\n- Ayuda a mantener la hidratación del cabello\n- Contiene filtro UV para protección adicional\n- Ideal para uso diario y profesional\n\nModo de uso:\n\nRociar el Thermo Protector sobre el cabello limpio, húmedo o seco, y proceder al secado o planchado con normalidad. Puede utilizarse todos los días.\n\nInformación adicional:\n\nProducto Cruelty Free y Libre de parabenos\nPresentación: 150 ml",
+    "product_type": "UNICO",
+    "includes": [],
+    "images": [
+      "https://i.ibb.co/GQYNhPLh/P5-1.webp",
+      "https://i.ibb.co/B5YV9fnZ/P5-2.webp"
+    ],
+    "tags": [],
+    "is_featured": false,
+    "is_new": true,
+    "is_sale": false,
+    "stock_status": "in_stock",
+    "stock_qty": 0,
+    "active": true
+  },
+  {
+    "id": "6",
+    "name": "KIt Ampollitas - (Bye Frizz + Repair + Hyaluronic)",
+    "slug": "kit-ampollitas-bye-frizz-repair-hyaluronic",
+    "departament": "PELUQUERIA",
+    "category": "Kits",
+    "price": 9500,
+    "currency": "ARS",
+    "short_description": "Kit de ampollas capilares con acción reparadora, hidratante y antifrizz que mejora la suavidad, el brillo y la salud del cabello.",
+    "description": "El Kit de Ampollitas está diseñado para brindar un tratamiento capilar completo, ayudando a reparar, hidratar y controlar el frizz. La combinación de sus tres ampollas actúa sobre diferentes necesidades del cabello, mejorando su textura, suavidad y apariencia general.\n\nEs ideal para cabellos dañados, deshidratados, con frizz o falta de brillo, y puede utilizarse como tratamiento mensual aplicando una ampolla por semana.\n\nCada ampolla cumple una función específica dentro de la rutina capilar:\n\n- Ampollita Repair: Ayuda a restaurar la fuerza y resistencia del cabello dañado, mejorando su estructura y suavidad.\n- Ampollita Bye Frizz: Ayuda a reducir el frizz, aportando brillo y mejorando la manejabilidad del cabello.\n- Ampollita Hyaluronic: Aporta hidratación profunda, ayudando a mejorar la elasticidad y devolver vitalidad al cabello deshidratado.\n\nBeneficios clave:\n\n- Aporta hidratación profunda\n- Ayuda a reparar el cabello dañado\n- Reduce el frizz\n- Mejora la suavidad y la manejabilidad\n- Aporta brillo y mejora la apariencia general\n- Ideal como tratamiento capilar mensual\n\nModo de uso:\n\nAplicar una ampolla por semana sobre el cabello limpio y húmedo, siguiendo las indicaciones de cada producto. Este kit permite completar un ciclo de tratamiento capilar de aproximadamente un mes.\nEn la etiqueta de cada ampolla se encuentra el modo de uso detallado.\n\nInformación adicional:\nTratamiento capilar práctico y fácil de incorporar a la rutina de cuidado del cabello.",
+    "product_type": "KIT",
+    "includes": [
+      "1 Ampollita Repair",
+      "1 Ampollita Bye Frizz",
+      "1 Ampollita Hyaluronic"
+    ],
+    "images": [
+      "https://i.ibb.co/qFxMB3tN/P6-1.webp",
+      "https://i.ibb.co/9Hz8HpwL/P1-1.webp",
+      "https://i.ibb.co/fz3wMVbP/P2-1.webp",
+      "https://i.ibb.co/Wp0GDBxw/P3-1.webp"
+    ],
+    "tags": [],
+    "is_featured": false,
+    "is_new": false,
+    "is_sale": false,
+    "stock_status": "in_stock",
+    "stock_qty": 0,
+    "active": true
+  },
+  {
+    "id": "7",
+    "name": "Kit Bye Frizz - (Máscara + spray + serum)",
+    "slug": "kit-bye-frizz-mascara-spray-serum",
+    "departament": "PELUQUERIA",
+    "category": "Kits",
+    "price": 38000,
+    "currency": "ARS",
+    "short_description": "Kit capilar antifrizz con máscara, spray y sérum que ayuda a controlar el frizz, aportar brillo y mejorar la suavidad del cabello.",
+    "description": "El Kit Bye Frizz está diseñado para ayudar a controlar el frizz, mejorar la suavidad y devolver el brillo natural al cabello. Su combinación de máscara, spray y sérum actúa de forma complementaria, ayudando a mejorar la textura, la manejabilidad y el aspecto general del cabello.\n\nEs ideal para cabellos con frizz, opacos o con textura áspera, y puede utilizarse como rutina semanal o como mantenimiento para mantener el cabello suave, brillante y bajo control.\n\nCada producto cumple una función específica dentro de la rutina capilar:\n\nSpray Bye Frizz: Leave-in sin enjuague con acción antifrizz inmediata. Ayuda a sellar la cutícula, protege del calor y aporta suavidad sin apelmazar. Puede utilizarse sobre el cabello húmedo o seco.\n\nMáscara con Argán: Tratamiento intensivo que ayuda a nutrir el cabello en profundidad, aportando brillo, suavidad y mejorando la textura general. Ideal para uso semanal.\n\nSérum Glow: Aceite liviano que ayuda a controlar el frizz, aporta brillo y suavidad, dejando el cabello más manejable. Ideal como finalizador después del peinado o para uso diario.\n\nBeneficios clave:\n\n- Ayuda a controlar el frizz\n- Aporta brillo y suavidad\n- Mejora la textura y la manejabilidad\n- Nutre el cabello en profundidad\n- Complementa la rutina de cuidado capilar\n- Ideal para uso personal o profesional\n\nModo de uso:\n\nUtilizar cada producto según su función específica. Se recomienda aplicar la máscara una vez por semana, el spray después del lavado y el sérum diariamente como finalizador.\nEn la etiqueta de cada producto se encuentra el modo de uso detallado.\n\nInformación adicional:\n\nEl kit tiene una duración aproximada de 1 a 2 meses, según la frecuencia de uso y el largo del cabello.\nTodos los productos son aptos para embarazo y lactancia, y están formulados sin formol, sulfatos, parabenos ni ingredientes agresivos.",
+    "product_type": "KIT",
+    "includes": [
+      "1 Spray Bye Frizz",
+      "1 Máscara con Argán",
+      "1 Sérum Glow"
+    ],
+    "images": [
+      "https://i.ibb.co/nM8QY9nV/P7-1.webp",
+      "https://i.ibb.co/nNyhZqmc/P7-2.webp",
+      "https://i.ibb.co/pBqp3kBX/P7-3.webp",
+      "https://i.ibb.co/p6cyvJVL/P7-4.webp"
+    ],
+    "tags": [],
+    "is_featured": false,
+    "is_new": false,
+    "is_sale": false,
+    "stock_status": "in_stock",
+    "stock_qty": 0,
+    "active": true
+  },
+  {
+    "id": "8",
+    "name": "Kit Thermo Protector + Serum Reparador",
+    "slug": "kit-thermo-protector-serum-reparador",
+    "departament": "PELUQUERIA",
+    "category": "Kits",
+    "price": 20500,
+    "currency": "ARS",
+    "short_description": "Kit capilar con protector térmico y sérum reparador que protege del calor, nutre el cabello y ayuda a controlar el frizz sin dejar efecto graso.",
+    "description": "El Kit Thermo Protector + Sérum Reparador está diseñado para proteger, nutrir y mejorar el aspecto general del cabello como parte de la rutina diaria. La combinación de ambos productos ayuda a prevenir el daño térmico, aportar hidratación y mejorar la suavidad y el brillo del cabello.\n\nEste kit es ideal para cabellos expuestos al uso frecuente de secador, planchita u otras herramientas de calor, y para quienes buscan mantener el cabello saludable, suave y manejable.\n\nCada producto cumple una función específica dentro del cuidado capilar:\n\nThermo Protector: Spray protector térmico que ayuda a proteger el cabello frente a altas temperaturas, formando una barrera que contribuye a reducir el daño causado por herramientas de calor. Además, aporta suavidad, hidratación y mejora el brillo del cabello.\n\nSérum Repair con Aceite de Jojoba: Tratamiento capilar liviano que ayuda a nutrir, reparar y proteger el cabello, aportando suavidad y brillo sin dejar efecto graso. Ideal como finalizador o para uso diario.\n\nBeneficios clave:\n\n- Protege el cabello del calor de secadores y planchitas\n- Ayuda a reducir el daño térmico\n- Nutre y mejora la suavidad del cabello\n- Aporta brillo y mejora la apariencia general\n- Ayuda a controlar el frizz\n- Ideal para uso diario como rutina de cuidado capilar\n\nModo de uso:\n\nAplicar el Thermo Protector sobre el cabello limpio, húmedo o seco, antes de utilizar herramientas de calor.\nUtilizar el Sérum Repair sobre largos y puntas, sobre el cabello húmedo o seco, como finalizador o tratamiento diario.\n\nInformación adicional:\nKit ideal para complementar la rutina capilar y proteger el cabello de forma integral.",
+    "product_type": "KIT",
+    "includes": [
+      "1 Spray Thermo Protector",
+      "1 Sérum Repair con Aceite de Jojoba"
+    ],
+    "images": [
+      "https://i.ibb.co/gZgvzQZN/P8-1.webp",
+      "https://i.ibb.co/GQYNhPLh/P5-1.webp",
+      "https://i.ibb.co/fwGpWsX/P4-1.webp"
+    ],
+    "tags": [],
+    "is_featured": false,
+    "is_new": false,
+    "is_sale": false,
+    "stock_status": "in_stock",
+    "stock_qty": 0,
+    "active": true
+  }
+]

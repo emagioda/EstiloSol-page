@@ -74,10 +74,32 @@ const toImagesArray = (rawImages: unknown): string[] => {
 };
 
 // --- ADAPTADOR: Convierte datos "sucios" del Excel a "limpios" para la App ---
+const toStringArray = (raw: unknown): string[] => {
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((item): item is string => typeof item === "string")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  if (typeof raw === "string") {
+    return raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+
 const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null => {
   const id = getValidProductId(row);
   if (!id) {
     console.warn("Skipping product row without valid ID", row);
+    return null;
+  }
+
+  // columna active: si existe y es falso, no quiero el producto
+  const active = toBoolean(row.active ?? row.Activo ?? false);
+  if (!active) {
     return null;
   }
 
@@ -89,20 +111,39 @@ const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null =>
       ? priceRaw
       : Number(String(priceRaw).replace(/[^0-9.-]+/g, ""));
 
+  const departamentRaw = row.departament ?? row.Departamento ?? "";
+  const departament =
+    typeof departamentRaw === "string" ? departamentRaw.toUpperCase() : "";
+
+  const productTypeRaw = row.product_type ?? row.Tipo ?? "UNICO";
+  const productType =
+    typeof productTypeRaw === "string" ? String(productTypeRaw).toUpperCase() : "UNICO";
+
+  const maybeSlug = row.slug ?? row.Slug ?? row.slug ?? null;
+  const slugStr =
+    typeof maybeSlug === "string" && maybeSlug.trim().length > 0
+      ? maybeSlug.trim()
+      : id; // fallback a id cuando no hay slug explícito
+
   return {
     id,
     name: String(row.name ?? row.Nombre ?? "Producto sin nombre"),
-    slug: row.slug ? String(row.slug) : undefined,
-    description: String(row.description ?? row.Descripcion ?? ""),
-    short_description: String(
-      row.short_description ?? row.ShortDescription ?? row.shortDescription ?? ""
-    ),
+    slug: slugStr,
+    departament: departament === "PELUQUERIA" || departament === "BIJOUTERIE" ? departament : undefined,
     category: String(row.category ?? row.Categoria ?? "General"),
     price: Number.isFinite(price) ? price : 0,
     currency: String(row.currency ?? row.Moneda ?? "ARS"),
+    short_description: String(
+      row.short_description ?? row.ShortDescription ?? row.shortDescription ?? ""
+    ),
+    description: String(row.description ?? row.Descripcion ?? ""),
     images: toImagesArray(rawImages),
+    tags: toStringArray(row.tags_csv ?? row.Tags ?? ""),
+    product_type: productType === "KIT" ? "KIT" : "UNICO",
+    includes: productType === "KIT" ? toStringArray(row.includes ?? row.Includes ?? "") : [],
     is_new: toBoolean(row.is_new ?? row.Nuevo),
     is_sale: toBoolean(row.is_sale ?? row.Oferta),
+    active: true, // ya filtramos arriba
   };
 };
 

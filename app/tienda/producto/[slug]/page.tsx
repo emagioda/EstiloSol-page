@@ -8,14 +8,41 @@ export const dynamicParams = false;
 export async function generateStaticParams() {
   try {
     const products = await fetchProductsFromSheets();
-    return products
-      .map((product) => product.slug)
-      .filter((slug): slug is string => Boolean(slug))
-      .map((slug) => ({ slug }));
+    const handles = products
+      .map((p) => (p.slug && p.slug.trim() ? p.slug.trim() : String(p.id)))
+      .filter((h) => h && h.length > 0);
+
+    if (handles.length > 0) {
+      return handles.map((slug) => ({ slug }));
+    }
+
+    console.warn(
+      "No hay productos activos en el Sheet. Verificá que NEXT_PUBLIC_SHEETS_ENDPOINT esté configurado."
+    );
   } catch (error) {
-    console.error("Error generando static params:", error);
-    return [];
+    console.error("Error al conectar con Sheets:", error);
   }
+
+  // fallback: intentar con el mock local
+  try {
+    const mock: unknown = (
+      await import("@/src/features/shop/infrastructure/data/products.mock.json")
+    ).default;
+    if (Array.isArray(mock)) {
+      const mockHandles = mock
+        .map((p: any) => (p.slug && p.slug.trim() ? p.slug.trim() : String(p.id)))
+        .filter((h: string) => h && h.length > 0);
+
+      if (mockHandles.length > 0) {
+        console.info("Usando mock local para rutas estáticas");
+        return mockHandles.map((slug: string) => ({ slug }));
+      }
+    }
+  } catch (mockError) {
+    console.error("Error cargando mock local:", mockError);
+  }
+
+  return [];
 }
 
 type Props = { params: Promise<{ slug: string }> };
