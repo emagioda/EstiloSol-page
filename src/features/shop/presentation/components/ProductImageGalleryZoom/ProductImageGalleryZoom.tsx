@@ -108,7 +108,9 @@ export default function ProductImageGalleryZoom({
   const placeholderClassName =
     theme === "quickview" ? "text-[#777]" : "text-[var(--brand-gold-300)]";
 
-  const thumbnailWrapperClassName = thumbnailsDesktopOnly
+  const thumbnailWrapperClassName = alwaysColumn
+    ? "mt-4 flex flex-row gap-2 overflow-x-auto"
+    : thumbnailsDesktopOnly
     ? "mt-4 gap-2 md:mt-0 md:flex md:flex-col md:w-16 md:order-first"
     : "mt-4 grid grid-cols-5 gap-2 md:mt-0 md:w-16 md:flex-col md:flex md:order-first";
 
@@ -120,11 +122,15 @@ export default function ProductImageGalleryZoom({
     ? "flex flex-col md:flex-row md:gap-4 md:items-start"
     : "flex flex-col";
 
+  const mainImageWrapperClassName = alwaysColumn
+    ? `group relative aspect-[3/4] w-full md:flex-1 overflow-hidden ${surfaceClassName}`
+    : `group relative aspect-[3/4] w-full md:flex-1 overflow-hidden md:order-last ${surfaceClassName}`;
+
   return (
     <>
       <div className={galleryLayoutClassName}>
         <div
-          className={`group relative aspect-[3/4] w-full md:flex-1 overflow-hidden md:order-last ${surfaceClassName}`}
+          className={mainImageWrapperClassName}
           style={{ touchAction: "pan-y" }}
         onMouseMove={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
@@ -297,8 +303,8 @@ export default function ProductImageGalleryZoom({
               onClick={() => onImageIndexChange(index)}
               className="relative aspect-square shrink-0 cursor-pointer overflow-hidden rounded-md transition-all hover:opacity-100 md:border-2"
               style={{
-                width: thumbnailsDesktopOnly ? "3.5rem" : "auto",
-                height: thumbnailsDesktopOnly ? "3.5rem" : "auto",
+                width: thumbnailsDesktopOnly || alwaysColumn ? "3.5rem" : "auto",
+                height: thumbnailsDesktopOnly || alwaysColumn ? "3.5rem" : "auto",
                 border:
                   index === safeIndex
                     ? theme === "quickview"
