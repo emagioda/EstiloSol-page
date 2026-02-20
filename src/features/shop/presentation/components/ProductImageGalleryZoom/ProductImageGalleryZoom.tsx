@@ -16,6 +16,9 @@ type Props = {
   onImageIndexChange: (index: number) => void;
   theme?: Theme;
   thumbnailsDesktopOnly?: boolean;
+  // when true, force the gallery layout to always stack vertically
+  // (thumbnails below the main image) regardless of viewport size.
+  alwaysColumn?: boolean;
 };
 
 export default function ProductImageGalleryZoom({
@@ -25,13 +28,13 @@ export default function ProductImageGalleryZoom({
   onImageIndexChange,
   theme = "pdp",
   thumbnailsDesktopOnly = false,
+  alwaysColumn = false,
 }: Props) {
   const SWIPE_THRESHOLD_PX = 40;
   const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
   const [animationKey, setAnimationKey] = useState(0);
   const [slideDirection, setSlideDirection] = useState<'left' | 'right'>('right');
-  const [isInitialRender, setIsInitialRender] = useState(true);
   const prevIndexRef = useRef(currentImageIndex);
   const pointerStartRef = useRef<{
     pointerId: number;
@@ -40,33 +43,28 @@ export default function ProductImageGalleryZoom({
   } | null>(null);
   const swipeHandledRef = useRef(false);
 
-  // Update animation direction and key when image index changes. We also
-  // watch for the underlying `images` array changing so that opening a new
-  // product (or a fresh modal) will display its first picture without any
-  // sliding animation. The `isInitialRender` flag is used to suppress the
-  // transition on the very first visible image.
+  // when images array changes (new product or modal remount) we treat the
+  // gallery as fresh: reset the previous index and clear the animation key so
+  // the first picture renders without any transition.
   const prevImagesRef = useRef<string[]>(images);
 
   useEffect(() => {
-    // if the images list itself is different, treat this as a new gallery
     if (prevImagesRef.current !== images) {
       prevImagesRef.current = images;
-      setIsInitialRender(true);
       prevIndexRef.current = currentImageIndex;
+      setAnimationKey(0);
       return;
     }
 
-    if (isInitialRender) {
-      setIsInitialRender(false);
-      prevIndexRef.current = currentImageIndex;
+    if (prevIndexRef.current === currentImageIndex) {
+      // nothing to do if index didn't change
       return;
     }
 
     const prevIndex = prevIndexRef.current;
     const len = images.length;
 
-    // calculate forward/backward distance on the circular album. this gives a
-    // direction that matches the user’s swipe regardless of numeric order.
+    // determine shortest direction on circular list
     let isMovingForward = true;
     if (len > 0) {
       const forwardSteps = (currentImageIndex - prevIndex + len) % len;
@@ -114,7 +112,11 @@ export default function ProductImageGalleryZoom({
     ? "mt-4 gap-2 md:mt-0 md:flex md:flex-col md:w-16 md:order-first"
     : "mt-4 grid grid-cols-5 gap-2 md:mt-0 md:w-16 md:flex-col md:flex md:order-first";
 
-  const galleryLayoutClassName = thumbnailsDesktopOnly || images.length > 1 
+  // layout: normally we switch to row on md when thumbnails exist,
+  // but the optional `alwaysColumn` prop forces a vertical stack.
+  const galleryLayoutClassName = alwaysColumn
+    ? "flex flex-col"
+    : thumbnailsDesktopOnly || images.length > 1
     ? "flex flex-col md:flex-row md:gap-4 md:items-start"
     : "flex flex-col";
 
@@ -216,8 +218,8 @@ export default function ProductImageGalleryZoom({
             key={`${currentImage}-${animationKey}`}
             src={currentImage}
             alt={productName}
-            className={`absolute inset-0 h-full w-full object-cover transition-all duration-500 ease-out md:group-hover:scale-110 ${
-              !isInitialRender
+            className={`absolute inset-0 h-full w/full object-cover transition-all duration-500 ease-out md:group-hover:scale-110 ${
+              animationKey > 0
                 ? slideDirection === 'left'
                   ? 'animate-slideInRight'
                   : 'animate-slideInLeft'

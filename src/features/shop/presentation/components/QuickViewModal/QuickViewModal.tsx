@@ -116,12 +116,14 @@ export default function QuickViewModal({
           {/* Columna Izquierda: Imágenes */}
           <div className="flex h-auto flex-col bg-[#f7f7f7] p-3 sm:p-4">
             <ProductImageGalleryZoom
+              key={`${product.id}-${open ? "open" : "closed"}`}
               images={images}
               productName={product.name}
               currentImageIndex={safeIndex}
               onImageIndexChange={setCurrentImageIndex}
               theme="quickview"
-              thumbnailsDesktopOnly
+              thumbnailsDesktopOnly={false} // allow thumbnails in all breakpoints
+              alwaysColumn // force the vertical layout (thumbnails below) inside modal
             />
           </div>
 
