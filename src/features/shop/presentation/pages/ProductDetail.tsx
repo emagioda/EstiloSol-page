@@ -123,6 +123,7 @@ export default function ProductDetail({ product, slug }: Props) {
     <main className="mx-auto w-full max-w-6xl px-4 py-8 text-[var(--brand-cream)]">
       <Breadcrumbs
         items={[
+          { label: "INICIO", href: "/" },
           { label: "Tienda", href: "/tienda" },
           { label: currentProduct.departament || "Productos", href: `/tienda?departament=${currentProduct.departament}` },
           { label: currentProduct.name },
