@@ -8,7 +8,7 @@ type MockProductLike = {
   slug?: string;
 };
 
-export const dynamicParams = false;
+export const dynamicParams = true;
 // page is statically generated and data freshness is handled on the
 // client side.
 

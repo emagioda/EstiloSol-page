@@ -19,11 +19,12 @@ export default function ProductCard({
           currency: "ARS",
         }).format(product.price)
       : "Consultar";
+  const hasSheetsEndpoint = Boolean(process.env.NEXT_PUBLIC_SHEETS_ENDPOINT?.trim());
   const detailHref = `/tienda/producto/${product.slug || product.id}`;
   const staticHandlesSet = new Set(staticDetailHandles ?? []);
   const detailHandle = String(product.slug || product.id);
   const canOpenStaticDetail =
-    staticHandlesSet.size === 0 || staticHandlesSet.has(detailHandle);
+    hasSheetsEndpoint || staticHandlesSet.size === 0 || staticHandlesSet.has(detailHandle);
 
   const thumb =
     product.images && product.images.length > 0 ? product.images[0] : undefined;
