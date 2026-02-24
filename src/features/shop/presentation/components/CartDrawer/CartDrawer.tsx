@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 import "@/src/core/presentation/styles/tokens.css";
 import { useMemo, useState } from "react";
 import { useCart } from "../../view-models/useCartStore";

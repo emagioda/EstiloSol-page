@@ -95,7 +95,13 @@ export const useProductsStore = ({
   // the JS state and (crucially) clears `cachedProducts`, which means
   // this effect will trigger a fresh request to the sheet.
   useEffect(() => {
-    loadProducts();
+    const timer = window.setTimeout(() => {
+      void loadProducts();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [loadProducts]);
 
   const getCategories = (): string[] => {

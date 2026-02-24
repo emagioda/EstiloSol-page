@@ -184,7 +184,7 @@ export const fetchProductsFromSheets = async ({
   let endpoint: string | null = null;
   try {
     endpoint = getSheetsEndpoint();
-  } catch (_err) {
+  } catch {
     endpoint = null;
   }
 

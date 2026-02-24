@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useMemo, useRef, useState } from "react";
 import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
@@ -34,48 +34,13 @@ export default function ProductImageGalleryZoom({
   const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
   const [animationKey, setAnimationKey] = useState(0);
-  const [slideDirection, setSlideDirection] = useState<'left' | 'right'>('right');
-  const prevIndexRef = useRef(currentImageIndex);
+  const [slideDirection, setSlideDirection] = useState<"left" | "right">("right");
   const pointerStartRef = useRef<{
     pointerId: number;
     x: number;
     y: number;
   } | null>(null);
   const swipeHandledRef = useRef(false);
-
-  // when images array changes (new product or modal remount) we treat the
-  // gallery as fresh: reset the previous index and clear the animation key so
-  // the first picture renders without any transition.
-  const prevImagesRef = useRef<string[]>(images);
-
-  useEffect(() => {
-    if (prevImagesRef.current !== images) {
-      prevImagesRef.current = images;
-      prevIndexRef.current = currentImageIndex;
-      setAnimationKey(0);
-      return;
-    }
-
-    if (prevIndexRef.current === currentImageIndex) {
-      // nothing to do if index didn't change
-      return;
-    }
-
-    const prevIndex = prevIndexRef.current;
-    const len = images.length;
-
-    // determine shortest direction on circular list
-    let isMovingForward = true;
-    if (len > 0) {
-      const forwardSteps = (currentImageIndex - prevIndex + len) % len;
-      const backwardSteps = (prevIndex - currentImageIndex + len) % len;
-      isMovingForward = forwardSteps <= backwardSteps;
-    }
-
-    setSlideDirection(isMovingForward ? 'left' : 'right');
-    prevIndexRef.current = currentImageIndex;
-    setAnimationKey((prev) => prev + 1);
-  }, [currentImageIndex, images]);
 
   // we intentionally **do not** suppress clicks after a swipe; the goal is
   // that a user can swipe to a new picture and then tap once (even very
@@ -89,16 +54,44 @@ export default function ProductImageGalleryZoom({
   const currentImage = images[safeIndex] ?? "";
   const slides = useMemo(() => images.map((src) => ({ src })), [images]);
 
+  const changeImageIndex = (nextIndex: number) => {
+    if (!images.length) {
+      onImageIndexChange(nextIndex);
+      return;
+    }
+
+    if (nextIndex === safeIndex) {
+      onImageIndexChange(nextIndex);
+      return;
+    }
+
+    const len = images.length;
+    const forwardSteps = (nextIndex - safeIndex + len) % len;
+    const backwardSteps = (safeIndex - nextIndex + len) % len;
+    const isMovingForward = forwardSteps <= backwardSteps;
+
+    setSlideDirection(isMovingForward ? "left" : "right");
+    setAnimationKey((prev) => prev + 1);
+    onImageIndexChange(nextIndex);
+  };
+
+  const slideAnimationClass =
+    animationKey > 0
+      ? slideDirection === "left"
+        ? "animate-slideInRight"
+        : "animate-slideInLeft"
+      : "";
+
   const nextImage = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     if (!images.length) return;
-    onImageIndexChange((safeIndex + 1) % images.length);
+    changeImageIndex((safeIndex + 1) % images.length);
   };
 
   const prevImage = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     if (!images.length) return;
-    onImageIndexChange((safeIndex - 1 + images.length) % images.length);
+    changeImageIndex((safeIndex - 1 + images.length) % images.length);
   };
 
   const surfaceClassName =
@@ -161,7 +154,7 @@ export default function ProductImageGalleryZoom({
             Math.abs(deltaX) >= SWIPE_THRESHOLD_PX &&
             Math.abs(deltaX) > Math.abs(deltaY)
           ) {
-            onImageIndexChange(
+            changeImageIndex(
               deltaX < 0
                 ? (safeIndex + 1) % images.length
                 : (safeIndex - 1 + images.length) % images.length,
@@ -225,11 +218,7 @@ export default function ProductImageGalleryZoom({
             src={currentImage}
             alt={productName}
             className={`absolute inset-0 h-full w/full object-cover transition-all duration-500 ease-out md:group-hover:scale-110 ${
-              animationKey > 0
-                ? slideDirection === 'left'
-                  ? 'animate-slideInRight'
-                  : 'animate-slideInLeft'
-                : ''
+              slideAnimationClass
             }`}
             style={{
               transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%`,
@@ -300,7 +289,7 @@ export default function ProductImageGalleryZoom({
             <button
               key={`${image}-${index}`}
               type="button"
-              onClick={() => onImageIndexChange(index)}
+              onClick={() => changeImageIndex(index)}
               className="relative aspect-square shrink-0 cursor-pointer overflow-hidden rounded-md transition-all hover:opacity-100 md:border-2"
               style={{
                 width: thumbnailsDesktopOnly || alwaysColumn ? "3.5rem" : "auto",
@@ -336,7 +325,7 @@ export default function ProductImageGalleryZoom({
         on={{
           view: ({ index }) => {
             if (typeof index !== "number") return;
-            onImageIndexChange(index);
+            changeImageIndex(index);
           },
         }}
         controller={{ closeOnBackdropClick: false }}

@@ -3,6 +3,11 @@ import { fetchProductsFromSheets } from "@/src/features/shop/infrastructure/data
 import ProductDetail from "@/src/features/shop/presentation/pages/ProductDetail";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
+type MockProductLike = {
+  id?: string | number;
+  slug?: string;
+};
+
 export const dynamicParams = false;
 // page is statically generated and data freshness is handled on the
 // client side.
@@ -32,7 +37,12 @@ export async function generateStaticParams() {
     ).default;
     if (Array.isArray(mock)) {
       const mockHandles = mock
-        .map((p: any) => (p.slug && p.slug.trim() ? p.slug.trim() : String(p.id)))
+        .map((item) => {
+          const product = item as MockProductLike;
+          return product.slug && product.slug.trim()
+            ? product.slug.trim()
+            : String(product.id);
+        })
         .filter((h: string) => h && h.length > 0);
 
       if (mockHandles.length > 0) {

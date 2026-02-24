@@ -54,27 +54,25 @@ const getShortDescription = (shortDescription?: string, description?: string) =>
 };
 
 export default function ProductDetail({ product, slug }: Props) {
-  // keep a local copy that we can update when the catalog arrives from the
-  // sheet. this ensures a manual reload on a detail page will fetch the
-  // latest catalog and refresh the displayed item.
-  const [currentProduct, setCurrentProduct] = useState<Product>(product);
-
   // load full catalog and sync; slug param is optional fallback if we
   // don't have the original product prop (e.g. client-side navigation).
   const { products, status } = useProductsStore({
     initialProducts: product ? [product] : []
   });
 
-  useEffect(() => {
-    if (status === "success" && products.length > 0) {
-      const idMatch = (p: Product) => p.id === product.id;
-      const slugMatch = slug
-        ? (p: Product) => p.slug === slug
-        : () => false;
-      const updated = products.find((p) => idMatch(p) || slugMatch(p));
-      if (updated) setCurrentProduct(updated);
+  const currentProduct = useMemo(() => {
+    if (status !== "success" || products.length === 0) {
+      return product;
     }
-  }, [status, products, product.id, slug]);
+
+    const idMatch = (p: Product) => p.id === product.id;
+    const slugMatch = slug
+      ? (p: Product) => p.slug === slug
+      : () => false;
+
+    return products.find((p) => idMatch(p) || slugMatch(p)) ?? product;
+  }, [status, products, product, slug]);
+
   const images = useMemo(
     () =>
       Array.isArray(currentProduct.images)
