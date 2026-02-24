@@ -4,9 +4,8 @@ import ProductDetail from "@/src/features/shop/presentation/pages/ProductDetail"
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 export const dynamicParams = false;
-// page is statically generated; dynamic rendering isn't possible with
-// `output: "export"` (GitHub Pages). data freshness is handled on the
-// client side instead.
+// page is statically generated and data freshness is handled on the
+// client side.
 
 export async function generateStaticParams() {
   try {
