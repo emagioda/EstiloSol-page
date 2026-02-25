@@ -15,6 +15,7 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
   const [notes, setNotes] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isTestPublicKey = (process.env.NEXT_PUBLIC_MP_PUBLIC_KEY || "").toUpperCase().startsWith("TEST-");
 
   if (!open) return null;
 
@@ -40,14 +41,20 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
         }),
       });
 
-      const data = (await response.json().catch(() => null)) as { initPoint?: string; error?: string } | null;
+      const data = (await response.json().catch(() => null)) as
+        | { initPoint?: string; sandboxInitPoint?: string; error?: string }
+        | null;
 
-      if (!response.ok || !data?.initPoint) {
+      const checkoutUrl = isTestPublicKey
+        ? data?.sandboxInitPoint || data?.initPoint
+        : data?.initPoint || data?.sandboxInitPoint;
+
+      if (!response.ok || !checkoutUrl) {
         setError(data?.error || "No pudimos iniciar el pago. Intentá nuevamente.");
         return;
       }
 
-      window.location.assign(data.initPoint);
+      window.location.assign(checkoutUrl);
     } catch {
       setError("Ocurrió un error de conexión. Intentá nuevamente.");
     } finally {

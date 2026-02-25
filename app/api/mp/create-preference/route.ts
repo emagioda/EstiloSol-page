@@ -165,7 +165,10 @@ export async function POST(request: NextRequest) {
   const failureUrl = process.env.MP_FAILURE_URL || `${appBaseUrl}/tienda`;
   const pendingUrl = process.env.MP_PENDING_URL || `${appBaseUrl}/tienda`;
   const webhookUrl = process.env.MP_WEBHOOK_URL || `${appBaseUrl}/api/mp/webhook`;
-  const shouldUseAutoReturn = successUrl.startsWith("https://");
+  const isHttpsSuccessUrl = successUrl.startsWith("https://");
+  const isLocalSuccessUrl =
+    successUrl.startsWith("http://localhost") || successUrl.startsWith("http://127.0.0.1");
+  const shouldUseAutoReturn = isHttpsSuccessUrl || isLocalSuccessUrl;
 
   const mpPayload = {
     items: items.map((item) => ({
@@ -194,21 +197,38 @@ export async function POST(request: NextRequest) {
     },
   };
 
-  const response = await fetch("https://api.mercadopago.com/checkout/preferences", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      "X-Idempotency-Key": externalReference,
-    },
-    body: JSON.stringify(mpPayload),
-    cache: "no-store",
-  });
+  const createPreference = async (payload: typeof mpPayload) => {
+    const response = await fetch("https://api.mercadopago.com/checkout/preferences", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": externalReference,
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
 
-  const data = await response.json().catch(() => null);
+    const data = await response.json().catch(() => null);
+    return { response, data };
+  };
+
+  let { response, data } = await createPreference(mpPayload);
+
+  if (!response.ok && shouldUseAutoReturn && !isHttpsSuccessUrl) {
+    const { auto_return, ...mpPayloadWithoutAutoReturn } = mpPayload;
+    const retryResult = await createPreference(mpPayloadWithoutAutoReturn);
+    response = retryResult.response;
+    data = retryResult.data;
+  }
 
   if (!response.ok || !data) {
-    console.error("create-preference mp error", { externalReference, status: response.status });
+    console.error("create-preference mp error", {
+      externalReference,
+      status: response.status,
+      message: typeof data?.message === "string" ? data.message : "unknown",
+      cause: typeof data?.cause === "object" && data.cause !== null ? data.cause : undefined,
+    });
     return NextResponse.json(
       {
         error: "No se pudo crear la preferencia de pago",
