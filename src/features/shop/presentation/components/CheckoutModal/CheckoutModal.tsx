@@ -13,29 +13,43 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!open) return null;
 
-  const waMessage = () => {
-    const lines = [];
-    lines.push(`Compra desde Estilo Sol`);
-    lines.push(`Cliente: ${name}`);
-    lines.push(`Tel: ${phone}`);
-    lines.push(``);
-    lines.push(`Items:`);
-    items.forEach((it) => lines.push(`${it.qty}x ${it.name} - $${it.unitPrice}`));
-    lines.push(``);
-    lines.push(`Subtotal: $${subtotal}`);
-    if (notes) lines.push(`Notas: ${notes}`);
+  const startCheckout = async () => {
+    if (items.length === 0 || isLoading) return;
 
-    return encodeURIComponent(lines.join("\n"));
-  };
+    setError(null);
+    setIsLoading(true);
 
-  const openWhatsApp = () => {
-    const phoneNumber = "5491123456789"; // TODO: replace with seller number
-    const url = `https://wa.me/${phoneNumber}?text=${waMessage()}`;
-    window.open(url, "_blank");
-    onClose();
+    try {
+      const response = await fetch("/api/mp/create-preference", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          items,
+          payer: { name, phone },
+          notes,
+        }),
+      });
+
+      const data = (await response.json().catch(() => null)) as { initPoint?: string; error?: string } | null;
+
+      if (!response.ok || !data?.initPoint) {
+        setError(data?.error || "No pudimos iniciar el pago. Intentá nuevamente.");
+        return;
+      }
+
+      window.location.assign(data.initPoint);
+    } catch {
+      setError("Ocurrió un error de conexión. Intentá nuevamente.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -43,7 +57,7 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
       <div className="fixed inset-0 bg-black/60" onClick={onClose} />
       <div className="relative z-10 w-full max-w-md rounded bg-[var(--brand-violet-950)] p-6 text-[var(--brand-cream)]">
         <h3 className="text-lg font-semibold">Finalizar compra</h3>
-        <p className="text-sm text-[var(--brand-cream)]/60">Completá tus datos y enviaremos el pedido por WhatsApp.</p>
+        <p className="text-sm text-[var(--brand-cream)]/60">Completá tus datos para pagar con Mercado Pago Checkout Pro.</p>
 
         <div className="mt-4 flex flex-col gap-3">
           <input className="w-full rounded border border-[var(--brand-violet-800)] bg-transparent px-3 py-2 text-[var(--brand-cream)]" placeholder="Tu nombre" value={name} onChange={(e)=>setName(e.target.value)} />
@@ -51,8 +65,16 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
           <textarea className="w-full rounded border border-[var(--brand-violet-800)] bg-transparent px-3 py-2 text-[var(--brand-cream)]" placeholder="Notas" value={notes} onChange={(e)=>setNotes(e.target.value)} />
         </div>
 
+        {error ? <p className="mt-3 text-sm text-[var(--brand-gold-300)]">{error}</p> : null}
+
         <div className="mt-4 flex gap-2">
-          <button onClick={openWhatsApp} className="flex-1 rounded bg-[var(--brand-gold-300)] py-2 text-black">Enviar por WhatsApp</button>
+          <button
+            onClick={startCheckout}
+            disabled={isLoading || items.length === 0}
+            className="flex-1 rounded bg-[var(--brand-gold-300)] py-2 text-black disabled:opacity-60"
+          >
+            {isLoading ? "Redirigiendo..." : `Pagar $${subtotal}`}
+          </button>
           <button onClick={onClose} className="rounded border border-[var(--brand-violet-900)] px-3 py-2">Cancelar</button>
         </div>
       </div>

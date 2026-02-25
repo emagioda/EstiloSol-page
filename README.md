@@ -23,6 +23,31 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Mercado Pago Checkout Pro
+
+1. Copy `.env.example` to `.env.local`.
+2. Complete the Mercado Pago variables:
+
+```bash
+MP_ACCESS_TOKEN=...
+NEXT_PUBLIC_MP_PUBLIC_KEY=...
+APP_BASE_URL=http://localhost:3000
+MP_WEBHOOK_SECRET=...
+MP_WEBHOOK_URL=https://tu-dominio.com/api/mp/webhook
+MP_SUCCESS_URL=https://tu-dominio.com/tienda
+MP_FAILURE_URL=https://tu-dominio.com/tienda
+MP_PENDING_URL=https://tu-dominio.com/tienda
+```
+
+3. In Mercado Pago Developers, configure `MP_WEBHOOK_URL` and copy the secret into `MP_WEBHOOK_SECRET`.
+4. Checkout Pro creates preferences from backend in `/api/mp/create-preference` and validates webhook signatures in `/api/mp/webhook`.
+
+### Security notes
+
+- Never expose `MP_ACCESS_TOKEN` in client code.
+- Keep `.env.local` out of git (already ignored).
+- If an access token was shared publicly, rotate it immediately in Mercado Pago.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
