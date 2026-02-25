@@ -31,7 +31,10 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          items,
+          items: items.map((item) => ({
+            productId: item.productId,
+            qty: item.qty,
+          })),
           payer: { name, phone },
           notes,
         }),

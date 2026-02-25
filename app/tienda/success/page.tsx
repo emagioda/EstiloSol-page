@@ -10,14 +10,54 @@ type PaymentData = {
   date?: string;
 };
 
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export default function SuccessPage() {
   const { clear } = useCart();
   const [status, setStatus] = useState<"loading" | "approved" | "error">("loading");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState("Procesando tu pago...");
   const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
 
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+
+    const verifyWithPolling = async (ref: string) => {
+      const delays = [0, 1000, 2000, 3000, 5000, 8000, 8000, 8000, 8000, 8000, 8000];
+
+      for (const delay of delays) {
+        if (cancelled) return;
+        if (delay > 0) await wait(delay);
+
+        try {
+          const res = await fetch(`/api/mp/verify-payment?ref=${encodeURIComponent(ref)}`, { cache: "no-store" });
+          const data = (await res.json().catch(() => null)) as PaymentData | null;
+
+          if (cancelled) return;
+          if (data) setPaymentData(data);
+
+          if (data?.approved) {
+            clear();
+            setStatus("approved");
+            setMessage("¡Pago completado! Gracias por tu compra.");
+            return;
+          }
+
+          setStatus("loading");
+          setMessage("Procesando tu pago...");
+        } catch {
+          // keep polling on transient errors
+          setStatus("loading");
+          setMessage("Procesando tu pago...");
+        }
+      }
+
+      if (!cancelled) {
+        setStatus("error");
+        setMessage("No pudimos confirmar el pago todavía. Intentá de nuevo en unos minutos.");
+      }
+    };
+
+    const start = async () => {
       const params = new URLSearchParams(window.location.search);
       const ref = params.get("ref");
 
@@ -27,24 +67,14 @@ export default function SuccessPage() {
         return;
       }
 
-      try {
-        const res = await fetch(`/api/mp/verify-payment?ref=${encodeURIComponent(ref)}`);
-        const data = (await res.json().catch(() => null)) as PaymentData | null;
-        setPaymentData(data);
+      await verifyWithPolling(ref);
+    };
 
-        if (data?.approved) {
-          clear();
-          setStatus("approved");
-          setMessage("¡Pago completado! Gracias por tu compra.");
-        } else {
-          setStatus("error");
-          setMessage(data?.message || "No pudimos confirmar el pago. Intentá nuevamente.");
-        }
-      } catch {
-        setStatus("error");
-        setMessage("Error al verificar el pago. Contactá a soporte.");
-      }
-    })();
+    void start();
+
+    return () => {
+      cancelled = true;
+    };
   }, [clear]);
 
   const downloadReceipt = () => {

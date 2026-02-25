@@ -1,16 +1,29 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { getJson, setJson } from "@/src/server/kv";
+import {
+  WEBHOOK_DEDUPE_TTL_SECONDS,
+  getOrder,
+  markApproved,
+  paymentDedupeKey,
+  webhookDedupeKey,
+} from "@/src/server/orders/store";
 
 export const runtime = "nodejs";
 
-type PaymentRecord = {
-  id: string | number;
-  externalReference: string;
-  status: string;
-  timestamp: number;
+type MpWebhookPayload = {
+  data?: {
+    id?: string | number;
+  };
 };
 
-const paymentStore = new Map<string, PaymentRecord>();
+type MpPaymentResponse = {
+  id?: string | number;
+  status?: string;
+  external_reference?: string;
+  transaction_amount?: number;
+  currency_id?: string;
+};
 
 const parseSignature = (headerValue: string | null) => {
   if (!headerValue) return null;
@@ -38,9 +51,42 @@ const safeEqualHex = (leftHex: string, rightHex: string) => {
   return timingSafeEqual(left, right);
 };
 
+const amountMatches = (actual: number, expected: number, tolerance = 0.01) => {
+  return Math.abs(actual - expected) <= tolerance;
+};
+
+const toDataId = (request: NextRequest, body: MpWebhookPayload): string => {
+  const queryId = request.nextUrl.searchParams.get("data.id") || request.nextUrl.searchParams.get("id");
+  const bodyId = body.data?.id;
+  const raw = queryId ?? (bodyId !== undefined ? String(bodyId) : "");
+  return raw.trim().toLowerCase();
+};
+
+const fetchMpPayment = async (paymentId: string, accessToken: string): Promise<MpPaymentResponse | null> => {
+  const response = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(paymentId)}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    console.error("webhook payment fetch failed", { paymentId, status: response.status });
+    return null;
+  }
+
+  return (await response.json().catch(() => null)) as MpPaymentResponse | null;
+};
+
 export async function POST(request: NextRequest) {
+  const accessToken = process.env.MP_ACCESS_TOKEN;
+  if (!accessToken) {
+    return NextResponse.json({ error: "MP_ACCESS_TOKEN missing" }, { status: 500 });
+  }
+
   const webhookSecret = process.env.MP_WEBHOOK_SECRET;
-  const body = await request.json().catch(() => null);
+  const body = (await request.json().catch(() => null)) as MpWebhookPayload | null;
 
   if (!body || typeof body !== "object") {
     return NextResponse.json({ error: "Invalid webhook payload" }, { status: 400 });
@@ -50,21 +96,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "MP_WEBHOOK_SECRET missing" }, { status: 500 });
   }
 
+  const dataIdLower = toDataId(request, body);
+  if (!dataIdLower) {
+    return NextResponse.json({ received: true }, { status: 200 });
+  }
+
   if (webhookSecret) {
     const xSignature = parseSignature(request.headers.get("x-signature"));
     const xRequestId = request.headers.get("x-request-id");
-    const dataId =
-      request.nextUrl.searchParams.get("data.id") ||
-      request.nextUrl.searchParams.get("id") ||
-      (typeof (body as { data?: { id?: unknown } }).data?.id === "string"
-        ? (body as { data?: { id?: string } }).data?.id
-        : "");
 
-    if (!xSignature || !xRequestId || !dataId) {
+    if (!xSignature || !xRequestId) {
       return NextResponse.json({ error: "Missing webhook signature headers" }, { status: 401 });
     }
 
-    const manifest = `id:${dataId};request-id:${xRequestId};ts:${xSignature.ts};`;
+    const manifest = `id:${dataIdLower};request-id:${xRequestId};ts:${xSignature.ts};`;
     const expected = createHmac("sha256", webhookSecret).update(manifest).digest("hex");
 
     if (!safeEqualHex(expected, xSignature.v1.toLowerCase())) {
@@ -72,22 +117,53 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const action = (body as { action?: unknown }).action;
-  if (action === "payment.updated") {
-    const data = (body as { data?: { id?: unknown; status?: unknown; external_reference?: unknown } }).data;
-    if (data && typeof data.id !== "undefined") {
-      const paymentId = String(data.id);
-      const status = String(data.status || "");
-      const externalRef = String(data.external_reference || "");
+  const dedupeKey = webhookDedupeKey(dataIdLower);
+  const alreadyProcessed = await getJson<string>(dedupeKey);
+  if (alreadyProcessed) {
+    return NextResponse.json({ received: true }, { status: 200 });
+  }
+  await setJson(dedupeKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
 
-      if (status === "approved" && externalRef) {
-        paymentStore.set(externalRef, {
-          id: paymentId,
-          externalReference: externalRef,
-          status: "approved",
-          timestamp: Date.now(),
-        });
-      }
+  const paymentId = /^\d+$/.test(dataIdLower) ? dataIdLower : body.data?.id ? String(body.data.id) : "";
+  if (!paymentId) {
+    return NextResponse.json({ received: true }, { status: 200 });
+  }
+
+  const paymentInfo = await fetchMpPayment(paymentId, accessToken);
+  if (!paymentInfo) {
+    return NextResponse.json({ received: true }, { status: 200 });
+  }
+
+  const externalReference = String(paymentInfo.external_reference || "").trim();
+  if (!externalReference) {
+    return NextResponse.json({ received: true }, { status: 200 });
+  }
+
+  const order = await getOrder(externalReference);
+  if (!order) {
+    return NextResponse.json({ received: true }, { status: 200 });
+  }
+
+  const status = String(paymentInfo.status || "");
+  const amount = Number(paymentInfo.transaction_amount);
+  const currency = String(paymentInfo.currency_id || "").toUpperCase();
+
+  if (
+    status === "approved" &&
+    Number.isFinite(amount) &&
+    currency === "ARS" &&
+    order.currency === "ARS" &&
+    amountMatches(amount, order.total)
+  ) {
+    const paymentKey = paymentDedupeKey(String(paymentInfo.id || paymentId));
+    const paymentProcessed = await getJson<string>(paymentKey);
+    if (!paymentProcessed) {
+      await markApproved(externalReference, {
+        paymentId: String(paymentInfo.id || paymentId),
+        mpStatus: status,
+        approvedAt: Date.now(),
+      });
+      await setJson(paymentKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
     }
   }
 
@@ -96,8 +172,4 @@ export async function POST(request: NextRequest) {
 
 export function GET() {
   return NextResponse.json({ error: "Method not allowed" }, { status: 405 });
-}
-
-export function getPaymentStatus(externalReference: string) {
-  return paymentStore.get(externalReference) || null;
 }
