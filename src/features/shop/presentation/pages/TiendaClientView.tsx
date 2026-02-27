@@ -123,12 +123,12 @@ export default function TiendaClientView({
 
   return (
     <main className="min-h-screen bg-[var(--brand-violet-950)]">
-      <div className="mx-auto max-w-6xl px-4 pb-16 pt-10 text-[var(--brand-cream)] md:pt-14">
+      <div className="mx-auto max-w-7xl px-4 pb-16 pt-10 text-[var(--brand-cream)] md:pt-14">
         <header className="mb-10">
           <h1 className="text-4xl font-semibold tracking-wide text-[var(--brand-cream)] md:text-5xl">
             {storeHeading}
           </h1>
-          <p className="mt-3 max-w-3xl text-base font-light leading-relaxed text-[var(--brand-cream)]/70 md:text-lg">
+          <p className="mt-3 max-w-3xl text-base leading-relaxed text-[var(--brand-cream)]/75 md:text-lg">
             {storeDescription}
           </p>
 
@@ -148,7 +148,7 @@ export default function TiendaClientView({
                     setCategory(null);
                     setDepartament(opt.value);
                   }}
-                  className={`rounded-2xl border p-5 text-left transition-all duration-300 ${
+                  className={`rounded-2xl border p-5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)] ${
                     active
                       ? "border-[var(--brand-gold-400)] bg-white/12 shadow-[0_18px_45px_rgba(0,0,0,0.30)]"
                       : "border-white/15 bg-white/5 hover:-translate-y-0.5 hover:border-[var(--brand-gold-300)] hover:bg-white/10"
@@ -168,8 +168,8 @@ export default function TiendaClientView({
           </div>
         </header>
 
-        <section className="glass-panel rounded-3xl border border-white/10 p-6 md:p-8">
-          <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-[280px_1fr] md:gap-8">
+        <section className="mt-8">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-[280px_1fr] md:gap-8">
             <div className="hidden md:block">
               <FiltersSidebar
                 categories={availableCategories}
@@ -207,7 +207,7 @@ export default function TiendaClientView({
                     onClick={() => {
                       void loadProducts();
                     }}
-                    className="mt-5 inline-flex items-center justify-center rounded-full border border-[var(--brand-gold-300)] px-5 py-2 text-sm font-semibold text-[var(--brand-cream)] transition hover:bg-[rgba(255,255,255,0.08)]"
+                    className="mt-5 inline-flex items-center justify-center rounded-full border border-[var(--brand-gold-300)] px-5 py-2 text-sm font-semibold text-[var(--brand-cream)] transition duration-200 hover:bg-[rgba(255,255,255,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
                   >
                     Reintentar
                   </button>
@@ -226,7 +226,7 @@ export default function TiendaClientView({
         {cartNotice && (
           <div className="pointer-events-none fixed inset-x-0 top-24 z-[70] flex justify-center px-4">
             <div
-              className={`rounded-xl border px-4 py-2.5 text-sm font-medium shadow-[0_12px_30px_rgba(10,4,20,0.35)] backdrop-blur ${
+              className={`rounded-xl border px-4 py-2.5 text-sm font-medium shadow-[0_12px_30px_rgba(10,4,20,0.35)] backdrop-blur animate-fade-up ${
                 cartNotice.type === "success"
                   ? "border-emerald-200/60 bg-emerald-600/85 text-white"
                   : "border-rose-200/60 bg-rose-600/85 text-white"
@@ -234,7 +234,10 @@ export default function TiendaClientView({
               role="status"
               aria-live="polite"
             >
-              {cartNotice.message}
+              <span className="inline-flex items-center gap-2">
+                <span aria-hidden>{cartNotice.type === "success" ? "✓" : "⚠"}</span>
+                {cartNotice.message}
+              </span>
             </div>
           </div>
         )}

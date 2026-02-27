@@ -1,4 +1,6 @@
+export type Currency = "ARS";
+
 export type Money = {
-  amount: number;
-  currency: string;
+  readonly amount: number;
+  readonly currency: Currency;
 };

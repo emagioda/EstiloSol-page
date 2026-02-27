@@ -18,6 +18,21 @@ type CartContextValue = {
 };
 
 const STORAGE_KEY = "es_sol_cart_v1";
+const MAX_ITEM_QTY = 50;
+
+const normalizeQty = (value: unknown): number => {
+  const qty = Number(value);
+  if (!Number.isFinite(qty)) return 0;
+  const intQty = Math.trunc(qty);
+  if (intQty < 1) return 0;
+  return Math.min(intQty, MAX_ITEM_QTY);
+};
+
+const normalizePrice = (value: unknown): number => {
+  const price = Number(value);
+  if (!Number.isFinite(price) || price < 0) return 0;
+  return Number(price.toFixed(2));
+};
 
 const CartContext = createContext<CartContextValue | undefined>(undefined);
 
@@ -33,8 +48,8 @@ const readItemsFromStorage = (): CartItem[] => {
       .map((it) => ({
         productId: String(it.productId),
         name: it.name ? String(it.name) : "",
-        unitPrice: typeof it.unitPrice === "number" ? it.unitPrice : Number(it.unitPrice) || 0,
-        qty: Number(it.qty) || 0,
+        unitPrice: normalizePrice(it.unitPrice),
+        qty: normalizeQty(it.qty),
         image: it.image ? String(it.image) : undefined,
       }))
       .filter((it) => it.qty > 0);
@@ -57,19 +72,40 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
   }, [items]);
 
   const addItem = (item: CartItem) => {
+    const safeQty = normalizeQty(item.qty);
+    if (!item.productId || safeQty <= 0) return;
+
+    const safePrice = normalizePrice(item.unitPrice);
+
     setItems((prev) => {
       const found = prev.find((p) => p.productId === item.productId);
       if (found) {
-        return prev.map((p) => (p.productId === item.productId ? { ...p, qty: p.qty + item.qty } : p));
+        return prev.map((p) =>
+          p.productId === item.productId
+            ? { ...p, qty: Math.min(MAX_ITEM_QTY, p.qty + safeQty), unitPrice: safePrice }
+            : p
+        );
       }
-      return [...prev, item];
+      return [
+        ...prev,
+        {
+          ...item,
+          unitPrice: safePrice,
+          qty: safeQty,
+        },
+      ];
     });
   };
 
   const removeItem = (productId: string) => setItems((prev) => prev.filter((p) => p.productId !== productId));
 
   const updateQty = (productId: string, qty: number) => {
-    setItems((prev) => prev.map((p) => (p.productId === productId ? { ...p, qty } : p)));
+    const safeQty = normalizeQty(qty);
+    setItems((prev) =>
+      safeQty <= 0
+        ? prev.filter((p) => p.productId !== productId)
+        : prev.map((p) => (p.productId === productId ? { ...p, qty: safeQty } : p))
+    );
   };
 
   const clear = () => setItems([]);

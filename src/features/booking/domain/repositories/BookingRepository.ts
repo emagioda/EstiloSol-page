@@ -1,3 +1,7 @@
+import type { Booking, BookingService } from "../entities/Booking";
+
 export interface BookingRepository {
-  readonly __brand?: "BookingRepository";
+  listServices(): Promise<BookingService[]>;
+  create(booking: Booking): Promise<Booking>;
 }
+

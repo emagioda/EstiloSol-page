@@ -217,7 +217,7 @@ export default function ProductImageGalleryZoom({
             key={`${currentImage}-${animationKey}`}
             src={currentImage}
             alt={productName}
-            className={`absolute inset-0 h-full w/full object-cover transition-all duration-500 ease-out md:group-hover:scale-110 ${
+            className={`absolute inset-0 h-full w-full object-cover transition-all duration-500 ease-out md:group-hover:scale-110 ${
               slideAnimationClass
             }`}
             style={{
@@ -240,7 +240,7 @@ export default function ProductImageGalleryZoom({
               onClick={prevImage}
               onPointerDown={(e) => e.stopPropagation()}
               onPointerUp={(e) => e.stopPropagation()}
-              className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/30 p-2 text-white transition hover:bg-black/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+              className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/55 p-2 text-white transition hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
               aria-label="Imagen anterior"
             >
               <svg
@@ -262,7 +262,7 @@ export default function ProductImageGalleryZoom({
               onClick={nextImage}
               onPointerDown={(e) => e.stopPropagation()}
               onPointerUp={(e) => e.stopPropagation()}
-              className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/30 p-2 text-white transition hover:bg-black/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+              className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/55 p-2 text-white transition hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
               aria-label="Imagen siguiente"
             >
               <svg
@@ -290,7 +290,7 @@ export default function ProductImageGalleryZoom({
               key={`${image}-${index}`}
               type="button"
               onClick={() => changeImageIndex(index)}
-              className="relative aspect-square shrink-0 cursor-pointer overflow-hidden rounded-md transition-all hover:opacity-100 md:border-2"
+              className="relative aspect-square shrink-0 cursor-pointer overflow-hidden rounded-md transition-all hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] md:border-2"
               style={{
                 width: thumbnailsDesktopOnly || alwaysColumn ? "3.5rem" : "auto",
                 height: thumbnailsDesktopOnly || alwaysColumn ? "3.5rem" : "auto",

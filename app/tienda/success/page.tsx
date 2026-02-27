@@ -113,7 +113,7 @@ Para consultas: contacto@estilosol.com
       <div className="w-full max-w-2xl">
         <div className="rounded-lg bg-[var(--brand-violet-900)] p-8 shadow-lg mb-6">
           <div className="text-center mb-8">
-            <h1 className="text-4xl font-bold mb-2">
+            <h1 className="text-4xl font-bold mb-2" aria-live="polite">
               {status === "approved" && "✓ ¡Éxito!"}
               {status === "error" && "⚠ Error"}
               {status === "loading" && "⏳ Procesando"}
@@ -152,14 +152,14 @@ Para consultas: contacto@estilosol.com
             {status === "approved" && (
               <button
                 onClick={downloadReceipt}
-                className="flex-1 rounded bg-[var(--brand-gold-300)] px-4 py-3 text-black font-medium hover:bg-[var(--brand-gold-300)]/90 transition"
+                className="flex-1 rounded bg-[var(--brand-gold-300)] px-4 py-3 text-black font-medium hover:bg-[var(--brand-gold-300)]/90 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
               >
                 Descargar Comprobante
               </button>
             )}
             <a
               href="/tienda"
-              className="flex-1 rounded bg-[var(--brand-violet-800)] px-4 py-3 text-[var(--brand-gold-300)] font-medium hover:bg-[var(--brand-violet-700)] transition text-center"
+              className="flex-1 rounded bg-[var(--brand-violet-800)] px-4 py-3 text-[var(--brand-gold-300)] font-medium hover:bg-[var(--brand-violet-700)] transition text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
             >
               Volver a la Tienda
             </a>

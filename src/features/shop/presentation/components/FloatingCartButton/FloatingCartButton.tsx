@@ -82,7 +82,7 @@ export default function FloatingCartButton() {
   return (
     <button
       onClick={() => setCartOpen(true)}
-      className={`fixed right-5 top-5 z-[120] flex h-14 w-14 items-center justify-center rounded-full border border-[var(--brand-gold-300)] bg-[var(--brand-violet-800)] text-2xl text-[var(--brand-cream)] shadow-[0_14px_30px_rgba(26,10,48,0.5)] transition-all duration-300 ease-out ${
+      className={`fixed right-5 top-5 z-[120] flex h-14 w-14 items-center justify-center rounded-full border border-[var(--brand-gold-300)] bg-[var(--brand-violet-800)] text-2xl text-[var(--brand-cream)] shadow-[0_14px_30px_rgba(26,10,48,0.5)] transition-all duration-300 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)] ${
         isVisible
           ? "pointer-events-auto translate-y-0 opacity-100"
           : "pointer-events-none -translate-y-2 opacity-0"

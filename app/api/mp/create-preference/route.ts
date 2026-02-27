@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { env } from "@/src/config/env";
 import { kv } from "@/src/server/kv";
 import { getProductsCatalog } from "@/src/server/catalog/getProducts";
 import { createOrder, markPreferenceCreated } from "@/src/server/orders/store";
@@ -81,7 +82,7 @@ const parseItems = (input: unknown): Array<{ productId: string; qty: number }> |
 };
 
 export async function POST(request: NextRequest) {
-  const accessToken = process.env.MP_ACCESS_TOKEN;
+  const accessToken = env.getOptionalServer("MP_ACCESS_TOKEN");
 
   if (!accessToken) {
     return NextResponse.json({ error: "MP_ACCESS_TOKEN missing" }, { status: 500 });
@@ -157,14 +158,14 @@ export async function POST(request: NextRequest) {
 
   await createOrder(order);
 
-  const appBaseUrl = (process.env.APP_BASE_URL || request.nextUrl.origin).replace(/\/$/, "");
-  const successUrl = (process.env.MP_SUCCESS_URL || `${appBaseUrl}/tienda/success?ref={EXTERNAL_REFERENCE}`).replace(
+  const appBaseUrl = (env.getOptionalServer("APP_BASE_URL") || request.nextUrl.origin).replace(/\/$/, "");
+  const successUrl = (env.getOptionalServer("MP_SUCCESS_URL") || `${appBaseUrl}/tienda/success?ref={EXTERNAL_REFERENCE}`).replace(
     "{EXTERNAL_REFERENCE}",
     externalReference
   );
-  const failureUrl = process.env.MP_FAILURE_URL || `${appBaseUrl}/tienda`;
-  const pendingUrl = process.env.MP_PENDING_URL || `${appBaseUrl}/tienda`;
-  const webhookUrl = process.env.MP_WEBHOOK_URL || `${appBaseUrl}/api/mp/webhook`;
+  const failureUrl = env.getOptionalServer("MP_FAILURE_URL") || `${appBaseUrl}/tienda`;
+  const pendingUrl = env.getOptionalServer("MP_PENDING_URL") || `${appBaseUrl}/tienda`;
+  const webhookUrl = env.getOptionalServer("MP_WEBHOOK_URL") || `${appBaseUrl}/api/mp/webhook`;
   const isHttpsSuccessUrl = successUrl.startsWith("https://");
   const isLocalSuccessUrl =
     successUrl.startsWith("http://localhost") || successUrl.startsWith("http://127.0.0.1");
@@ -216,7 +217,8 @@ export async function POST(request: NextRequest) {
   let { response, data } = await createPreference(mpPayload);
 
   if (!response.ok && shouldUseAutoReturn && !isHttpsSuccessUrl) {
-    const { auto_return, ...mpPayloadWithoutAutoReturn } = mpPayload;
+    const mpPayloadWithoutAutoReturn: typeof mpPayload = { ...mpPayload };
+    delete mpPayloadWithoutAutoReturn.auto_return;
     const retryResult = await createPreference(mpPayloadWithoutAutoReturn);
     response = retryResult.response;
     data = retryResult.data;

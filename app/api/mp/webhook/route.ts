@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { env } from "@/src/config/env";
 import { getJson, setJson } from "@/src/server/kv";
 import {
   WEBHOOK_DEDUPE_TTL_SECONDS,
@@ -80,12 +81,12 @@ const fetchMpPayment = async (paymentId: string, accessToken: string): Promise<M
 };
 
 export async function POST(request: NextRequest) {
-  const accessToken = process.env.MP_ACCESS_TOKEN;
+  const accessToken = env.getOptionalServer("MP_ACCESS_TOKEN");
   if (!accessToken) {
     return NextResponse.json({ error: "MP_ACCESS_TOKEN missing" }, { status: 500 });
   }
 
-  const webhookSecret = process.env.MP_WEBHOOK_SECRET;
+  const webhookSecret = env.getOptionalServer("MP_WEBHOOK_SECRET");
   const body = (await request.json().catch(() => null)) as MpWebhookPayload | null;
 
   if (!body || typeof body !== "object") {

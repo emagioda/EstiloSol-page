@@ -58,7 +58,7 @@ const parseDescriptionSections = (text: string) => {
 export default function FormattedDescription({ description }: Props) {
   if (!description || description.trim().length === 0) {
     return (
-      <p className="text-sm leading-relaxed text-[var(--brand-cream)]/85">
+      <p className="max-w-[68ch] text-[15px] leading-7 text-[var(--brand-cream)]/90">
         Sin descripción detallada por el momento.
       </p>
     );
@@ -67,7 +67,7 @@ export default function FormattedDescription({ description }: Props) {
   const sections = parseDescriptionSections(description);
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-[68ch] space-y-6">
       {sections.map((section, idx) => (
         <div key={idx}>
           {section.title && (
@@ -82,7 +82,7 @@ export default function FormattedDescription({ description }: Props) {
             {section.content.map((line, lineIdx) => (
               <p
                 key={lineIdx}
-                className="text-sm leading-relaxed text-[var(--brand-cream)]/85"
+                className="text-[15px] leading-7 text-[var(--brand-cream)]/90"
               >
                 {line.startsWith("-") ? (
                   <>

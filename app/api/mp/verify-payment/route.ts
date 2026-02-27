@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { env } from "@/src/config/env";
 import { getOrder, markApproved, updateOrder } from "@/src/server/orders/store";
 
 export const runtime = "nodejs";
@@ -18,7 +19,7 @@ const amountMatches = (actual: number, expected: number, tolerance = 0.01) => {
 };
 
 export async function GET(request: NextRequest) {
-  const accessToken = process.env.MP_ACCESS_TOKEN;
+  const accessToken = env.getOptionalServer("MP_ACCESS_TOKEN");
   if (!accessToken) {
     return NextResponse.json({ error: "MP_ACCESS_TOKEN missing" }, { status: 500 });
   }

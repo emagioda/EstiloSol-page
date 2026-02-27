@@ -103,18 +103,25 @@ export default function ProductDetail({ product, slug }: Props) {
   }, [cartNotice]);
 
   const handleAddToCart = () => {
-    addItem({
-      productId: currentProduct.id,
-      name: currentProduct.name,
-      unitPrice: safeUnitPrice,
-      qty,
-      image: images[0] ?? "",
-    });
-    setQty(1);
-    setCartNotice({
-      type: "success",
-      message: `${currentProduct.name} se agregó al carrito.`,
-    });
+    try {
+      addItem({
+        productId: currentProduct.id,
+        name: currentProduct.name,
+        unitPrice: safeUnitPrice,
+        qty,
+        image: images[0] ?? "",
+      });
+      setQty(1);
+      setCartNotice({
+        type: "success",
+        message: `${currentProduct.name} se agregó al carrito con éxito.`,
+      });
+    } catch {
+      setCartNotice({
+        type: "error",
+        message: `No pudimos agregar ${currentProduct.name}. Intentá nuevamente.`,
+      });
+    }
   };
 
   return (
@@ -142,20 +149,20 @@ export default function ProductDetail({ product, slug }: Props) {
           <p className="text-xs uppercase tracking-[0.22em] text-[var(--brand-gold-300)]">
             {currentProduct.category || "General"}
           </p>
-          <h1 className="text-3xl font-semibold leading-tight">{currentProduct.name}</h1>
+          <h1 className="text-3xl font-semibold leading-tight text-[var(--brand-cream)]">{currentProduct.name}</h1>
           <p className="text-3xl font-extrabold text-yellow-100">
             {displayPrice}
           </p>
 
-          <p className="text-sm leading-relaxed text-[var(--brand-cream)]/85">{shortDescription}</p>
+          <p className="max-w-[62ch] text-sm leading-relaxed text-[var(--brand-cream)]/90">{shortDescription}</p>
 
-          <div className="mt-3 flex flex-nowrap items-center justify-between gap-3">
+          <div className="mt-3 flex flex-row items-center gap-3">
             <div className="inline-flex items-center rounded-2xl bg-white/10 border border-white/15 p-1 backdrop-blur-sm">
               <button
                 type="button"
                 onClick={() => setQty((prev) => Math.max(1, prev - 1))}
                 disabled={qty <= 1}
-                className="h-11 w-11 grid place-items-center rounded-xl bg-white/85 text-violet-900 shadow-sm border border-white/60 hover:bg-white active:scale-[0.98] transition disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-11 w-11 grid place-items-center rounded-xl bg-white/85 text-violet-900 shadow-sm border border-white/60 hover:bg-white active:scale-[0.98] transition disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                 aria-label="Reducir cantidad"
               >
                 −
@@ -170,7 +177,7 @@ export default function ProductDetail({ product, slug }: Props) {
               <button
                 type="button"
                 onClick={() => setQty((prev) => prev + 1)}
-                className="h-11 w-11 grid place-items-center rounded-xl bg-white/85 text-violet-900 shadow-sm border border-white/60 hover:bg-white active:scale-[0.98] transition"
+                className="h-11 w-11 grid place-items-center rounded-xl bg-white/85 text-violet-900 shadow-sm border border-white/60 hover:bg-white active:scale-[0.98] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                 aria-label="Aumentar cantidad"
               >
                 +
@@ -179,9 +186,10 @@ export default function ProductDetail({ product, slug }: Props) {
             <button
               type="button"
               onClick={handleAddToCart}
-              className="w-full h-12 rounded-2xl bg-gradient-to-r from-yellow-200 to-amber-100 text-violet-950 font-semibold shadow-lg shadow-black/20 ring-1 ring-white/30 hover:brightness-105 active:scale-[0.99] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+              className="h-12 flex-1 rounded-2xl bg-gradient-to-r from-yellow-200 to-amber-100 text-violet-950 font-semibold shadow-lg shadow-black/20 ring-1 ring-white/30 hover:brightness-105 active:scale-[0.99] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
+              aria-label={`Comprar ahora ${currentProduct.name}`}
             >
-              Comprar
+              Comprar ahora
             </button>
           </div>
 
@@ -208,7 +216,7 @@ export default function ProductDetail({ product, slug }: Props) {
       {cartNotice && (
         <div className="pointer-events-none fixed inset-x-0 top-24 z-[70] flex justify-center px-4">
           <div
-            className={`rounded-xl border px-4 py-2.5 text-sm font-medium shadow-[0_12px_30px_rgba(10,4,20,0.35)] backdrop-blur ${
+            className={`rounded-xl border px-4 py-2.5 text-sm font-medium shadow-[0_12px_30px_rgba(10,4,20,0.35)] backdrop-blur animate-fade-up ${
               cartNotice.type === "success"
                 ? "border-emerald-200/60 bg-emerald-600/85 text-white"
                 : "border-rose-200/60 bg-rose-600/85 text-white"
@@ -216,22 +224,25 @@ export default function ProductDetail({ product, slug }: Props) {
             role="status"
             aria-live="polite"
           >
-            {cartNotice.message}
+            <span className="inline-flex items-center gap-2">
+              <span aria-hidden>{cartNotice.type === "success" ? "✓" : "⚠"}</span>
+              {cartNotice.message}
+            </span>
           </div>
         </div>
       )}
 
       {currentProduct.product_type === "KIT" && Array.isArray(currentProduct.includes) && currentProduct.includes.length > 0 && (
-        <section className="mt-8 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.25)] p-5 shadow-[0_14px_32px_rgba(18,8,35,0.28)] lg:p-8">
-          <h2 className="text-lg font-semibold text-[var(--brand-gold-300)] mb-4">INCLUYE</h2>
-          <div className="h-px bg-gradient-to-r from-[var(--brand-gold-400)]/40 via-[var(--brand-gold-300)]/20 to-transparent mb-6" />
+        <section className="mt-10">
+          <h2 className="mb-4 text-lg font-semibold text-[var(--brand-gold-300)]">INCLUYE</h2>
+          <div className="mb-6 h-px bg-gradient-to-r from-[var(--brand-gold-400)]/40 via-[var(--brand-gold-300)]/20 to-transparent" />
           <FormattedDescription description={currentProduct.includes.join("\n")} />
         </section>
       )}
 
-      <section className="mt-8 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.25)] p-5 shadow-[0_14px_32px_rgba(18,8,35,0.28)] lg:p-8">
-        <h2 className="text-lg font-semibold text-[var(--brand-gold-300)] mb-4">DESCRIPCIÓN</h2>
-        <div className="h-px bg-gradient-to-r from-[var(--brand-gold-400)]/40 via-[var(--brand-gold-300)]/20 to-transparent mb-6" />
+      <section className="mt-10">
+        <h2 className="mb-4 text-lg font-semibold text-[var(--brand-gold-300)]">DESCRIPCIÓN</h2>
+        <div className="mb-6 h-px bg-gradient-to-r from-[var(--brand-gold-400)]/40 via-[var(--brand-gold-300)]/20 to-transparent" />
         <FormattedDescription description={longDescription} />
       </section>
     </main>

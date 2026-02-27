@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
@@ -22,6 +22,7 @@ export default function QuickViewModal({
   const { addItem } = useCart();
   const [qty, setQty] = useState(1);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   // Reset image index when product changes
   useEffect(() => {
@@ -70,6 +71,21 @@ export default function QuickViewModal({
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+
+    closeButtonRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
   // Reset local state when modal closes
   useEffect(() => {
     if (!open) {
@@ -104,7 +120,8 @@ export default function QuickViewModal({
         >
           {/* Botón Cerrar */}
           <button
-            className="absolute right-0 top-0 z-50 flex h-10 w-10 items-center justify-center bg-[#3b3f45] text-2xl leading-none text-[#dce548] shadow-md transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#dce548]"
+            ref={closeButtonRef}
+            className="absolute right-0 top-0 z-50 flex h-10 w-10 items-center justify-center bg-[var(--brand-violet-900)] text-2xl leading-none text-[var(--brand-gold-300)] shadow-md transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
             onClick={onClose}
             aria-label="Cerrar vista rápida"
           >
@@ -114,7 +131,7 @@ export default function QuickViewModal({
           </button>
 
           {/* Columna Izquierda: Imágenes */}
-          <div className="flex h-auto flex-col bg-[#f7f7f7] p-3 sm:p-4">
+          <div className="flex h-auto flex-col bg-[var(--brand-cream)] p-3 sm:p-4">
             <ProductImageGalleryZoom
               key={`${product.id}-${open ? "open" : "closed"}`}
               images={images}
@@ -128,18 +145,18 @@ export default function QuickViewModal({
           </div>
 
           {/* Columna Derecha: Información */}
-          <div className="flex flex-col gap-4 p-5 sm:p-7">
+          <div className="flex flex-col gap-4 p-5 sm:p-7 text-[var(--brand-violet-950)]">
             <div>
-              <h3 className="text-3xl font-bold uppercase leading-tight tracking-[0.02em] sm:text-[2.2rem]">
+              <h3 className="text-3xl font-bold uppercase leading-tight tracking-[0.02em] text-[var(--brand-violet-950)] sm:text-[2.2rem]">
                 {product.name}
               </h3>
-              <p className="mt-4 border-b border-[#ececec] pb-4 text-3xl font-extrabold text-black sm:text-[3rem]">
+              <p className="mt-4 border-b border-[var(--brand-violet-700)]/25 pb-4 text-3xl font-extrabold text-[var(--brand-violet-950)] sm:text-[3rem]">
                 {formattedPrice}
               </p>
             </div>
 
             {shortDescription.length > 0 && (
-              <div className="whitespace-pre-line text-sm leading-relaxed text-[#555]">
+              <div className="whitespace-pre-line text-sm leading-relaxed text-[var(--brand-violet-950)]/90">
                 {shortDescription}
               </div>
             )}
@@ -190,13 +207,13 @@ export default function QuickViewModal({
                     }
                     onClose();
                   }}
-                  className="w-full h-12 rounded-2xl bg-gradient-to-r from-amber-300 to-yellow-200 text-[var(--brand-violet-950)] font-semibold shadow-lg shadow-black/10 ring-1 ring-amber-400/50 hover:brightness-110 active:scale-[0.99] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                  className="w-full h-12 rounded-2xl bg-gradient-to-r from-amber-300 to-yellow-200 text-[var(--brand-violet-950)] font-semibold shadow-lg shadow-black/10 ring-1 ring-amber-400/50 hover:brightness-110 active:scale-[0.99] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-cream)]"
                 >
                   Comprar
                 </button>
               </div>
 
-              <div className="mt-5 rounded-2xl bg-[var(--brand-violet-950)]/5 border border-[var(--brand-violet-950)]/15 p-4 text-[var(--brand-violet-900)]">
+              <div className="mt-5 rounded-2xl bg-[var(--brand-violet-950)]/5 border border-[var(--brand-violet-950)]/15 p-4 text-[var(--brand-violet-950)]/95">
                 <ul className="space-y-2 text-sm">
                   <li className="flex items-center gap-2">
                     <span className="text-lg">✔</span>
@@ -216,7 +233,7 @@ export default function QuickViewModal({
               <Link
                 href={`/tienda/producto/${product.slug || encodeURIComponent(String(product.id))}`}
                 onClick={onClose}
-                className="block w-full text-center py-3 px-4 rounded-2xl border border-[var(--brand-violet-950)]/30 bg-[var(--brand-violet-950)]/5 text-[var(--brand-violet-900)] font-semibold hover:bg-[var(--brand-violet-950)]/10 transition"
+                className="block w-full text-center py-3 px-4 rounded-2xl border border-[var(--brand-violet-950)]/30 bg-[var(--brand-violet-950)]/5 text-[var(--brand-violet-900)] font-semibold hover:bg-[var(--brand-violet-950)]/10 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-violet-900)]/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-cream)]"
               >
                 Ver más detalles
               </Link>

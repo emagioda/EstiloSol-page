@@ -1,1 +1,34 @@
-[]
+[
+	{
+		"id": "corte-estilo",
+		"name": "Corte y Styling",
+		"description": "Diagnóstico rápido, corte personalizado y peinado final.",
+		"durationMinutes": 60,
+		"price": 12000,
+		"currency": "ARS"
+	},
+	{
+		"id": "color-global",
+		"name": "Coloración Global",
+		"description": "Aplicación de color completo con asesoramiento de tono.",
+		"durationMinutes": 120,
+		"price": 26000,
+		"currency": "ARS"
+	},
+	{
+		"id": "brushing-pro",
+		"name": "Brushing Profesional",
+		"description": "Lavado, brushing y terminación para evento o uso diario.",
+		"durationMinutes": 45,
+		"price": 9000,
+		"currency": "ARS"
+	},
+	{
+		"id": "tratamiento-repair",
+		"name": "Tratamiento Repair",
+		"description": "Hidratación intensiva y sellado para cabellos sensibilizados.",
+		"durationMinutes": 75,
+		"price": 18000,
+		"currency": "ARS"
+	}
+]

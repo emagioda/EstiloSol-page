@@ -30,7 +30,7 @@ export default function Breadcrumbs({ items }: Props) {
             ) : (
               <Link
                 href={item.href || "#"}
-                className="uppercase text-[var(--brand-gold-300)] transition hover:text-[var(--brand-gold-400)]"
+                className="uppercase text-[var(--brand-gold-300)] transition hover:text-[var(--brand-gold-400)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-950)] rounded-sm"
               >
                 {item.label}
               </Link>

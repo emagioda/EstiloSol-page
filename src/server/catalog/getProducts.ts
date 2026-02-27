@@ -1,4 +1,5 @@
 import { getJson, setJson } from "@/src/server/kv";
+import { env } from "@/src/config/env";
 
 type CatalogProduct = {
   id: string;
@@ -70,7 +71,7 @@ export async function getProductsCatalog(): Promise<Map<string, CatalogProduct>>
     return new Map(cached.map((item) => [item.id, item]));
   }
 
-  const endpoint = process.env.NEXT_PUBLIC_SHEETS_ENDPOINT;
+  const endpoint = env.getPublic("NEXT_PUBLIC_SHEETS_ENDPOINT");
   if (!endpoint) {
     throw new Error("NEXT_PUBLIC_SHEETS_ENDPOINT missing");
   }
