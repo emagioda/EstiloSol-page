@@ -47,7 +47,7 @@ export default function FiltersSidebar({
       <aside
         role="complementary"
         aria-label="Filtros de productos"
-        className={`elegant-scrollbar fixed left-0 top-0 z-40 h-screen w-72 transform overflow-y-auto border-r border-[var(--brand-gold-300)]/15 bg-[var(--brand-violet-950)]/92 backdrop-blur-sm transition-transform duration-300 md:relative md:top-auto md:h-auto md:w-full md:transform-none md:rounded-2xl md:border md:border-[var(--brand-gold-300)]/18 md:bg-[var(--brand-violet-950)]/50 md:px-5 md:py-4 md:shadow-[0_16px_36px_rgba(18,8,35,0.28)] ${
+        className={`elegant-scrollbar fixed left-0 top-0 z-40 h-screen w-72 transform overflow-y-auto border-r border-[var(--brand-gold-300)]/20 bg-[var(--brand-violet-950)]/94 backdrop-blur-sm transition-transform duration-300 md:relative md:top-auto md:h-auto md:w-full md:transform-none md:rounded-2xl md:border md:border-[var(--brand-gold-300)]/24 md:bg-white/[0.09] md:px-5 md:py-4 md:shadow-[0_16px_36px_rgba(18,8,35,0.28)] ${
           isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         }`}
       >

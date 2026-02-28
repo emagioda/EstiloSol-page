@@ -42,7 +42,7 @@ export default function ProductCard({
     : undefined;
 
   return (
-    <article className="animate-fade-up flex h-full flex-col rounded-2xl border border-white/15 bg-white/10 text-[var(--brand-cream)] shadow-lg shadow-black/20 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/60 hover:shadow-2xl hover:shadow-black/30 overflow-hidden">
+    <article className="animate-fade-up flex h-full flex-col overflow-hidden rounded-2xl border border-[var(--brand-gold-300)]/22 bg-white/[0.14] text-[var(--brand-cream)] shadow-lg shadow-black/22 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/60 hover:bg-white/[0.18] hover:shadow-2xl hover:shadow-black/30">
       {canOpenStaticDetail ? (
         <Link href={detailHref} className="group flex flex-col h-full" aria-label={`Ver detalle de ${product.name}`}>
           <div className="relative aspect-[4/5] w-full overflow-hidden rounded-t-2xl">
