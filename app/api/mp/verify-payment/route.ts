@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/src/config/env";
-import { getOrder, markApproved, updateOrder } from "@/src/server/orders/store";
+import { fetchWithPolicy } from "@/src/server/http/fetchWithPolicy";
+import { logEvent } from "@/src/server/observability/log";
+import { trackBusinessEvent } from "@/src/server/observability/metrics";
+import { getOrder, markApproved, markRejected, updateOrder } from "@/src/server/orders/store";
+import { checkRateLimit } from "@/src/server/security/rateLimit";
+import { parseExternalReference } from "@/src/server/validation/payments";
 
 export const runtime = "nodejs";
 
@@ -14,29 +19,47 @@ type MpSearchResponse = {
   }>;
 };
 
+const REJECTED_PAYMENT_STATUSES = new Set(["rejected", "cancelled", "charged_back"]);
+
 const amountMatches = (actual: number, expected: number, tolerance = 0.01) => {
   return Math.abs(actual - expected) <= tolerance;
 };
 
 export async function GET(request: NextRequest) {
-  const accessToken = env.getOptionalServer("MP_ACCESS_TOKEN");
-  if (!accessToken) {
-    return NextResponse.json({ error: "MP_ACCESS_TOKEN missing" }, { status: 500 });
+  const envStatus = env.validatePaymentsServerEnv();
+  if (!envStatus.ok) {
+    logEvent("error", "payments.env_missing", { route: "verify-payment", missing: envStatus.missing });
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+  }
+  const accessToken = env.getRequiredServer("MP_ACCESS_TOKEN");
+
+  const allowed = await checkRateLimit(request, {
+    keyPrefix: "es:rl:verifypayment",
+    max: 40,
+    windowSeconds: 60,
+  });
+  if (!allowed) {
+    logEvent("warn", "payments.rate_limited", { route: "verify-payment" });
+    await trackBusinessEvent("payment.verify.rate_limited", { route: "verify-payment" });
+    return NextResponse.json({ error: "Demasiadas solicitudes. Intentá nuevamente en un minuto." }, { status: 429 });
   }
 
-  const ref = request.nextUrl.searchParams.get("ref");
-
-  if (!ref || typeof ref !== "string") {
-    return NextResponse.json({ error: "Missing ref parameter" }, { status: 400 });
+  const parsedRef = parseExternalReference(request.nextUrl.searchParams.get("ref"));
+  if (!parsedRef.ok) {
+    await trackBusinessEvent("payment.verify.invalid_ref", { route: "verify-payment" });
+    return NextResponse.json({ error: parsedRef.message }, { status: 400 });
   }
+  const ref = parsedRef.value;
 
   const order = await getOrder(ref);
 
   if (!order) {
+    await trackBusinessEvent("payment.verify.not_found", { externalReference: ref });
     return NextResponse.json({ approved: false, message: "Pago no encontrado" }, { status: 200 });
   }
 
   if (order.status === "approved") {
+    await trackBusinessEvent("payment.verify.cached_approved", { externalReference: order.externalReference });
     const timestamp = order.approvedAt || order.updatedAt;
     return NextResponse.json(
       {
@@ -57,15 +80,32 @@ export async function GET(request: NextRequest) {
   searchUrl.searchParams.set("criteria", "desc");
   searchUrl.searchParams.set("limit", "5");
 
-  const response = await fetch(searchUrl.toString(), {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetchWithPolicy(
+      searchUrl.toString(),
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        cache: "no-store",
+      },
+      {
+        timeoutMs: 8000,
+        retries: 1,
+      }
+    );
+  } catch (error) {
+    logEvent("error", "payments.verify_search_network_error", { externalReference: ref, error });
+    await trackBusinessEvent("payment.verify.network_error", { externalReference: ref });
+    await updateOrder(ref, { status: "pending" });
+    return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
+  }
 
   if (!response.ok) {
+    logEvent("warn", "payments.search_non_ok", { externalReference: ref, status: response.status });
+    await trackBusinessEvent("payment.verify.search_non_ok", { externalReference: ref, status: response.status });
     await updateOrder(ref, { status: "pending" });
     return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
   }
@@ -86,12 +126,28 @@ export async function GET(request: NextRequest) {
     );
   });
 
+  const rejectedPayment = data?.results?.find((payment) => {
+    const status = String(payment.status || "");
+    const externalReference = String(payment.external_reference || "");
+    return REJECTED_PAYMENT_STATUSES.has(status) && externalReference === order.externalReference;
+  });
+
   if (approvedPayment) {
     const approvedAt = Date.now();
     await markApproved(order.externalReference, {
       paymentId: String(approvedPayment.id || ""),
       mpStatus: String(approvedPayment.status || "approved"),
       approvedAt,
+    });
+
+    logEvent("info", "payments.approved_from_verify", {
+      externalReference: order.externalReference,
+      paymentId: String(approvedPayment.id || ""),
+      amount: approvedPayment.transaction_amount,
+    });
+    await trackBusinessEvent("payment.verify.approved", {
+      externalReference: order.externalReference,
+      paymentId: String(approvedPayment.id || ""),
     });
 
     return NextResponse.json(
@@ -107,6 +163,27 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  if (rejectedPayment) {
+    await markRejected(order.externalReference, {
+      paymentId: String(rejectedPayment.id || ""),
+      mpStatus: String(rejectedPayment.status || "rejected"),
+    });
+    await trackBusinessEvent("payment.verify.rejected", {
+      externalReference: order.externalReference,
+      mpStatus: String(rejectedPayment.status || "rejected"),
+    });
+
+    return NextResponse.json(
+      {
+        approved: false,
+        message: "Pago rechazado",
+        externalReference: order.externalReference,
+      },
+      { status: 200 }
+    );
+  }
+
   await updateOrder(ref, { status: "pending" });
+  await trackBusinessEvent("payment.verify.pending", { externalReference: ref });
   return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
 }

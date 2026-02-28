@@ -1,0 +1,97 @@
+type CheckoutItemInput = {
+  productId?: unknown;
+  qty?: unknown;
+};
+
+type CheckoutBodyInput = {
+  items?: unknown;
+  payer?: {
+    name?: unknown;
+    phone?: unknown;
+  };
+  notes?: unknown;
+};
+
+export type ParsedCheckoutItem = {
+  productId: string;
+  qty: number;
+};
+
+export type ParsedCheckoutBody = {
+  items: ParsedCheckoutItem[];
+  payerName: string;
+  payerPhone: string;
+  notes: string;
+};
+
+export type ValidationResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; message: string };
+
+const MAX_ITEMS = 30;
+
+const sanitizeText = (value: unknown, maxLength: number) => {
+  if (typeof value !== "string") return "";
+
+  return value
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+};
+
+const normalizeQuantity = (value: unknown) => {
+  const quantity = Number(value);
+  if (!Number.isInteger(quantity)) return null;
+  if (quantity < 1 || quantity > 50) return null;
+  return quantity;
+};
+
+export const parseExternalReference = (value: string | null): ValidationResult<string> => {
+  const ref = typeof value === "string" ? value.trim() : "";
+  if (!ref) return { ok: false, message: "Missing ref parameter" };
+  if (!/^es-[a-z0-9-]{6,80}$/i.test(ref)) {
+    return { ok: false, message: "Invalid ref parameter" };
+  }
+  return { ok: true, value: ref };
+};
+
+export const parseCheckoutBody = (rawBody: unknown): ValidationResult<ParsedCheckoutBody> => {
+  if (!rawBody || typeof rawBody !== "object") {
+    return { ok: false, message: "Invalid JSON body" };
+  }
+
+  const body = rawBody as CheckoutBodyInput;
+
+  if (!Array.isArray(body.items) || body.items.length === 0 || body.items.length > MAX_ITEMS) {
+    return { ok: false, message: "Invalid cart items" };
+  }
+
+  const parsedItems = body.items
+    .map((item): CheckoutItemInput => (item && typeof item === "object" ? item : {}))
+    .map((item) => {
+      const productId = sanitizeText(item.productId, 120);
+      const qty = normalizeQuantity(item.qty);
+      if (!productId || !qty) return null;
+      return { productId, qty };
+    })
+    .filter((item): item is ParsedCheckoutItem => item !== null);
+
+  if (parsedItems.length === 0) {
+    return { ok: false, message: "Invalid cart items" };
+  }
+
+  const payerName = sanitizeText(body.payer?.name, 100);
+  const payerPhone = sanitizeText(body.payer?.phone, 30).replace(/[^\d+]/g, "");
+  const notes = sanitizeText(body.notes, 250);
+
+  return {
+    ok: true,
+    value: {
+      items: parsedItems,
+      payerName,
+      payerPhone,
+      notes,
+    },
+  };
+};

@@ -1,115 +1,65 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/src/config/env";
-import { kv } from "@/src/server/kv";
 import { getProductsCatalog } from "@/src/server/catalog/getProducts";
+import { fetchWithPolicy } from "@/src/server/http/fetchWithPolicy";
+import { logEvent } from "@/src/server/observability/log";
+import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { createOrder, markPreferenceCreated } from "@/src/server/orders/store";
+import { checkRateLimit } from "@/src/server/security/rateLimit";
+import { parseCheckoutBody } from "@/src/server/validation/payments";
 import type { Order, OrderItem } from "@/src/server/orders/types";
 
 export const runtime = "nodejs";
 
-type CheckoutItemInput = {
-  productId?: unknown;
-  qty?: unknown;
+type MpPreferenceResponse = {
+  id?: string | number;
+  init_point?: string;
+  sandbox_init_point?: string;
+  message?: string;
+  cause?: unknown;
 };
 
-type CheckoutBodyInput = {
-  items?: unknown;
-  payer?: {
-    name?: unknown;
-    phone?: unknown;
-  };
-  notes?: unknown;
-};
-
-const MAX_ITEMS = 30;
 const RATE_LIMIT_MAX = 20;
 
-const sanitizeText = (value: unknown, maxLength: number) => {
-  if (typeof value !== "string") return "";
-
-  return value
-    .replace(/[\u0000-\u001F\u007F]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLength);
-};
-
-const normalizeQuantity = (value: unknown) => {
-  const quantity = Number(value);
-  if (!Number.isInteger(quantity)) return null;
-  if (quantity < 1 || quantity > 50) return null;
-  return quantity;
-};
-
-const getClientIp = (request: NextRequest) => {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip") || "unknown";
-};
-
-const checkRateLimit = async (request: NextRequest) => {
-  const ip = getClientIp(request);
-  const minuteBucket = Math.floor(Date.now() / 60_000);
-  const key = `es:rl:createpref:${ip}:${minuteBucket}`;
-  const count = await kv.incr(key);
-
-  if (count === 1) {
-    await kv.expire(key, 61);
-  }
-
-  return count <= RATE_LIMIT_MAX;
-};
-
-const parseItems = (input: unknown): Array<{ productId: string; qty: number }> | null => {
-  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_ITEMS) {
-    return null;
-  }
-
-  const parsed = input
-    .map((item): CheckoutItemInput => (item && typeof item === "object" ? item : {}))
-    .map((item) => {
-      const productId = sanitizeText(item.productId, 120);
-      const qty = normalizeQuantity(item.qty);
-
-      if (!productId || !qty) return null;
-      return { productId, qty };
-    })
-    .filter((item): item is NonNullable<typeof item> => item !== null);
-
-  if (parsed.length === 0) return null;
-  return parsed;
-};
-
 export async function POST(request: NextRequest) {
-  const accessToken = env.getOptionalServer("MP_ACCESS_TOKEN");
-
-  if (!accessToken) {
-    return NextResponse.json({ error: "MP_ACCESS_TOKEN missing" }, { status: 500 });
+  const envStatus = env.validatePaymentsServerEnv();
+  if (!envStatus.ok) {
+    logEvent("error", "payments.env_missing", { route: "create-preference", missing: envStatus.missing });
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
   }
+  const accessToken = env.getRequiredServer("MP_ACCESS_TOKEN");
+  await trackBusinessEvent("checkout.preference.requested", { route: "create-preference" });
 
-  const allowed = await checkRateLimit(request);
+  const allowed = await checkRateLimit(request, {
+    keyPrefix: "es:rl:createpref",
+    max: RATE_LIMIT_MAX,
+    windowSeconds: 60,
+  });
   if (!allowed) {
+    logEvent("warn", "payments.rate_limited", { route: "create-preference" });
+    await trackBusinessEvent("checkout.preference.rate_limited", { route: "create-preference" });
     return NextResponse.json({ error: "Demasiadas solicitudes. Intentá nuevamente en un minuto." }, { status: 429 });
   }
 
-  const body = (await request.json().catch(() => null)) as CheckoutBodyInput | null;
-
-  if (!body) {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const rawBody = await request.json().catch(() => null);
+  const parsedBody = parseCheckoutBody(rawBody);
+  if (!parsedBody.ok) {
+    await trackBusinessEvent("checkout.preference.invalid_input", { route: "create-preference" });
+    return NextResponse.json({ error: parsedBody.message }, { status: 400 });
   }
-
-  const requestedItems = parseItems(body.items);
-  if (!requestedItems) {
-    return NextResponse.json({ error: "Invalid cart items" }, { status: 400 });
-  }
+  const { items: requestedItems, payerName: customerName, payerPhone: customerPhone, notes } = parsedBody.value;
 
   const catalog = await getProductsCatalog().catch((error) => {
-    console.error("create-preference catalog error", { message: error instanceof Error ? error.message : "unknown" });
+    logEvent("error", "payments.catalog_fetch_error", {
+      route: "create-preference",
+      message: error instanceof Error ? error.message : "unknown",
+    });
     return null;
   });
 
   if (!catalog) {
+    await trackBusinessEvent("checkout.preference.catalog_unavailable", { route: "create-preference" });
     return NextResponse.json({ error: "No se pudo validar el catálogo de productos" }, { status: 503 });
   }
 
@@ -117,6 +67,10 @@ export async function POST(request: NextRequest) {
   for (const requestedItem of requestedItems) {
     const product = catalog.get(requestedItem.productId);
     if (!product) {
+      await trackBusinessEvent("checkout.preference.invalid_product", {
+        route: "create-preference",
+        productId: requestedItem.productId,
+      });
       return NextResponse.json({ error: `Producto inválido: ${requestedItem.productId}` }, { status: 400 });
     }
 
@@ -130,9 +84,6 @@ export async function POST(request: NextRequest) {
   }
 
   const total = Number(items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0).toFixed(2));
-  const customerName = sanitizeText(body.payer?.name, 100);
-  const customerPhone = sanitizeText(body.payer?.phone, 30).replace(/[^\d+]/g, "");
-  const notes = sanitizeText(body.notes, 250);
 
   const externalReference = `es-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const now = Date.now();
@@ -199,7 +150,9 @@ export async function POST(request: NextRequest) {
   };
 
   const createPreference = async (payload: typeof mpPayload) => {
-    const response = await fetch("https://api.mercadopago.com/checkout/preferences", {
+    const response = await fetchWithPolicy(
+      "https://api.mercadopago.com/checkout/preferences",
+      {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -208,28 +161,60 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify(payload),
       cache: "no-store",
-    });
+      },
+      {
+        timeoutMs: 8000,
+        retries: 1,
+      }
+    );
 
     const data = await response.json().catch(() => null);
     return { response, data };
   };
 
-  let { response, data } = await createPreference(mpPayload);
+  let response: Response;
+  let data: MpPreferenceResponse | null;
+
+  try {
+    const firstAttempt = await createPreference(mpPayload);
+    response = firstAttempt.response;
+    data = firstAttempt.data;
+  } catch (error) {
+    logEvent("error", "payments.create_preference_network_error", {
+      externalReference,
+      error,
+    });
+    await trackBusinessEvent("checkout.preference.network_error", { externalReference });
+    return NextResponse.json({ error: "No se pudo crear la preferencia de pago" }, { status: 502 });
+  }
 
   if (!response.ok && shouldUseAutoReturn && !isHttpsSuccessUrl) {
     const mpPayloadWithoutAutoReturn: typeof mpPayload = { ...mpPayload };
     delete mpPayloadWithoutAutoReturn.auto_return;
-    const retryResult = await createPreference(mpPayloadWithoutAutoReturn);
-    response = retryResult.response;
-    data = retryResult.data;
+    try {
+      const retryResult = await createPreference(mpPayloadWithoutAutoReturn);
+      response = retryResult.response;
+      data = retryResult.data;
+    } catch (error) {
+      logEvent("error", "payments.create_preference_retry_network_error", {
+        externalReference,
+        error,
+      });
+      await trackBusinessEvent("checkout.preference.retry_network_error", { externalReference });
+      return NextResponse.json({ error: "No se pudo crear la preferencia de pago" }, { status: 502 });
+    }
   }
 
   if (!response.ok || !data) {
-    console.error("create-preference mp error", {
+    logEvent("error", "payments.create_preference_failed", {
       externalReference,
       status: response.status,
       message: typeof data?.message === "string" ? data.message : "unknown",
       cause: typeof data?.cause === "object" && data.cause !== null ? data.cause : undefined,
+    });
+    await trackBusinessEvent("checkout.preference.failed", {
+      externalReference,
+      status: response.status,
     });
     return NextResponse.json(
       {
@@ -240,6 +225,16 @@ export async function POST(request: NextRequest) {
   }
 
   await markPreferenceCreated(externalReference, { preferenceId: String(data.id) });
+  await trackBusinessEvent("checkout.preference.created", {
+    externalReference,
+    preferenceId: String(data.id),
+    total,
+  });
+
+  logEvent("info", "payments.preference_created", {
+    externalReference,
+    preferenceId: String(data.id),
+  });
 
   return NextResponse.json(
     {

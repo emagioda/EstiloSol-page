@@ -48,6 +48,39 @@ MP_PENDING_URL=https://tu-dominio.com/tienda
 - Keep `.env.local` out of git (already ignored).
 - If an access token was shared publicly, rotate it immediately in Mercado Pago.
 
+### Reliability & Privacy baseline
+
+- Payment endpoints now use centralized request validation and shared rate limiting.
+- Calls to Mercado Pago use controlled timeout/retry policy to avoid hanging requests.
+- Payment events are logged with structured JSON and `externalReference` traceability.
+- Business observability now tracks key events (preference requested/created/failed, verify approved/pending, webhook dedupe/approved).
+- Idempotency is enforced through `X-Idempotency-Key` and webhook/payment deduplication keys.
+- Order records use status-based TTL (7 or 30 days); after approval, customer data is minimized and notes are removed.
+
+### Startup checks
+
+- Automatic startup checks run through `instrumentation.ts`.
+- In production, startup fails if critical payment secrets are missing.
+- `/api/health` returns startup check state and warnings.
+- Optional rotation governance vars: `MP_ACCESS_TOKEN_ROTATED_AT` and `MP_WEBHOOK_SECRET_ROTATED_AT` (ISO date).
+
+### Internal business metrics
+
+- Internal route: `/api/ops/metrics` (protected by `OPS_METRICS_TOKEN` via `x-ops-token` header).
+- Supports `days=1..14` to inspect aggregated checkout/payment events per day.
+- Designed for operational dashboards without storing raw customer PII.
+- Internal alerts route: `/api/ops/alerts` (same token) with automatic warning/critical evaluation.
+
+### Post-deploy checks
+
+- Run `npm run ops:postdeploy` after deploy.
+- Optional base URL argument: `npm run ops:postdeploy -- https://tu-dominio.com`
+- Uses `APP_BASE_URL` and `OPS_METRICS_TOKEN` when available.
+
+### Security operations
+
+- See [SECURITY_OPERATIONS.md](SECURITY_OPERATIONS.md) for secret rotation and privacy runbook.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
