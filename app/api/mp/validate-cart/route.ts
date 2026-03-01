@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsedBody.message }, { status: 400 });
   }
 
-  const catalog = await getProductsCatalog().catch((error) => {
+  const catalog = await getProductsCatalog({ forceFresh: true }).catch((error) => {
     logEvent("error", "payments.catalog_fetch_error", {
       route: "validate-cart",
       message: error instanceof Error ? error.message : "unknown",

@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
   }
   const { items: requestedItems, payerName: customerName, payerPhone: customerPhone, notes } = parsedBody.value;
 
-  const catalog = await getProductsCatalog().catch((error) => {
+  const catalog = await getProductsCatalog({ forceFresh: true }).catch((error) => {
     logEvent("error", "payments.catalog_fetch_error", {
       route: "create-preference",
       message: error instanceof Error ? error.message : "unknown",

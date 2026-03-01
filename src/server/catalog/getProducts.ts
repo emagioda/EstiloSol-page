@@ -14,6 +14,10 @@ type RawProductRow = Record<string, unknown>;
 const CATALOG_CACHE_KEY = "es:catalog:products";
 const CATALOG_CACHE_TTL = 120;
 
+type GetProductsCatalogOptions = {
+  forceFresh?: boolean;
+};
+
 const toBoolean = (value: unknown): boolean => {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
@@ -65,10 +69,25 @@ const rowToCatalogProduct = (row: RawProductRow): CatalogProduct | null => {
   };
 };
 
-export async function getProductsCatalog(): Promise<Map<string, CatalogProduct>> {
-  const cached = await getJson<CatalogProduct[]>(CATALOG_CACHE_KEY);
-  if (cached && Array.isArray(cached)) {
-    return new Map(cached.map((item) => [item.id, item]));
+const withForceFreshParam = (endpoint: string, forceFresh: boolean) => {
+  if (!forceFresh) return endpoint;
+
+  const url = new URL(endpoint);
+  url.searchParams.set("force", "1");
+  url.searchParams.set("_ts", String(Date.now()));
+  return url.toString();
+};
+
+export async function getProductsCatalog(
+  options: GetProductsCatalogOptions = {}
+): Promise<Map<string, CatalogProduct>> {
+  const forceFresh = options.forceFresh === true;
+
+  if (!forceFresh) {
+    const cached = await getJson<CatalogProduct[]>(CATALOG_CACHE_KEY);
+    if (cached && Array.isArray(cached)) {
+      return new Map(cached.map((item) => [item.id, item]));
+    }
   }
 
   const endpoint = env.getPublic("NEXT_PUBLIC_SHEETS_ENDPOINT");
@@ -76,7 +95,8 @@ export async function getProductsCatalog(): Promise<Map<string, CatalogProduct>>
     throw new Error("NEXT_PUBLIC_SHEETS_ENDPOINT missing");
   }
 
-  const response = await fetch(endpoint, { cache: "no-store" });
+  const requestUrl = withForceFreshParam(endpoint, forceFresh);
+  const response = await fetch(requestUrl, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Failed to fetch products catalog: ${response.status}`);
   }
