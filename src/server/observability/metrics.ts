@@ -12,6 +12,8 @@ const dayBucketOffset = (offset: number) => {
 };
 
 const metricKey = (name: string, bucket: string) => `es:metrics:${name}:${bucket}`;
+const technicalCountKey = (name: string, bucket: string) => `es:tech:${name}:count:${bucket}`;
+const technicalSumKey = (name: string, bucket: string) => `es:tech:${name}:sum:${bucket}`;
 
 export const BUSINESS_METRIC_NAMES = [
   "checkout.preference.requested",
@@ -23,6 +25,12 @@ export const BUSINESS_METRIC_NAMES = [
   "checkout.preference.retry_network_error",
   "checkout.preference.failed",
   "checkout.preference.created",
+  "checkout.validation.requested",
+  "checkout.validation.rate_limited",
+  "checkout.validation.invalid_input",
+  "checkout.validation.catalog_unavailable",
+  "checkout.validation.invalid_product",
+  "checkout.validation.ok",
   "payment.verify.rate_limited",
   "payment.verify.invalid_ref",
   "payment.verify.not_found",
@@ -47,6 +55,15 @@ export const BUSINESS_METRIC_NAMES = [
 
 export type BusinessMetricName = (typeof BUSINESS_METRIC_NAMES)[number];
 
+export const TECHNICAL_SIGNAL_NAMES = [
+  "webvitals.LCP",
+  "webvitals.INP",
+  "webvitals.CLS",
+  "client.error",
+] as const;
+
+export type TechnicalSignalName = (typeof TECHNICAL_SIGNAL_NAMES)[number];
+
 export async function incrementMetric(name: string, amount = 1): Promise<void> {
   const bucket = dayBucket();
   const key = metricKey(name, bucket);
@@ -68,6 +85,30 @@ export async function trackBusinessEvent(event: BusinessMetricName, context: Rec
   logEvent("info", `business.${event}`, context);
 }
 
+export async function trackTechnicalSignal(
+  signal: TechnicalSignalName,
+  value: number,
+  context: Record<string, unknown> = {}
+): Promise<void> {
+  const bucket = dayBucket();
+  const countKey = technicalCountKey(signal, bucket);
+  const sumKey = technicalSumKey(signal, bucket);
+
+  const count = await kv.incr(countKey);
+  if (count === 1) {
+    await kv.expire(countKey, METRICS_TTL_SECONDS);
+  }
+
+  const currentSum = Number(await kv.get<number>(sumKey));
+  const nextSum = (Number.isFinite(currentSum) ? currentSum : 0) + value;
+  await kv.set(sumKey, nextSum, { ex: METRICS_TTL_SECONDS });
+
+  logEvent("info", `technical.${signal}`, {
+    value,
+    ...context,
+  });
+}
+
 export async function getBusinessMetricsSnapshot(days: number): Promise<{
   rangeDays: number;
   buckets: Array<{
@@ -86,6 +127,41 @@ export async function getBusinessMetricsSnapshot(days: number): Promise<{
       const key = metricKey(name, day);
       const value = Number(await kv.get<number>(key));
       totals[name] = Number.isFinite(value) ? value : 0;
+    }
+
+    buckets.push({ day, totals });
+  }
+
+  return {
+    rangeDays: safeDays,
+    buckets,
+  };
+}
+
+export async function getTechnicalMetricsSnapshot(days: number): Promise<{
+  rangeDays: number;
+  buckets: Array<{
+    day: string;
+    totals: Record<string, { count: number; avg: number }>;
+  }>;
+}> {
+  const safeDays = Math.min(Math.max(1, Math.floor(days)), 14);
+  const buckets: Array<{ day: string; totals: Record<string, { count: number; avg: number }> }> = [];
+
+  for (let offset = 0; offset < safeDays; offset += 1) {
+    const day = dayBucketOffset(offset);
+    const totals: Record<string, { count: number; avg: number }> = {};
+
+    for (const name of TECHNICAL_SIGNAL_NAMES) {
+      const count = Number(await kv.get<number>(technicalCountKey(name, day)));
+      const sum = Number(await kv.get<number>(technicalSumKey(name, day)));
+      const safeCount = Number.isFinite(count) ? count : 0;
+      const safeSum = Number.isFinite(sum) ? sum : 0;
+
+      totals[name] = {
+        count: safeCount,
+        avg: safeCount > 0 ? Number((safeSum / safeCount).toFixed(3)) : 0,
+      };
     }
 
     buckets.push({ day, totals });

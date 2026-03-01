@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchProductsFromSheets,
   isMissingSheetsEndpointError,
@@ -14,12 +14,110 @@ export type FilterState = {
 };
 
 type ProductsStatus = "idle" | "loading" | "success" | "error";
+const SESSION_CATALOG_CACHE_KEY = "es:shop:catalog:session:v1";
+const CATALOG_CACHE_UPDATED_EVENT = "es:catalog-cache-updated";
 
 // simple in‑memory cache that survives component unmounts while the
 // page is still open. it doesn’t persist across full reloads, but it
 // guarantees that navigating between store/detail pages won’t trigger a
 // network request or a loading spinner.
 let cachedProducts: Product[] | null = null;
+let cachedProductsSignature: string | null = null;
+
+const setMemoryCatalogCache = (products: Product[]) => {
+  cachedProducts = products;
+  cachedProductsSignature = productSignature(products);
+};
+
+const emitCatalogCacheUpdated = (products: Product[]) => {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(CATALOG_CACHE_UPDATED_EVENT, {
+      detail: { products },
+    })
+  );
+};
+
+const readSessionCachedProducts = (): Product[] | null => {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_CATALOG_CACHE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed as Product[];
+  } catch {
+    return null;
+  }
+};
+
+export const hasSessionCatalogCache = () => {
+  if (typeof window === "undefined") return false;
+
+  try {
+    return Boolean(window.sessionStorage.getItem(SESSION_CATALOG_CACHE_KEY));
+  } catch {
+    return false;
+  }
+};
+
+const writeSessionCachedProducts = (products: Product[]) => {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(SESSION_CATALOG_CACHE_KEY, JSON.stringify(products));
+  } catch {
+    return;
+  }
+};
+
+const productSignature = (products: Product[]): string =>
+  JSON.stringify(
+    [...products]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((product) => ({
+        id: product.id,
+        name: product.name,
+        slug: product.slug,
+        departament: product.departament,
+        category: product.category,
+        price: product.price,
+        currency: product.currency,
+        short_description: product.short_description,
+        description: product.description,
+        images: product.images,
+        tags: product.tags,
+        product_type: product.product_type,
+        includes: product.includes,
+        is_new: product.is_new,
+        is_sale: product.is_sale,
+        active: product.active,
+      }))
+  );
+
+const updateMemoryCatalogCache = (products: Product[]) => {
+  setMemoryCatalogCache(products);
+  emitCatalogCacheUpdated(products);
+};
+
+const updateCatalogCache = (products: Product[]) => {
+  updateMemoryCatalogCache(products);
+  writeSessionCachedProducts(products);
+};
+
+export const refreshProductsMemoryCacheFromSource = async (): Promise<boolean> => {
+  try {
+    const data = await fetchProductsFromSheets({
+      layer: "client-refresh",
+      cacheBust: true,
+    });
+    updateCatalogCache(data);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 export const useProductsStore = ({
   initialProducts,
@@ -28,8 +126,17 @@ export const useProductsStore = ({
 } = {}) => {
   const [products, setProducts] = useState<Product[]>(() => {
     if (cachedProducts && cachedProducts.length > 0) {
+      if (!cachedProductsSignature) {
+        cachedProductsSignature = productSignature(cachedProducts);
+      }
       return cachedProducts;
     }
+
+    if (initialProducts && initialProducts.length > 0) {
+      setMemoryCatalogCache(initialProducts);
+      return initialProducts;
+    }
+
     return initialProducts ?? [];
   });
 
@@ -52,12 +159,53 @@ export const useProductsStore = ({
     sortBy: "newest",
   });
 
-  const loadProducts = useCallback(async () => {
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const syncFromCache = (event: Event) => {
+      const customEvent = event as CustomEvent<{ products?: Product[] }>;
+      const eventProducts = customEvent.detail?.products;
+      const sourceProducts = Array.isArray(eventProducts)
+        ? eventProducts
+        : cachedProducts;
+
+      if (!sourceProducts || sourceProducts.length === 0) return;
+
+      setMemoryCatalogCache(sourceProducts);
+      setProducts([...sourceProducts]);
+      setStatus("success");
+      setErrorMessage(null);
+    };
+
+    window.addEventListener(CATALOG_CACHE_UPDATED_EVENT, syncFromCache);
+    return () => {
+      window.removeEventListener(CATALOG_CACHE_UPDATED_EVENT, syncFromCache);
+    };
+  }, []);
+
+  useEffect(() => {
+    const sessionCachedProducts = readSessionCachedProducts();
+    if (!sessionCachedProducts || sessionCachedProducts.length === 0) return;
+
+    const sessionSignature = productSignature(sessionCachedProducts);
+    if (sessionSignature === cachedProductsSignature) return;
+
+    const hydrateTimer = window.setTimeout(() => {
+      setMemoryCatalogCache(sessionCachedProducts);
+      setProducts([...sessionCachedProducts]);
+      setStatus("success");
+      setErrorMessage(null);
+    }, 0);
+
+    return () => window.clearTimeout(hydrateTimer);
+  }, []);
+
+  const loadProducts = useCallback(async (forceRefresh = false): Promise<boolean> => {
     // if we've already fetched once this session just reuse the data
-    if (cachedProducts && cachedProducts.length > 0) {
+    if (!forceRefresh && cachedProducts && cachedProducts.length > 0) {
       setProducts(cachedProducts);
       setStatus("success");
-      return;
+      return true;
     }
 
     setStatus("loading");
@@ -65,15 +213,21 @@ export const useProductsStore = ({
 
     try {
       const data = await fetchProductsFromSheets({
-        // we've shortened the server TTL so the endpoint runs at most
-        // once per minute. on the client we disable caching too so every
-        // navigation triggers a fresh request.
-        cacheMode: "no-store",
+        layer: "client-refresh",
+        cacheBust: forceRefresh,
       });
 
-      cachedProducts = data;
-      setProducts(data);
+      const nextSignature = productSignature(data);
+      const hasChanged = nextSignature !== cachedProductsSignature;
+
+      updateCatalogCache(data);
+
+      if (hasChanged || status === "error") {
+        setProducts(data);
+      }
+
       setStatus("success");
+      return true;
     } catch (error) {
       if (!isMissingSheetsEndpointError(error)) {
         console.error("Error fetching products:", error);
@@ -86,35 +240,21 @@ export const useProductsStore = ({
           ? error.message
           : "No se pudo cargar el catálogo. Verificá tu conexión e intentá nuevamente.";
       setErrorMessage(message);
+      return false;
     }
-  }, []);
+  }, [status]);
 
-  // fetch on every mount. `loadProducts` itself is smart enough to
-  // bail out early if we already have cached data, so repeated
-  // navigation won't hit the network. but a full page reload resets
-  // the JS state and (crucially) clears `cachedProducts`, which means
-  // this effect will trigger a fresh request to the sheet.
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadProducts();
-    }, 0);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [loadProducts]);
-
-  const getCategories = (): string[] => {
+  const categories = useMemo(() => {
     const cats = new Set<string>();
     products.forEach((p) => {
       if (filters.departament && p.departament !== filters.departament) return;
       if (p.category) cats.add(p.category);
     });
     return Array.from(cats).sort();
-  };
+  }, [products, filters.departament]);
 
-  const applyFilters = (products: Product[]): Product[] => {
-    let filtered = [...products];
+  const applyFilters = useCallback((productsToFilter: Product[]): Product[] => {
+    let filtered = [...productsToFilter];
 
     if (filters.searchTerm) {
       const term = filters.searchTerm.toLowerCase();
@@ -152,42 +292,42 @@ export const useProductsStore = ({
     }
 
     return filtered;
-  };
+  }, [filters]);
 
-  const filteredProducts = applyFilters(products);
+  const filteredProducts = useMemo(() => applyFilters(products), [applyFilters, products]);
 
-  const setSearchTerm = (term: string) => {
+  const setSearchTerm = useCallback((term: string) => {
     setFilters((prev) => ({ ...prev, searchTerm: term }));
-  };
+  }, []);
 
-  const setDepartament = (dep: string | null) => {
+  const setDepartament = useCallback((dep: string | null) => {
     setFilters((prev) => ({ ...prev, departament: dep, category: null }));
-  };
+  }, []);
 
-  const setCategory = (category: string | null) => {
+  const setCategory = useCallback((category: string | null) => {
     setFilters((prev) => ({ ...prev, category }));
-  };
+  }, []);
 
-  const setSortBy = (sort: FilterState["sortBy"]) => {
+  const setSortBy = useCallback((sort: FilterState["sortBy"]) => {
     setFilters((prev) => ({ ...prev, sortBy: sort }));
-  };
+  }, []);
 
-  const clearFilters = () => {
+  const clearFilters = useCallback(() => {
     setFilters({
       searchTerm: "",
       category: null,
       departament: null,
       sortBy: "newest",
     });
-  };
+  }, []);
 
-  const openQuickView = (product: Product) => {
+  const openQuickView = useCallback((product: Product) => {
     setSelectedProduct(product);
-  };
+  }, []);
 
-  const closeQuickView = () => {
+  const closeQuickView = useCallback(() => {
     setSelectedProduct(null);
-  };
+  }, []);
 
   return {
     products: filteredProducts,
@@ -206,6 +346,6 @@ export const useProductsStore = ({
     clearFilters,
     openQuickView,
     closeQuickView,
-    categories: getCategories(),
+    categories,
   } as const;
 };

@@ -14,7 +14,7 @@ export const dynamicParams = true;
 
 export async function generateStaticParams() {
   try {
-    const products = await fetchProductsFromSheets({ cacheMode: "force-cache" });
+    const products = await fetchProductsFromSheets({ layer: "detail" });
     const handles = products
       .map((p) => (p.slug && p.slug.trim() ? p.slug.trim() : String(p.id)))
       .filter((h) => h && h.length > 0);
@@ -71,7 +71,7 @@ export default async function ProductDetailRoute({ params }: Props) {
 
   let product: Product | undefined;
   try {
-    const products = await fetchProductsFromSheets({ cacheMode: "force-cache" });
+    const products = await fetchProductsFromSheets({ layer: "detail" });
     product = findProductBySlugOrId(products, resolvedParams.slug);
   } catch (error) {
     console.error("Error obteniendo producto:", error);

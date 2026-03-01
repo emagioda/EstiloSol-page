@@ -64,14 +64,15 @@ export async function POST(request: NextRequest) {
   }
 
   const items: OrderItem[] = [];
+  const invalidProducts: Array<{ productId: string; name: string }> = [];
   for (const requestedItem of requestedItems) {
     const product = catalog.get(requestedItem.productId);
     if (!product) {
-      await trackBusinessEvent("checkout.preference.invalid_product", {
-        route: "create-preference",
+      invalidProducts.push({
         productId: requestedItem.productId,
+        name: requestedItem.name || requestedItem.productId,
       });
-      return NextResponse.json({ error: `Producto inválido: ${requestedItem.productId}` }, { status: 400 });
+      continue;
     }
 
     items.push({
@@ -81,6 +82,25 @@ export async function POST(request: NextRequest) {
       qty: requestedItem.qty,
       currency: "ARS",
     });
+  }
+
+  if (invalidProducts.length > 0) {
+    const uniqueInvalidProducts = Array.from(
+      new Map(invalidProducts.map((item) => [item.productId, item])).values()
+    );
+    await trackBusinessEvent("checkout.preference.invalid_product", {
+      route: "create-preference",
+      invalidCount: uniqueInvalidProducts.length,
+      invalidProducts: uniqueInvalidProducts.map((item) => item.name),
+    });
+
+    return NextResponse.json(
+      {
+        error: "Estos productos ya no están disponibles. Quitalos del carrito para continuar.",
+        invalidProducts: uniqueInvalidProducts,
+      },
+      { status: 400 }
+    );
   }
 
   const total = Number(items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0).toFixed(2));

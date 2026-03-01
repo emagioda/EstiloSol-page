@@ -22,6 +22,7 @@ export const isMissingSheetsEndpointError = (error: unknown) =>
 
 type FetchProductsOptions = {
   cacheMode?: RequestCache;
+  layer?: "catalog" | "detail" | "checkout-validation" | "client-refresh";
   cacheBust?: boolean;
 };
 
@@ -32,8 +33,10 @@ type FetchProductsOptions = {
 // keeping the endpoint under control.
 
 const withCacheBust = (endpoint: string) => {
-  const separator = endpoint.includes("?") ? "&" : "?";
-  return `${endpoint}${separator}_ts=${Date.now()}`;
+  const url = new URL(endpoint);
+  url.searchParams.set("force", "1");
+  url.searchParams.set("_ts", String(Date.now()));
+  return url.toString();
 };
 
 const getValidProductId = (row: Record<string, unknown>): string | null => {
@@ -174,7 +177,8 @@ async function fetchLocalMock(): Promise<Product[]> {
 }
 
 export const fetchProductsFromSheets = async ({
-  cacheMode = "no-store",
+  cacheMode,
+  layer,
   cacheBust = false,
 }: FetchProductsOptions = {}): Promise<Product[]> => {
   // if the environment variable is not defined we fall back to a bundled
@@ -193,9 +197,40 @@ export const fetchProductsFromSheets = async ({
   }
 
   const requestUrl = cacheBust ? withCacheBust(endpoint) : endpoint;
-  const res = await fetch(requestUrl, {
-    cache: cacheMode ?? "force-cache",
-  });
+
+  const resolvedLayer =
+    layer ??
+    (typeof window === "undefined" ? "catalog" : "client-refresh");
+
+  const profileByLayer: Record<
+    NonNullable<FetchProductsOptions["layer"]>,
+    { cache: RequestCache; revalidate?: number; tags?: string[] }
+  > = {
+    catalog: { cache: "force-cache", revalidate: 60, tags: ["catalog"] },
+    detail: { cache: "force-cache", revalidate: 60, tags: ["catalog", "catalog-detail"] },
+    "checkout-validation": { cache: "no-store" },
+    "client-refresh": { cache: "no-store" },
+  };
+
+  const profile = profileByLayer[resolvedLayer];
+
+  const init: RequestInit & {
+    next?: {
+      revalidate?: number;
+      tags?: string[];
+    };
+  } = {
+    cache: cacheMode ?? profile.cache,
+  };
+
+  if (typeof window === "undefined" && profile.revalidate) {
+    init.next = {
+      revalidate: profile.revalidate,
+      tags: profile.tags,
+    };
+  }
+
+  const res = await fetch(requestUrl, init);
 
   if (!res.ok) {
     throw new Error(`Failed to fetch products: ${res.status}`);

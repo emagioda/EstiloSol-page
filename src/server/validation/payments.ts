@@ -1,6 +1,7 @@
 type CheckoutItemInput = {
   productId?: unknown;
   qty?: unknown;
+  name?: unknown;
 };
 
 type CheckoutBodyInput = {
@@ -15,6 +16,7 @@ type CheckoutBodyInput = {
 export type ParsedCheckoutItem = {
   productId: string;
   qty: number;
+  name?: string;
 };
 
 export type ParsedCheckoutBody = {
@@ -72,8 +74,13 @@ export const parseCheckoutBody = (rawBody: unknown): ValidationResult<ParsedChec
     .map((item) => {
       const productId = sanitizeText(item.productId, 120);
       const qty = normalizeQuantity(item.qty);
+      const name = sanitizeText(item.name, 120);
       if (!productId || !qty) return null;
-      return { productId, qty };
+      return {
+        productId,
+        qty,
+        ...(name ? { name } : {}),
+      };
     })
     .filter((item): item is ParsedCheckoutItem => item !== null);
 

@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/src/config/env";
-import { getBusinessMetricsSnapshot } from "@/src/server/observability/metrics";
+import { getBusinessMetricsSnapshot, getTechnicalMetricsSnapshot } from "@/src/server/observability/metrics";
 
 export const runtime = "nodejs";
 
@@ -26,7 +26,10 @@ export async function GET(request: NextRequest) {
 
   const daysRaw = request.nextUrl.searchParams.get("days");
   const days = Number(daysRaw || "1");
-  const snapshot = await getBusinessMetricsSnapshot(days);
+  const [business, technical] = await Promise.all([
+    getBusinessMetricsSnapshot(days),
+    getTechnicalMetricsSnapshot(days),
+  ]);
 
-  return NextResponse.json({ ok: true, snapshot }, { status: 200 });
+  return NextResponse.json({ ok: true, business, technical }, { status: 200 });
 }

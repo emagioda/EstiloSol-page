@@ -5,10 +5,9 @@ import {
   isMissingSheetsEndpointError,
 } from "@/src/features/shop/infrastructure/data/fetchProducts";
 
-// This page is statically exported for GitHub Pages. it will
-// include whatever catalog was available at build time, but the
-// client bundle will immediately re‑fetch on load so users always see
-// up‑to‑date data when they manually reload.
+// This page can include server-fetched products as initial data.
+// On the client, the store performs a forced refresh only on the first
+// visit of each tab session; subsequent reloads reuse the session cache.
 export default async function TiendaPage() {
   const hasSheetsEndpoint = Boolean(
     process.env.NEXT_PUBLIC_SHEETS_ENDPOINT?.trim()
@@ -17,8 +16,7 @@ export default async function TiendaPage() {
   let staticProducts: Product[] = [];
   if (hasSheetsEndpoint) {
     try {
-      // always request fresh data on each page load
-      staticProducts = await fetchProductsFromSheets({ cacheMode: "force-cache" });
+      staticProducts = await fetchProductsFromSheets({ layer: "catalog" });
     } catch (error) {
       if (!isMissingSheetsEndpointError(error)) {
         console.error("No se pudieron generar handles estáticos de detalle:", error);

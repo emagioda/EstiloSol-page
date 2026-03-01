@@ -1,13 +1,18 @@
 "use client";
-import { useEffect, useState } from "react";
-import { useProductsStore } from "../view-models/useProductsStore";
+import dynamic from "next/dynamic";
+import { useEffect, useRef, useState } from "react";
+import { hasSessionCatalogCache, useProductsStore } from "../view-models/useProductsStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
 import FiltersSidebar from "@/src/features/shop/presentation/components/FiltersSidebar/FiltersSidebar";
 import StoreToolbar from "@/src/features/shop/presentation/components/StoreToolbar/StoreToolbar";
 import LoadingGrid from "@/src/features/shop/presentation/components/LoadingGrid/LoadingGrid";
-import QuickViewModal from "@/src/features/shop/presentation/components/QuickViewModal/QuickViewModal";
 import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
+
+const QuickViewModal = dynamic(
+  () => import("@/src/features/shop/presentation/components/QuickViewModal/QuickViewModal"),
+  { ssr: false }
+);
 
 type TiendaClientViewProps = {
   initialProducts: Product[];
@@ -21,18 +26,25 @@ type CartNotice = {
   message: string;
 };
 
-// el proyecto distingue dos rubros que vienen de la hoja: PELUQUERIA o BIJOUTERIE
-// estos dos objetos sirven para construir los botones grandes al inicio
 const departamentOptions = [
-  { value: "PELUQUERIA", label: "Peluquería", description: "Productos profesionales para cuidar y realzar tu cabello." },
-  { value: "BIJOUTERIE", label: "Bijouterie", description: "Diseños únicos para complementar cada estilo con personalidad." },
+  {
+    value: "PELUQUERIA",
+    label: "Peluquería",
+    description: "Productos profesionales para cuidar y realzar tu cabello.",
+  },
+  {
+    value: "BIJOUTERIE",
+    label: "Bijouterie",
+    description: "Diseños únicos para complementar cada estilo con personalidad.",
+  },
 ];
 
 export default function TiendaClientView({
   initialProducts,
   staticDetailHandles = [],
   storeHeading = "Tienda Híbrida · Estilo y Cuidado",
-  storeDescription = "Comprá Productos Profesionales para peluquería y Diseños Únicos de bijouterie. Elegí tus favoritos y coordinamos el pago por transferencia o efectivo.",
+  storeDescription =
+    "Comprá Productos Profesionales para peluquería y Diseños Únicos de bijouterie. Elegí tus favoritos y coordinamos el pago por transferencia o efectivo.",
 }: TiendaClientViewProps) {
   const {
     products,
@@ -52,15 +64,14 @@ export default function TiendaClientView({
     openQuickView,
     closeQuickView,
   } = useProductsStore({ initialProducts });
+
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedWorld, setSelectedWorld] = useState<string>("PELUQUERIA");
   const [cartNotice, setCartNotice] = useState<CartNotice | null>(null);
+  const hasCheckedFirstVisitRef = useRef(false);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
 
-  // cuando el usuario elige rubro guardamos en el estado local
-  // pero el filtro real se aplica directamente en el store
-
-  const availableCategories = categories; // el hook ya considera departament
+  const availableCategories = categories;
 
   const departamentFilteredProducts = !filters.departament
     ? products
@@ -74,12 +85,20 @@ export default function TiendaClientView({
       })();
 
   useEffect(() => {
+    if (hasCheckedFirstVisitRef.current) return;
+
+    hasCheckedFirstVisitRef.current = true;
+
+    if (!hasSessionCatalogCache()) {
+      void loadProducts(true);
+      return;
+    }
+
     if (status === "idle") {
-      loadProducts();
+      void loadProducts();
     }
   }, [loadProducts, status]);
 
-  // si todavía no hay rubro seleccionado elegimos el que tenga más productos
   useEffect(() => {
     if (filters.departament || products.length === 0) return;
     const counts: Record<string, number> = {};
@@ -137,33 +156,33 @@ export default function TiendaClientView({
               Explorá por rubro
             </p>
             <div className="grid gap-4 md:grid-cols-2">
-            {departamentOptions.map((opt) => {
-              const active = selectedWorld === opt.value;
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => {
-                    setSelectedWorld(opt.value);
-                    setCategory(null);
-                    setDepartament(opt.value);
-                  }}
-                  className={`rounded-2xl border p-5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)] ${
-                    active
-                      ? "border-[var(--brand-gold-400)] bg-white/12 shadow-[0_18px_45px_rgba(0,0,0,0.30)]"
-                      : "border-white/15 bg-white/5 hover:-translate-y-0.5 hover:border-[var(--brand-gold-300)] hover:bg-white/10"
-                  }`}
-                  aria-pressed={active}
-                >
-                  <span className="block text-sm font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)]">
-                    {opt.label}
-                  </span>
-                  <span className="mt-1 block text-sm text-[var(--brand-cream)]/70">
-                    {opt.description}
-                  </span>
-                </button>
-              );
-            })}
+              {departamentOptions.map((opt) => {
+                const active = selectedWorld === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => {
+                      setSelectedWorld(opt.value);
+                      setCategory(null);
+                      setDepartament(opt.value);
+                    }}
+                    className={`rounded-2xl border p-5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)] ${
+                      active
+                        ? "border-[var(--brand-gold-400)] bg-white/12 shadow-[0_18px_45px_rgba(0,0,0,0.30)]"
+                        : "border-white/15 bg-white/5 hover:-translate-y-0.5 hover:border-[var(--brand-gold-300)] hover:bg-white/10"
+                    }`}
+                    aria-pressed={active}
+                  >
+                    <span className="block text-sm font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)]">
+                      {opt.label}
+                    </span>
+                    <span className="mt-1 block text-sm text-[var(--brand-cream)]/70">
+                      {opt.description}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </header>
@@ -205,7 +224,7 @@ export default function TiendaClientView({
                   <button
                     type="button"
                     onClick={() => {
-                      void loadProducts();
+                      void loadProducts(true);
                     }}
                     className="mt-5 inline-flex items-center justify-center rounded-full border border-[var(--brand-gold-300)] px-5 py-2 text-sm font-semibold text-[var(--brand-cream)] transition duration-200 hover:bg-[rgba(255,255,255,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
                   >
@@ -267,7 +286,7 @@ export default function TiendaClientView({
           onClose={closeQuickView}
           onAddFeedback={handleAddFeedback}
         />
-        </div>
+      </div>
     </main>
   );
 }

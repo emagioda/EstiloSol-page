@@ -70,12 +70,18 @@ MP_PENDING_URL=https://tu-dominio.com/tienda
 - Supports `days=1..14` to inspect aggregated checkout/payment events per day.
 - Designed for operational dashboards without storing raw customer PII.
 - Internal alerts route: `/api/ops/alerts` (same token) with automatic warning/critical evaluation.
+- Technical signals are also collected: `LCP`, `INP`, `CLS`, and `client.error` via `/api/observability/vitals`.
 
 ### Post-deploy checks
 
 - Run `npm run ops:postdeploy` after deploy.
 - Optional base URL argument: `npm run ops:postdeploy -- https://tu-dominio.com`
 - Uses `APP_BASE_URL` and `OPS_METRICS_TOKEN` when available.
+
+### CI pipeline
+
+- GitHub Actions workflow: `.github/workflows/ci.yml`.
+- Runs: `lint`, `typecheck`, `build` and `test --if-present` on push/PR.
 
 ### Security operations
 

@@ -1,10 +1,15 @@
 "use client";
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
-export default function ProductCard({
+const ARS_FORMATTER = new Intl.NumberFormat("es-AR", {
+  style: "currency",
+  currency: "ARS",
+});
+
+function ProductCard({
   product,
   onQuickView,
   staticDetailHandles,
@@ -15,10 +20,7 @@ export default function ProductCard({
 }) {
   const formattedPrice =
     typeof product.price === "number" && Number.isFinite(product.price)
-      ? new Intl.NumberFormat("es-AR", {
-          style: "currency",
-          currency: "ARS",
-        }).format(product.price)
+      ? ARS_FORMATTER.format(product.price)
       : "Consultar";
   const hasSheetsEndpoint = Boolean(process.env.NEXT_PUBLIC_SHEETS_ENDPOINT?.trim());
   const detailHref = `/tienda/producto/${product.slug || product.id}`;
@@ -123,3 +125,5 @@ export default function ProductCard({
     </article>
   );
 }
+
+export default memo(ProductCard);
