@@ -1,29 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/src/config/env";
-import { fetchWithPolicy } from "@/src/server/http/fetchWithPolicy";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { getOrder, markApproved, markRejected, updateOrder } from "@/src/server/orders/store";
+import { searchPaymentsByExternalReference } from "@/src/server/payments/mpClient";
+import { REJECTED_PAYMENT_STATUSES, amountMatches } from "@/src/server/payments/shared";
+import type { MpSearchResponse } from "@/src/server/payments/shared";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { parseExternalReference } from "@/src/server/validation/payments";
 
 export const runtime = "nodejs";
-
-type MpSearchResponse = {
-  results?: Array<{
-    id?: string | number;
-    status?: string;
-    external_reference?: string;
-    transaction_amount?: number;
-    currency_id?: string;
-  }>;
-};
-
-const REJECTED_PAYMENT_STATUSES = new Set(["rejected", "cancelled", "charged_back"]);
-
-const amountMatches = (actual: number, expected: number, tolerance = 0.01) => {
-  return Math.abs(actual - expected) <= tolerance;
-};
 
 export async function GET(request: NextRequest) {
   const envStatus = env.validatePaymentsServerEnv();
@@ -74,28 +60,12 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const searchUrl = new URL("https://api.mercadopago.com/v1/payments/search");
-  searchUrl.searchParams.set("external_reference", ref);
-  searchUrl.searchParams.set("sort", "date_created");
-  searchUrl.searchParams.set("criteria", "desc");
-  searchUrl.searchParams.set("limit", "5");
-
   let response: Response;
+  let data: MpSearchResponse | null;
   try {
-    response = await fetchWithPolicy(
-      searchUrl.toString(),
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        cache: "no-store",
-      },
-      {
-        timeoutMs: 8000,
-        retries: 1,
-      }
-    );
+    const result = await searchPaymentsByExternalReference(ref, accessToken);
+    response = result.response;
+    data = result.data;
   } catch (error) {
     logEvent("error", "payments.verify_search_network_error", { externalReference: ref, error });
     await trackBusinessEvent("payment.verify.network_error", { externalReference: ref });
@@ -110,7 +80,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
   }
 
-  const data = (await response.json().catch(() => null)) as MpSearchResponse | null;
   const approvedPayment = data?.results?.find((payment) => {
     const status = String(payment.status || "");
     const externalReference = String(payment.external_reference || "");

@@ -33,4 +33,17 @@ describe("payments validation", () => {
     expect(parseExternalReference("es-123456-abcd").ok).toBe(true);
     expect(parseExternalReference("bad-ref").ok).toBe(false);
   });
+
+  it("requires payer fields when configured", () => {
+    const result = parseCheckoutBody(
+      {
+        items: [{ productId: "abc-1", qty: 1 }],
+      },
+      { requirePayer: true }
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toContain("Completá nombre y WhatsApp");
+  });
 });

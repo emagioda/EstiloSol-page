@@ -23,6 +23,7 @@ const CATALOG_CACHE_UPDATED_EVENT = "es:catalog-cache-updated";
 // network request or a loading spinner.
 let cachedProducts: Product[] | null = null;
 let cachedProductsSignature: string | null = null;
+let catalogPrefetchPromise: Promise<boolean> | null = null;
 
 const setMemoryCatalogCache = (products: Product[]) => {
   cachedProducts = products;
@@ -73,28 +74,28 @@ const writeSessionCachedProducts = (products: Product[]) => {
 };
 
 const productSignature = (products: Product[]): string =>
-  JSON.stringify(
-    [...products]
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .map((product) => ({
-        id: product.id,
-        name: product.name,
-        slug: product.slug,
-        departament: product.departament,
-        category: product.category,
-        price: product.price,
-        currency: product.currency,
-        short_description: product.short_description,
-        description: product.description,
-        images: product.images,
-        tags: product.tags,
-        product_type: product.product_type,
-        includes: product.includes,
-        is_new: product.is_new,
-        is_sale: product.is_sale,
-        active: product.active,
-      }))
-  );
+  [...products]
+    .map((product) => {
+      const imagesCount = Array.isArray(product.images) ? product.images.length : 0;
+      const includesCount = Array.isArray(product.includes) ? product.includes.length : 0;
+      const tagsCount = Array.isArray(product.tags) ? product.tags.length : 0;
+      return [
+        product.id,
+        product.slug ?? "",
+        String(product.price),
+        product.departament ?? "",
+        product.category ?? "",
+        product.product_type ?? "",
+        product.active === false ? "0" : "1",
+        product.is_new ? "1" : "0",
+        product.is_sale ? "1" : "0",
+        String(imagesCount),
+        String(includesCount),
+        String(tagsCount),
+      ].join("|");
+    })
+    .sort()
+    .join("~");
 
 const updateMemoryCatalogCache = (products: Product[]) => {
   setMemoryCatalogCache(products);
@@ -117,6 +118,37 @@ export const refreshProductsMemoryCacheFromSource = async (): Promise<boolean> =
   } catch {
     return false;
   }
+};
+
+export const prefetchProductsCatalogSession = async (): Promise<boolean> => {
+  if (cachedProducts && cachedProducts.length > 0) {
+    return true;
+  }
+
+  const sessionCachedProducts = readSessionCachedProducts();
+  if (sessionCachedProducts && sessionCachedProducts.length > 0) {
+    updateMemoryCatalogCache(sessionCachedProducts);
+    return true;
+  }
+
+  if (catalogPrefetchPromise) {
+    return catalogPrefetchPromise;
+  }
+
+  catalogPrefetchPromise = fetchProductsFromSheets({
+    layer: "client-refresh",
+    cacheBust: false,
+  })
+    .then((data) => {
+      updateCatalogCache(data);
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      catalogPrefetchPromise = null;
+    });
+
+  return catalogPrefetchPromise;
 };
 
 export const useProductsStore = ({
@@ -222,9 +254,12 @@ export const useProductsStore = ({
 
       updateCatalogCache(data);
 
-      if (hasChanged || status === "error") {
-        setProducts(data);
-      }
+      setProducts((prev) => {
+        if (hasChanged || prev.length === 0 || status === "error") {
+          return data;
+        }
+        return prev;
+      });
 
       setStatus("success");
       return true;

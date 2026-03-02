@@ -15,7 +15,7 @@ PAGE-EstiloSol is a lightweight Next.js e-commerce + booking system for a beauty
 
 **Booking Feature:** `ServicePicker.tsx` → `useBooking()` hook → `CreateBooking` use-case → `BookingRepositoryInMemory` → Booking entity stored in memory.
 
-**Shop Feature:** `ProductCard.tsx` → `useCart()` hook → `AddToCart` use-case → `ProductRepositoryInMemory` → Cart entity managed in memory.
+**Shop Feature:** `ProductCard.tsx` / `QuickViewModal.tsx` → `useCart()` hook → `CartProvider` state + localStorage persistence.
 
 **Styling:** All UI colors/fonts sourced from `src/config/brand.ts` — this is the single source of truth. Components reference CSS custom properties set via brandConfig object (e.g., `--brand-violet-950`).
 
@@ -24,16 +24,16 @@ PAGE-EstiloSol is a lightweight Next.js e-commerce + booking system for a beauty
 ### Type Definitions
 - DTOs (data transfer objects) live in `application/dto/` — used for API/use-case boundaries
 - Domain entities live in `domain/entities/` — core business logic containers
-- Value Objects live in `domain/value-objects/` — immutable, identity-less objects (TimeSlot, ProductId, ServiceId, Money)
+- Value Objects live in `domain/value-objects/` — immutable, identity-less objects (TimeSlot, ProductId, ServiceId)
 
 ### Error Handling
 - Use `Result<T>` type: `{ ok: true; value: T } | { ok: false; error: Error }`
 - Throw `DomainError` for domain-level violations (not for HTTP/infrastructure)
-- Example: [Result.ts](src/core/application/result/Result.ts), [DomainError.ts](src/core/domain/errors/DomainError.ts)
+- Example: [Result.ts](../src/core/application/result/Result.ts), [DomainError.ts](../src/core/domain/errors/DomainError.ts)
 
 ### Repositories & In-Memory Storage
-- All data access goes through repository interfaces (BookingRepository, ProductRepository)
-- Current implementation: `*RepositoryInMemory` — mocks for development
+- Booking data access goes through `BookingRepository`.
+- Shop catalog uses `fetchProductsFromSheets` as data source and in-memory/session cache on the client.
 - Mock data is in `infrastructure/data/*.mock.json` (currently empty; use as test fixtures)
 
 ### Component Organization
@@ -59,7 +59,7 @@ npm run lint         # Runs ESLint on all files
 
 ### Routing
 - File-based routing via Next.js App Router: `src/app/` (layout, pages) and `src/app/tienda/`, `src/app/turnos/`
-- Routes currently mapped in `src/config/routes.ts` (empty — can be expanded for type-safe navigation)
+- Routing is handled directly through Next.js App Router files in `app/`.
 
 ### Adding Features
 1. Create feature folder: `src/features/featureName/`
@@ -67,7 +67,7 @@ npm run lint         # Runs ESLint on all files
 3. Add application layer: `application/dto/`, `application/use-cases/`
 4. Implement infrastructure: `infrastructure/repositories/` (in-memory), `infrastructure/data/*.mock.json`
 5. Build presentation: `presentation/components/`, `presentation/pages/`, `presentation/view-models/`
-6. Wire up in DI container: `src/lib/di/container.ts` (currently empty; extend as needed)
+6. Keep wiring explicit through feature hooks/services unless a real DI need appears.
 
 ### TypeScript Config
 - Path alias `@/*` maps to workspace root — use `@/src/config/brand` instead of `../../../config/brand`
@@ -86,6 +86,6 @@ npm run lint         # Runs ESLint on all files
 - ❌ Don't skip DTOs — they decouple domains and applications
 
 ## Testing & Mocking
-- In-memory repositories already provide a test seam — swap `ProductRepositoryInMemory` for a mock in tests
+- The booking in-memory repository provides a simple test seam for booking flows.
 - DTOs validate data shape at boundaries
 - Mock data structure should match feature entities (update `.mock.json` files when entity shape changes)

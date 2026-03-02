@@ -1,7 +1,7 @@
 "use client";
 import Image from "next/image";
 import Link from "next/link";
-import { memo, useMemo } from "react";
+import { memo } from "react";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 const ARS_FORMATTER = new Intl.NumberFormat("es-AR", {
@@ -12,11 +12,11 @@ const ARS_FORMATTER = new Intl.NumberFormat("es-AR", {
 function ProductCard({
   product,
   onQuickView,
-  staticDetailHandles,
+  staticDetailHandleSet,
 }: {
   product: Product;
   onQuickView?: (product: Product) => void;
-  staticDetailHandles?: string[];
+  staticDetailHandleSet?: Set<string>;
 }) {
   const formattedPrice =
     typeof product.price === "number" && Number.isFinite(product.price)
@@ -24,10 +24,9 @@ function ProductCard({
       : "Consultar";
   const hasSheetsEndpoint = Boolean(process.env.NEXT_PUBLIC_SHEETS_ENDPOINT?.trim());
   const detailHref = `/tienda/producto/${product.slug || product.id}`;
-  const staticHandlesSet = useMemo(() => new Set(staticDetailHandles ?? []), [staticDetailHandles]);
   const detailHandle = String(product.slug || product.id);
   const canOpenStaticDetail =
-    hasSheetsEndpoint || staticHandlesSet.size === 0 || staticHandlesSet.has(detailHandle);
+    hasSheetsEndpoint || !staticDetailHandleSet || staticDetailHandleSet.size === 0 || staticDetailHandleSet.has(detailHandle);
 
   const thumb =
     product.images && product.images.length > 0 ? product.images[0] : undefined;

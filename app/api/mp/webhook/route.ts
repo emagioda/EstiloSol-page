@@ -1,10 +1,17 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/src/config/env";
-import { fetchWithPolicy } from "@/src/server/http/fetchWithPolicy";
 import { getJson, setJson } from "@/src/server/kv";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
+import {
+  fetchPaymentByIdFromMp,
+} from "@/src/server/payments/mpClient";
+import { REJECTED_PAYMENT_STATUSES, amountMatches } from "@/src/server/payments/shared";
+import type { MpPaymentResponse } from "@/src/server/payments/shared";
+import {
+  extractWebhookDataId,
+  isValidWebhookSignature,
+} from "@/src/server/payments/webhookSignature";
 import {
   WEBHOOK_DEDUPE_TTL_SECONDS,
   getOrder,
@@ -21,83 +28,6 @@ type MpWebhookPayload = {
   data?: {
     id?: string | number;
   };
-};
-
-type MpPaymentResponse = {
-  id?: string | number;
-  status?: string;
-  external_reference?: string;
-  transaction_amount?: number;
-  currency_id?: string;
-};
-
-const parseSignature = (headerValue: string | null) => {
-  if (!headerValue) return null;
-
-  const parts = headerValue.split(",").map((part) => part.trim());
-  const parsed = Object.fromEntries(
-    parts
-      .map((part) => {
-        const [key, value] = part.split("=");
-        if (!key || !value) return null;
-        return [key.trim(), value.trim()];
-      })
-      .filter((entry): entry is [string, string] => entry !== null)
-  );
-
-  if (!parsed.ts || !parsed.v1) return null;
-  return { ts: parsed.ts, v1: parsed.v1 };
-};
-
-const safeEqualHex = (leftHex: string, rightHex: string) => {
-  const left = Buffer.from(leftHex, "hex");
-  const right = Buffer.from(rightHex, "hex");
-
-  if (left.length !== right.length) return false;
-  return timingSafeEqual(left, right);
-};
-
-const amountMatches = (actual: number, expected: number, tolerance = 0.01) => {
-  return Math.abs(actual - expected) <= tolerance;
-};
-
-const REJECTED_PAYMENT_STATUSES = new Set(["rejected", "cancelled", "charged_back"]);
-
-const toDataId = (request: NextRequest, body: MpWebhookPayload): string => {
-  const queryId = request.nextUrl.searchParams.get("data.id") || request.nextUrl.searchParams.get("id");
-  const bodyId = body.data?.id;
-  const raw = queryId ?? (bodyId !== undefined ? String(bodyId) : "");
-  return raw.trim().toLowerCase();
-};
-
-const fetchMpPayment = async (paymentId: string, accessToken: string): Promise<MpPaymentResponse | null> => {
-  let response: Response;
-  try {
-    response = await fetchWithPolicy(
-      `https://api.mercadopago.com/v1/payments/${encodeURIComponent(paymentId)}`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        cache: "no-store",
-      },
-      {
-        timeoutMs: 8000,
-        retries: 1,
-      }
-    );
-  } catch (error) {
-    logEvent("error", "payments.webhook_payment_network_error", { paymentId, error });
-    return null;
-  }
-
-  if (!response.ok) {
-    logEvent("error", "payments.webhook_payment_fetch_failed", { paymentId, status: response.status });
-    return null;
-  }
-
-  return (await response.json().catch(() => null)) as MpPaymentResponse | null;
 };
 
 export async function POST(request: NextRequest) {
@@ -131,25 +61,26 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "MP_WEBHOOK_SECRET missing" }, { status: 500 });
   }
 
-  const dataIdLower = toDataId(request, body);
+  const dataIdLower = extractWebhookDataId(request, body);
   if (!dataIdLower) {
     await trackBusinessEvent("payment.webhook.no_data_id", { route: "webhook" });
     return NextResponse.json({ received: true }, { status: 200 });
   }
 
   if (webhookSecret) {
-    const xSignature = parseSignature(request.headers.get("x-signature"));
-    const xRequestId = request.headers.get("x-request-id");
+    const signatureCheck = isValidWebhookSignature({
+      secret: webhookSecret,
+      dataIdLower,
+      xRequestId: request.headers.get("x-request-id"),
+      xSignatureHeader: request.headers.get("x-signature"),
+    });
 
-    if (!xSignature || !xRequestId) {
+    if (!signatureCheck.ok && signatureCheck.reason === "missing_headers") {
       await trackBusinessEvent("payment.webhook.missing_signature_headers", { eventId: dataIdLower });
       return NextResponse.json({ error: "Missing webhook signature headers" }, { status: 401 });
     }
 
-    const manifest = `id:${dataIdLower};request-id:${xRequestId};ts:${xSignature.ts};`;
-    const expected = createHmac("sha256", webhookSecret).update(manifest).digest("hex");
-
-    if (!safeEqualHex(expected, xSignature.v1.toLowerCase())) {
+    if (!signatureCheck.ok && signatureCheck.reason === "invalid_signature") {
       await trackBusinessEvent("payment.webhook.invalid_signature", { eventId: dataIdLower });
       return NextResponse.json({ error: "Invalid webhook signature" }, { status: 401 });
     }
@@ -169,8 +100,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ received: true }, { status: 200 });
   }
 
-  const paymentInfo = await fetchMpPayment(paymentId, accessToken);
-  if (!paymentInfo) {
+  let paymentInfo: MpPaymentResponse | null;
+  let paymentResponse: Response;
+  try {
+    const paymentResult = await fetchPaymentByIdFromMp(paymentId, accessToken);
+    paymentResponse = paymentResult.response;
+    paymentInfo = paymentResult.data;
+  } catch (error) {
+    logEvent("error", "payments.webhook_payment_network_error", { paymentId, error });
+    await trackBusinessEvent("payment.webhook.payment_lookup_failed", { paymentId });
+    return NextResponse.json({ received: true }, { status: 200 });
+  }
+
+  if (!paymentResponse.ok || !paymentInfo) {
+    logEvent("error", "payments.webhook_payment_fetch_failed", { paymentId, status: paymentResponse.status });
     await trackBusinessEvent("payment.webhook.payment_lookup_failed", { paymentId });
     return NextResponse.json({ received: true }, { status: 200 });
   }

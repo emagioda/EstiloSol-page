@@ -2,23 +2,17 @@ import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/src/config/env";
 import { getProductsCatalog } from "@/src/server/catalog/getProducts";
-import { fetchWithPolicy } from "@/src/server/http/fetchWithPolicy";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { createOrder, markPreferenceCreated } from "@/src/server/orders/store";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
+import { createPreferenceOnMp } from "@/src/server/payments/mpClient";
+import { buildPreferencePayload, buildPreferenceUrls } from "@/src/server/payments/preferencePayload";
+import type { MpPreferenceResponse } from "@/src/server/payments/shared";
 import { parseCheckoutBody } from "@/src/server/validation/payments";
 import type { Order, OrderItem } from "@/src/server/orders/types";
 
 export const runtime = "nodejs";
-
-type MpPreferenceResponse = {
-  id?: string | number;
-  init_point?: string;
-  sandbox_init_point?: string;
-  message?: string;
-  cause?: unknown;
-};
 
 const RATE_LIMIT_MAX = 20;
 
@@ -43,7 +37,7 @@ export async function POST(request: NextRequest) {
   }
 
   const rawBody = await request.json().catch(() => null);
-  const parsedBody = parseCheckoutBody(rawBody);
+  const parsedBody = parseCheckoutBody(rawBody, { requirePayer: true });
   if (!parsedBody.ok) {
     await trackBusinessEvent("checkout.preference.invalid_input", { route: "create-preference" });
     return NextResponse.json({ error: parsedBody.message }, { status: 400 });
@@ -130,73 +124,33 @@ export async function POST(request: NextRequest) {
   await createOrder(order);
 
   const appBaseUrl = (env.getOptionalServer("APP_BASE_URL") || request.nextUrl.origin).replace(/\/$/, "");
-  const successUrl = (env.getOptionalServer("MP_SUCCESS_URL") || `${appBaseUrl}/tienda/success?ref={EXTERNAL_REFERENCE}`).replace(
-    "{EXTERNAL_REFERENCE}",
-    externalReference
-  );
-  const failureUrl = env.getOptionalServer("MP_FAILURE_URL") || `${appBaseUrl}/tienda`;
-  const pendingUrl = env.getOptionalServer("MP_PENDING_URL") || `${appBaseUrl}/tienda`;
-  const webhookUrl = env.getOptionalServer("MP_WEBHOOK_URL") || `${appBaseUrl}/api/mp/webhook`;
-  const isHttpsSuccessUrl = successUrl.startsWith("https://");
-  const isLocalSuccessUrl =
-    successUrl.startsWith("http://localhost") || successUrl.startsWith("http://127.0.0.1");
-  const shouldUseAutoReturn = isHttpsSuccessUrl || isLocalSuccessUrl;
+  const urls = buildPreferenceUrls({
+    appBaseUrl,
+    externalReference,
+    successUrl: env.getOptionalServer("MP_SUCCESS_URL"),
+    failureUrl: env.getOptionalServer("MP_FAILURE_URL"),
+    pendingUrl: env.getOptionalServer("MP_PENDING_URL"),
+    webhookUrl: env.getOptionalServer("MP_WEBHOOK_URL"),
+  });
 
-  const mpPayload = {
-    items: items.map((item) => ({
-      id: item.productId,
-      title: item.title,
-      quantity: item.qty,
-      unit_price: item.unitPrice,
-      currency_id: "ARS",
-    })),
-    payer: {
-      ...(customerName ? { name: customerName } : {}),
-      ...(customerPhone ? { phone: { number: customerPhone } } : {}),
-    },
-    back_urls: {
-      success: successUrl,
-      failure: failureUrl,
-      pending: pendingUrl,
-    },
-    ...(shouldUseAutoReturn ? { auto_return: "approved" as const } : {}),
-    binary_mode: true,
-    notification_url: webhookUrl,
-    external_reference: externalReference,
-    metadata: {
-      store: "estilo-sol",
-      ...(notes ? { notes } : {}),
-    },
-  };
-
-  const createPreference = async (payload: typeof mpPayload) => {
-    const response = await fetchWithPolicy(
-      "https://api.mercadopago.com/checkout/preferences",
-      {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        "X-Idempotency-Key": externalReference,
-      },
-      body: JSON.stringify(payload),
-      cache: "no-store",
-      },
-      {
-        timeoutMs: 8000,
-        retries: 1,
-      }
-    );
-
-    const data = await response.json().catch(() => null);
-    return { response, data };
-  };
+  const mpPayload = buildPreferencePayload({
+    items,
+    customerName,
+    customerPhone,
+    notes,
+    externalReference,
+    urls,
+    includeAutoReturn: urls.shouldUseAutoReturn,
+  });
 
   let response: Response;
   let data: MpPreferenceResponse | null;
 
   try {
-    const firstAttempt = await createPreference(mpPayload);
+    const firstAttempt = await createPreferenceOnMp(mpPayload, {
+      accessToken,
+      idempotencyKey: externalReference,
+    });
     response = firstAttempt.response;
     data = firstAttempt.data;
   } catch (error) {
@@ -208,11 +162,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No se pudo crear la preferencia de pago" }, { status: 502 });
   }
 
-  if (!response.ok && shouldUseAutoReturn && !isHttpsSuccessUrl) {
-    const mpPayloadWithoutAutoReturn: typeof mpPayload = { ...mpPayload };
+  if (!response.ok && urls.shouldUseAutoReturn && !urls.isHttpsSuccessUrl) {
+    const mpPayloadWithoutAutoReturn = buildPreferencePayload({
+      items,
+      customerName,
+      customerPhone,
+      notes,
+      externalReference,
+      urls,
+      includeAutoReturn: false,
+    });
     delete mpPayloadWithoutAutoReturn.auto_return;
     try {
-      const retryResult = await createPreference(mpPayloadWithoutAutoReturn);
+      const retryResult = await createPreferenceOnMp(mpPayloadWithoutAutoReturn, {
+        accessToken,
+        idempotencyKey: externalReference,
+      });
       response = retryResult.response;
       data = retryResult.data;
     } catch (error) {

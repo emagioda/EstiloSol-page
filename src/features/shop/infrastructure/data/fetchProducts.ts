@@ -106,8 +106,10 @@ const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null =>
     return null;
   }
 
-  // columna active: si existe y es falso, no quiero el producto
-  const active = toBoolean(row.active ?? row.Activo ?? false);
+  // columna active: si no existe, el producto se considera activo para
+  // mantener compatibilidad con catálogos que no incluyen ese campo.
+  const activeField = row.active ?? row.Activo;
+  const active = activeField === undefined ? true : toBoolean(activeField);
   if (!active) {
     return null;
   }

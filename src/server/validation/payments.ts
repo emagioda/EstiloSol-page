@@ -30,6 +30,10 @@ export type ValidationResult<T> =
   | { ok: true; value: T }
   | { ok: false; message: string };
 
+type ParseCheckoutOptions = {
+  requirePayer?: boolean;
+};
+
 const MAX_ITEMS = 30;
 
 const sanitizeText = (value: unknown, maxLength: number) => {
@@ -58,7 +62,10 @@ export const parseExternalReference = (value: string | null): ValidationResult<s
   return { ok: true, value: ref };
 };
 
-export const parseCheckoutBody = (rawBody: unknown): ValidationResult<ParsedCheckoutBody> => {
+export const parseCheckoutBody = (
+  rawBody: unknown,
+  options: ParseCheckoutOptions = {}
+): ValidationResult<ParsedCheckoutBody> => {
   if (!rawBody || typeof rawBody !== "object") {
     return { ok: false, message: "Invalid JSON body" };
   }
@@ -91,6 +98,10 @@ export const parseCheckoutBody = (rawBody: unknown): ValidationResult<ParsedChec
   const payerName = sanitizeText(body.payer?.name, 100);
   const payerPhone = sanitizeText(body.payer?.phone, 30).replace(/[^\d+]/g, "");
   const notes = sanitizeText(body.notes, 250);
+
+  if (options.requirePayer && (!payerName || payerPhone.replace(/\D/g, "").length < 8)) {
+    return { ok: false, message: "Completá nombre y WhatsApp para continuar" };
+  }
 
   return {
     ok: true,

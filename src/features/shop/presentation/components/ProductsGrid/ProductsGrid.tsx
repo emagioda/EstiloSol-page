@@ -1,4 +1,5 @@
 "use client";
+import { useMemo } from "react";
 import ProductCard from "../ProductCard/ProductCard";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
@@ -11,6 +12,11 @@ export default function ProductsGrid({
   onQuickView?: (product: Product) => void;
   staticDetailHandles?: string[];
 }) {
+  const staticDetailHandleSet = useMemo(
+    () => new Set(staticDetailHandles ?? []),
+    [staticDetailHandles]
+  );
+
   if (!products || products.length === 0) {
     return (
       <div className="rounded-2xl border border-white/12 bg-white/6 p-6 py-12 text-center text-[var(--brand-cream)]/80">
@@ -27,7 +33,7 @@ export default function ProductsGrid({
           key={p.id}
           product={p}
           onQuickView={onQuickView}
-          staticDetailHandles={staticDetailHandles}
+          staticDetailHandleSet={staticDetailHandleSet}
         />
       ))}
     </div>
