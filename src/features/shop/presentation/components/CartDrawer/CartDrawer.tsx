@@ -17,17 +17,17 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
+  const [shouldRender, setShouldRender] = useState(open);
+  const [drawerTop, setDrawerTop] = useState(64);
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const confirmCancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const closeAnimationTimerRef = useRef<number | null>(null);
 
   const handleClose = useCallback(() => {
-    setIsClosing(true);
-    setTimeout(() => {
-      onClose();
-      setIsClosing(false);
-    }, 300);
-  }, [onClose]);
+    if (isClosing) return;
+    onClose();
+  }, [isClosing, onClose]);
 
   const subtotal = useMemo(() => items.reduce((s, it) => s + it.unitPrice * it.qty, 0), [items]);
 
@@ -65,16 +65,64 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
     confirmCancelButtonRef.current?.focus();
   }, [confirmClearOpen]);
 
-  if (!open && !isClosing) return null;
+  useEffect(() => {
+    if (open) {
+      if (closeAnimationTimerRef.current) {
+        window.clearTimeout(closeAnimationTimerRef.current);
+        closeAnimationTimerRef.current = null;
+      }
+      setShouldRender(true);
+      if (isClosing) {
+        setIsClosing(false);
+      }
+      return;
+    }
+
+    if (!shouldRender || isClosing) return;
+
+    setIsClosing(true);
+    closeAnimationTimerRef.current = window.setTimeout(() => {
+      setIsClosing(false);
+      setShouldRender(false);
+      closeAnimationTimerRef.current = null;
+    }, 300);
+  }, [open, shouldRender, isClosing]);
+
+  useEffect(() => {
+    return () => {
+      if (closeAnimationTimerRef.current) {
+        window.clearTimeout(closeAnimationTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!open && !shouldRender) return;
+
+    const updateDrawerTop = () => {
+      const navbar = document.getElementById("main-navbar");
+      if (!navbar) return;
+      const height = Math.round(navbar.getBoundingClientRect().height);
+      if (height > 0) {
+        setDrawerTop(height);
+      }
+    };
+
+    updateDrawerTop();
+    window.addEventListener("resize", updateDrawerTop);
+    return () => window.removeEventListener("resize", updateDrawerTop);
+  }, [open, shouldRender]);
+
+  if (!open && !shouldRender) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex">
-      <div className={`fixed inset-0 bg-black/40 ${isClosing ? 'animate-fadeOutBackdrop' : 'animate-fadeInBackdrop'}`} onClick={handleClose} />
+    <div className="fixed inset-x-0 bottom-0 z-[180] flex" style={{ top: drawerTop }}>
+      <div className={`absolute inset-0 bg-black/40 ${isClosing ? 'animate-fadeOutBackdrop' : 'animate-fadeInBackdrop'}`} onClick={handleClose} />
       <aside
         role="dialog"
         aria-modal="true"
         aria-label="Carrito de compras"
-        className={`relative ml-auto flex h-full w-full max-w-sm flex-col bg-[var(--brand-violet-950)] p-4 text-[var(--brand-cream)] shadow-[0_20px_45px_rgba(18,8,35,0.5)] ${isClosing ? 'animate-slideOutDrawer' : 'animate-slideInDrawer'}`}
+        className={`relative ml-auto flex h-full w-full sm:max-w-sm flex-col bg-[var(--brand-violet-950)] p-4 text-[var(--brand-cream)] shadow-[0_20px_45px_rgba(18,8,35,0.5)] ${isClosing ? 'animate-slideOutDrawer' : 'animate-slideInDrawer'}`}
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">

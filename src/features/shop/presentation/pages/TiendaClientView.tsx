@@ -29,13 +29,11 @@ type CartNotice = {
 const departamentOptions = [
   {
     value: "PELUQUERIA",
-    label: "Peluquería",
-    description: "Productos profesionales para cuidar y realzar tu cabello.",
+    label: "PELUQUERÍA",
   },
   {
     value: "BIJOUTERIE",
-    label: "Bijouterie",
-    description: "Diseños únicos para complementar cada estilo con personalidad.",
+    label: "BIJOUTERIE",
   },
 ];
 
@@ -142,20 +140,20 @@ export default function TiendaClientView({
 
   return (
     <main className="min-h-screen bg-[var(--brand-violet-950)]">
-      <div className="mx-auto max-w-7xl px-4 pb-16 pt-10 text-[var(--brand-cream)] md:pt-14">
-        <header className="mb-10">
-          <h1 className="text-4xl font-semibold tracking-wide text-[var(--brand-cream)] md:text-5xl">
+      <div className="mx-auto max-w-7xl px-4 pb-16 pt-4 text-[var(--brand-cream)] md:pt-6">
+        <header className="mb-8 md:mb-10">
+          <h1 className="text-3xl font-semibold leading-tight tracking-wide text-[var(--brand-cream)] sm:text-4xl md:text-5xl">
             {storeHeading}
           </h1>
-          <p className="mt-3 max-w-3xl text-base leading-relaxed text-[var(--brand-cream)]/75 md:text-lg">
+          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-[var(--brand-cream)]/75 sm:text-base md:mt-3 md:max-w-none md:whitespace-nowrap md:text-lg">
             {storeDescription}
           </p>
 
-          <div className="glass-panel mt-6 rounded-3xl border border-white/10 p-5 md:p-6">
-            <p className="mb-3 text-xs uppercase tracking-[0.22em] text-[var(--brand-gold-300)]">
-              Explorá por rubro
+          <div className="glass-panel mt-5 rounded-3xl border border-white/10 p-5 md:p-6">
+            <p className="mb-3 text-center text-xs uppercase tracking-[0.22em] text-[var(--brand-gold-300)]">
+              Tu estilo ideal empieza acá
             </p>
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="flex items-center gap-3">
               {departamentOptions.map((opt) => {
                 const active = selectedWorld === opt.value;
                 return (
@@ -167,18 +165,15 @@ export default function TiendaClientView({
                       setCategory(null);
                       setDepartament(opt.value);
                     }}
-                    className={`rounded-2xl border p-5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)] ${
+                    className={`flex-1 rounded-2xl border px-4 py-3 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)] ${
                       active
-                        ? "border-[var(--brand-gold-400)] bg-white/12 shadow-[0_18px_45px_rgba(0,0,0,0.30)]"
-                        : "border-white/15 bg-white/5 hover:-translate-y-0.5 hover:border-[var(--brand-gold-300)] hover:bg-white/10"
+                        ? "border-[var(--brand-gold-400)] bg-white/12 shadow-[0_14px_30px_rgba(0,0,0,0.25)]"
+                        : "border-white/15 bg-white/5 hover:border-[var(--brand-gold-300)] hover:bg-white/10"
                     }`}
                     aria-pressed={active}
                   >
-                    <span className="block text-sm font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)]">
+                    <span className="block text-xs font-semibold uppercase tracking-[0.18em] text-[var(--brand-cream)] sm:text-sm">
                       {opt.label}
-                    </span>
-                    <span className="mt-1 block text-sm text-[var(--brand-cream)]/70">
-                      {opt.description}
                     </span>
                   </button>
                 );
@@ -208,7 +203,6 @@ export default function TiendaClientView({
                 searchTerm={filters.searchTerm}
                 onSearchChange={setSearchTerm}
                 onFiltersClick={() => setFiltersOpen(true)}
-                productCount={departamentFilteredProducts.length}
               />
 
               {loading ? (

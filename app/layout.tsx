@@ -1,24 +1,23 @@
 import type { Metadata } from "next";
-import { Geist_Mono, Parisienne, Playfair_Display } from "next/font/google";
+import { Geist_Mono, Lora } from "next/font/google";
 import "./globals.css";
 import brandConfig from "@/src/config/brand";
 import Navbar from "@/src/core/presentation/components/Navbar/Navbar";
 import { CartDrawerProvider } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import { CartProvider } from "@/src/features/shop/presentation/view-models/useCartStore";
-import FloatingCartButton from "@/src/features/shop/presentation/components/FloatingCartButton/FloatingCartButton";
 import { CartBadgeVisibilityProvider } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
 import WebVitalsReporter from "@/src/core/presentation/components/WebVitalsReporter";
 
-const brandDisplay = Parisienne({
+const brandDisplay = Lora({
   variable: "--font-brand-display",
   subsets: ["latin"],
-  weight: ["400"],
+  weight: ["500", "600", "700"],
 });
 
-const brandBody = Playfair_Display({
+const brandBody = Lora({
   variable: "--font-brand-body",
   subsets: ["latin"],
-  weight: ["400", "600"],
+  weight: ["400", "500", "600", "700"],
 });
 
 const geistMono = Geist_Mono({
@@ -61,9 +60,8 @@ export default function RootLayout({
           <CartDrawerProvider>
             <CartBadgeVisibilityProvider>
               <Navbar />
-              <FloatingCartButton />
               <WebVitalsReporter />
-              {children}
+              <div className="pt-20 md:pt-24">{children}</div>
             </CartBadgeVisibilityProvider>
           </CartDrawerProvider>
         </CartProvider>
