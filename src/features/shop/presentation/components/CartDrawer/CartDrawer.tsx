@@ -122,7 +122,7 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
         role="dialog"
         aria-modal="true"
         aria-label="Carrito de compras"
-        className={`relative ml-auto flex h-full w-full sm:max-w-sm flex-col bg-[var(--brand-violet-950)] p-4 text-[var(--brand-cream)] shadow-[0_20px_45px_rgba(18,8,35,0.5)] ${isClosing ? 'animate-slideOutDrawer' : 'animate-slideInDrawer'}`}
+        className={`relative ml-auto flex h-full w-full flex-col bg-[var(--brand-violet-950)] p-4 pb-[calc(1rem+var(--safe-area-bottom))] text-[var(--brand-cream)] shadow-[0_20px_45px_rgba(18,8,35,0.5)] sm:max-w-sm ${isClosing ? 'animate-slideOutDrawer' : 'animate-slideInDrawer'}`}
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -184,7 +184,7 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
           ))}
         </div>
 
-        <div className="sticky bottom-0 mt-4 rounded-2xl border border-[var(--brand-gold-300)]/35 bg-[var(--brand-violet-900)]/90 p-4 shadow-[0_14px_30px_rgba(18,8,35,0.35)] backdrop-blur">
+        <div className="sticky bottom-[var(--safe-area-bottom)] mt-4 rounded-2xl border border-[var(--brand-gold-300)]/35 bg-[var(--brand-violet-900)]/90 p-4 shadow-[0_14px_30px_rgba(18,8,35,0.35)] backdrop-blur">
           <div className="flex items-end justify-between gap-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.12em] text-[var(--brand-cream)]/70">Total a pagar</p>

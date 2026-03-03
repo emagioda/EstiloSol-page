@@ -13,6 +13,7 @@ export type BrandSection = {
   title: string;
   subtitle: string;
   image: BrandImage;
+  imagePositionClassName?: string;
   ctaLabel: string;
   ctaHref: string;
 };
@@ -35,7 +36,7 @@ export const brandConfig = {
     { label: "Nosotros", href: "/#nosotros" },
     { label: "Servicios", href: "/#servicios" },
     { label: "Tienda", href: "/tienda" },
-    { label: "Contacto", href: "/#contacto" },
+    { label: "Contacto", href: "/contacto" },
   ] as BrandLink[],
   palette: {
     violet: {
@@ -60,24 +61,26 @@ export const brandConfig = {
   },
   heroLeft: {
     title: "Estilo y Cuidado Profesional",
-    subtitle: "Reservá tu turno y potenciá tu look con expertos",
+    subtitle: "Reservá tu turno en minutos y recibí atención experta para potenciar tu look.",
     image: {
-      src: "/home/turnos.jpg",
+      src: "/home/turnos-placeholder.webp",
       alt: "Turno de peluquería en Estilo Sol",
-      isAvailable: false,
+      isAvailable: true,
     },
-    ctaLabel: "Reservar Turno",
+    imagePositionClassName: "bg-[position:center_28%] sm:bg-[position:center_24%] md:bg-center",
+    ctaLabel: "Reservar turno ahora",
     ctaHref: "/turnos",
   } as BrandSection,
   heroRight: {
     title: "Productos Profesionales y Diseños Únicos",
-    subtitle: "Descubrí tus favoritos para mimarte: belleza y detalles que enamoran",
+    subtitle: "Descubrí productos de peluquería y bijouterie seleccionados para mimarte todos los días.",
     image: {
-      src: "/home/tienda.jpg",
+      src: "/home/tienda-placeholder.webp",
       alt: "Accesorios disponibles en Estilo Sol",
-      isAvailable: false,
+      isAvailable: true,
     },
-    ctaLabel: "Ir a la Tienda",
+    imagePositionClassName: "bg-[position:center_42%] sm:bg-center md:bg-center",
+    ctaLabel: "Comprar en la tienda",
     ctaHref: "/tienda",
   } as BrandSection,
   assetsDecorativos: {

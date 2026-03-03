@@ -106,7 +106,7 @@ export default function QuickViewModal({
   return (
     <>
       <div
-        className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm transition-opacity duration-300"
+        className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4 pb-[calc(1rem+var(--safe-area-bottom))] pt-[calc(1rem+var(--safe-area-top))] backdrop-blur-sm transition-opacity duration-300"
         role="dialog"
         aria-modal="true"
         aria-label={`Vista rápida de ${product.name}`}

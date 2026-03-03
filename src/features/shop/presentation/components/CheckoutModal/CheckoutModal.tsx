@@ -258,7 +258,7 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
   };
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center">
+    <div className="fixed inset-0 z-60 flex items-center justify-center px-4 pb-[calc(1rem+var(--safe-area-bottom))] pt-[calc(1rem+var(--safe-area-top))]">
       <div className="fixed inset-0 bg-black/60" onClick={onClose} />
       <div
         role="dialog"

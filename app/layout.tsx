@@ -3,6 +3,7 @@ import { Geist_Mono, Lora } from "next/font/google";
 import "./globals.css";
 import brandConfig from "@/src/config/brand";
 import Navbar from "@/src/core/presentation/components/Navbar/Navbar";
+import GlobalFooter from "@/src/core/presentation/components/GlobalFooter/GlobalFooter";
 import { CartDrawerProvider } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import { CartProvider } from "@/src/features/shop/presentation/view-models/useCartStore";
 import { CartBadgeVisibilityProvider } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
@@ -39,6 +40,11 @@ export default function RootLayout({
   const { palette } = brandConfig;
 
   const cssVars = `:root {
+    --safe-area-top: env(safe-area-inset-top, 0px);
+    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --header-height-mobile-base: 56px;
+    --header-height-mobile: calc(var(--header-height-mobile-base) + var(--safe-area-top));
+    --header-height-desktop: 72px;
     --brand-violet-950: ${palette.violet.deepest};
     --brand-violet-900: ${palette.violet.deep};
     --brand-violet-800: ${palette.violet.base};
@@ -54,14 +60,17 @@ export default function RootLayout({
 
   return (
     <html lang="es">
-      <body className={`${brandDisplay.variable} ${brandBody.variable} ${geistMono.variable} antialiased bg-[var(--brand-violet-950)]`}>
+      <body className={`${brandDisplay.variable} ${brandBody.variable} ${geistMono.variable} min-h-screen antialiased bg-[var(--brand-violet-950)]`}>
         <style dangerouslySetInnerHTML={{ __html: cssVars }} />
         <CartProvider>
           <CartDrawerProvider>
             <CartBadgeVisibilityProvider>
-              <Navbar />
-              <WebVitalsReporter />
-              <div className="pt-20 md:pt-24">{children}</div>
+              <div className="flex min-h-screen flex-col">
+                <Navbar />
+                <WebVitalsReporter />
+                <div className="flex min-h-0 flex-1 flex-col pt-[var(--header-height-mobile)] md:pt-[var(--header-height-desktop)]">{children}</div>
+                <GlobalFooter />
+              </div>
             </CartBadgeVisibilityProvider>
           </CartDrawerProvider>
         </CartProvider>

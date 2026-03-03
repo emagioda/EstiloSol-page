@@ -14,57 +14,6 @@
   --space-card-content-gap: 0.875rem;
 }
 
-.sparkle-bg {
-  position: relative;
-  background: radial-gradient(
-      circle at 20% 20%,
-      rgba(255, 240, 210, 0.15),
-      transparent 45%
-    ),
-    radial-gradient(
-      circle at 80% 20%,
-      rgba(255, 220, 200, 0.2),
-      transparent 40%
-    ),
-    radial-gradient(
-      circle at 50% 80%,
-      rgba(255, 255, 255, 0.15),
-      transparent 45%
-    ),
-    linear-gradient(
-      180deg,
-      var(--brand-violet-900),
-      var(--brand-violet-950)
-    );
-  overflow: hidden;
-}
-
-.sparkle-bg::before,
-.sparkle-bg::after {
-  content: "";
-  position: absolute;
-  inset: -20% 0 0 0;
-  pointer-events: none;
-  background: radial-gradient(
-      circle,
-      rgba(255, 232, 170, 0.2) 0%,
-      rgba(255, 232, 170, 0) 55%
-    )
-    0 0 / 120px 120px;
-  opacity: 0.7;
-  mix-blend-mode: screen;
-}
-
-.sparkle-bg::after {
-  background: radial-gradient(
-      circle,
-      rgba(255, 255, 255, 0.25) 0%,
-      rgba(255, 255, 255, 0) 60%
-    )
-    40px 20px / 160px 160px;
-  opacity: 0.5;
-}
-
 .glass-panel {
   background: linear-gradient(
     135deg,

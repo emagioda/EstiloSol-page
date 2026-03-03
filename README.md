@@ -87,6 +87,31 @@ MP_PENDING_URL=https://tu-dominio.com/tienda
 
 - See [SECURITY_OPERATIONS.md](SECURITY_OPERATIONS.md) for secret rotation and privacy runbook.
 
+## Contact Form (Email)
+
+The `/contacto` page includes a form with:
+
+- Nombre
+- Teléfono
+- Email
+- Mensaje
+
+Submission is handled securely by the backend route `/api/contact`.
+Recommended provider: **Resend** (server-side, no public API keys exposed in the client).
+
+Add these variables to `.env.local`:
+
+```bash
+RESEND_API_KEY=re_xxx
+CONTACT_TO_EMAIL=tu-email-destino@dominio.com
+CONTACT_FROM_EMAIL="Estilo Sol <onboarding@resend.dev>"
+```
+
+Notes:
+
+- `CONTACT_FROM_EMAIL` can use `onboarding@resend.dev` for initial testing.
+- For production delivery, use a verified domain/sender in Resend.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

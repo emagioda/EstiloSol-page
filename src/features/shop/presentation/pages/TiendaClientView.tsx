@@ -70,6 +70,10 @@ export default function TiendaClientView({
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
 
   const availableCategories = categories;
+  const selectedWorldIndex = Math.max(
+    departamentOptions.findIndex((option) => option.value === selectedWorld),
+    0
+  );
 
   const departamentFilteredProducts = !filters.departament
     ? products
@@ -141,19 +145,24 @@ export default function TiendaClientView({
   return (
     <main className="min-h-screen bg-[var(--brand-violet-950)]">
       <div className="mx-auto max-w-7xl px-4 pb-16 pt-4 text-[var(--brand-cream)] md:pt-6">
-        <header className="mb-8 md:mb-10">
+        <header className="mb-8 text-center md:mb-10">
           <h1 className="text-3xl font-semibold leading-tight tracking-wide text-[var(--brand-cream)] sm:text-4xl md:text-5xl">
             {storeHeading}
           </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-[var(--brand-cream)]/75 sm:text-base md:mt-3 md:max-w-none md:whitespace-nowrap md:text-lg">
+          <p className="mx-auto mt-2 max-w-3xl text-sm leading-relaxed text-[var(--brand-cream)]/75 sm:text-base md:mt-3 md:max-w-none md:whitespace-nowrap md:text-lg">
             {storeDescription}
           </p>
 
-          <div className="glass-panel mt-5 rounded-3xl border border-white/10 p-5 md:p-6">
-            <p className="mb-3 text-center text-xs uppercase tracking-[0.22em] text-[var(--brand-gold-300)]">
+          <div className="glass-panel mt-5 mx-auto w-full max-w-4xl rounded-2xl border border-white/10 p-4 md:p-4">
+            <p className="mb-2 text-center text-xs uppercase tracking-[0.18em] text-[var(--brand-gold-300)] sm:text-sm">
               Tu estilo ideal empieza acá
             </p>
-            <div className="flex items-center gap-3">
+            <div className="relative mx-auto grid w-full max-w-2xl grid-cols-2 rounded-full border border-white/15 bg-[var(--brand-violet-950)]/35 p-1">
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute bottom-1 left-1 top-1 w-[calc(50%-0.25rem)] rounded-full border border-[var(--brand-gold-400)] bg-white/12 shadow-[0_6px_14px_rgba(0,0,0,0.18)] transition-transform duration-300 ease-out"
+                style={{ transform: `translateX(${selectedWorldIndex * 100}%)` }}
+              />
               {departamentOptions.map((opt) => {
                 const active = selectedWorld === opt.value;
                 return (
@@ -165,14 +174,16 @@ export default function TiendaClientView({
                       setCategory(null);
                       setDepartament(opt.value);
                     }}
-                    className={`flex-1 rounded-2xl border px-4 py-3 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)] ${
-                      active
-                        ? "border-[var(--brand-gold-400)] bg-white/12 shadow-[0_14px_30px_rgba(0,0,0,0.25)]"
-                        : "border-white/15 bg-white/5 hover:border-[var(--brand-gold-300)] hover:bg-white/10"
-                    }`}
+                    className="relative z-10 rounded-full border border-transparent px-4 py-2 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                     aria-pressed={active}
                   >
-                    <span className="block text-xs font-semibold uppercase tracking-[0.18em] text-[var(--brand-cream)] sm:text-sm">
+                    <span
+                      className={`block text-[11px] font-semibold uppercase tracking-[0.16em] sm:text-sm ${
+                        active
+                          ? "text-[var(--brand-cream)]"
+                          : "text-[var(--brand-cream)]/80"
+                      }`}
+                    >
                       {opt.label}
                     </span>
                   </button>

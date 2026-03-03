@@ -23,6 +23,8 @@ export default function Navbar() {
   const pathnameSegments = (pathname ?? "").split("/").filter(Boolean);
   const isTienda = pathnameSegments.includes("tienda");
   const isHome = (pathname ?? "/") === "/";
+  const isContacto = pathnameSegments.includes("contacto");
+  const isHomeStyle = isHome || isContacto;
   const mobileRightLinks = isTienda ? [] : mobileLinks.slice(1);
   const cartCount = items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
   const cartTotal = items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0);
@@ -50,11 +52,13 @@ export default function Navbar() {
   );
 
   return (
-    <header className="fixed inset-x-0 top-0 z-[200] w-full">
-      <nav id="main-navbar" className="backdrop-blur-sm bg-[rgba(58,31,95,0.75)] border-b border-[var(--brand-gold-400)]/60">
+    <header id="main-navbar" className="fixed inset-x-0 top-0 z-[200] w-full bg-[var(--brand-violet-500)] pt-[var(--safe-area-top)]">
+      <nav
+        className="h-[var(--header-height-mobile-base)] border-b border-[var(--brand-gold-400)] md:h-[var(--header-height-desktop)]"
+      >
         <div
-          className={`mx-auto flex w-full items-center justify-between gap-6 px-4 py-3 md:pl-8 ${
-            isHome ? "md:pr-8" : "md:pr-0"
+          className={`mx-auto flex h-full w-full items-center justify-between gap-6 px-4 md:pl-8 ${
+            isHomeStyle ? "md:pr-8" : "md:pr-0"
           }`}
         >
           {/* Mobile: Left links */}
@@ -94,7 +98,7 @@ export default function Navbar() {
                   >
                     {brandName}
                   </span>
-                  <span className="hidden text-[10px] uppercase tracking-[0.2em] text-[var(--brand-cream)]/80 md:block">
+                  <span className="hidden text-[10px] uppercase tracking-[0.2em] text-[var(--brand-cream)] md:block">
                     Estilo y Cuidado
                   </span>
                 </div>
@@ -116,7 +120,7 @@ export default function Navbar() {
             {isTienda && (
                 <button
                   onClick={() => setCartOpen(!isCartOpen)}
-                  className="relative ml-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--brand-gold-300)]/45 bg-[var(--brand-violet-900)]/85 text-[var(--brand-cream)] shadow-[0_10px_24px_rgba(18,8,35,0.35)] transition hover:border-[var(--brand-gold-300)] hover:text-[var(--brand-gold-300)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                  className="relative ml-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--brand-gold-300)] bg-[var(--brand-violet-900)] text-[var(--brand-cream)] transition hover:border-[var(--brand-gold-300)] hover:text-[var(--brand-gold-300)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
                   aria-label={isCartOpen ? "Cerrar carrito" : "Abrir carrito"}
                 >
                   {cartIcon}
@@ -138,7 +142,7 @@ export default function Navbar() {
             ))}
             {isTienda && (
               <div className="-mr-5 flex items-center gap-2.5 pl-1">
-                <span aria-hidden className="h-5 w-px rounded-full bg-[var(--brand-gold-300)]/45" />
+                <span aria-hidden className="h-5 w-px rounded-full bg-[var(--brand-gold-300)]" />
                 <button
                   onClick={() => setCartOpen(!isCartOpen)}
                   className="relative inline-flex items-center gap-2 text-[var(--brand-cream)] transition hover:text-[var(--brand-gold-300)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"

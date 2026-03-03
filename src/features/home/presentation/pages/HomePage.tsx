@@ -3,7 +3,7 @@ import HomeCatalogPrefetch from "@/src/features/home/presentation/components/Hom
 
 export default function HomePage() {
   return (
-    <>
+    <div className="flex flex-1 flex-col">
       <HomeCatalogPrefetch />
       <div className="sr-only">
         <h1>Estilo Sol | Estilo y Cuidado</h1>
@@ -13,6 +13,6 @@ export default function HomePage() {
         </p>
       </div>
       <HomeSplit />
-    </>
+    </div>
   );
 }
