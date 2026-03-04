@@ -1,4 +1,5 @@
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import { Suspense } from "react";
 import TiendaClientView from "./TiendaClientView";
 import {
   fetchProductsFromSheets,
@@ -29,9 +30,15 @@ export default async function TiendaPage() {
     .filter(Boolean);
 
   return (
-    <TiendaClientView
-      initialProducts={staticProducts}
-      staticDetailHandles={staticDetailHandles}
-    />
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-[var(--brand-violet-950)]" aria-busy="true" />
+      }
+    >
+      <TiendaClientView
+        initialProducts={staticProducts}
+        staticDetailHandles={staticDetailHandles}
+      />
+    </Suspense>
   );
 }
