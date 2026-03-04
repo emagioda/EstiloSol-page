@@ -66,6 +66,21 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
   }, [confirmClearOpen]);
 
   useEffect(() => {
+    if (!checkoutOpen) return;
+
+    window.history.pushState({ ...(window.history.state ?? {}), shopCheckoutOpen: true }, "", window.location.href);
+
+    const handlePopState = () => {
+      setCheckoutOpen(false);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [checkoutOpen]);
+
+  useEffect(() => {
     if (open) {
       if (closeAnimationTimerRef.current) {
         window.clearTimeout(closeAnimationTimerRef.current);

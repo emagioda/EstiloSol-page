@@ -12,6 +12,10 @@
   --brand-cream: #f8f1ff;
   --space-card-padding: 1rem;
   --space-card-content-gap: 0.875rem;
+  --drawer-open-duration: 320ms;
+  --drawer-close-duration: 240ms;
+  --drawer-open-ease: ease-out;
+  --drawer-close-ease: ease-in;
 }
 
 .glass-panel {
@@ -162,7 +166,7 @@
 }
 
 .animate-slideInDrawer {
-  animation: slideInDrawer 400ms ease-out forwards;
+  animation: slideInDrawer var(--drawer-open-duration) var(--drawer-open-ease) forwards;
 }
 
 .animate-fadeInBackdrop {
@@ -190,11 +194,41 @@
 }
 
 .animate-slideOutDrawer {
-  animation: slideOutDrawer 300ms ease-in forwards;
+  animation: slideOutDrawer var(--drawer-close-duration) var(--drawer-close-ease) forwards;
+}
+
+@keyframes slideInDrawerLeft {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideOutDrawerLeft {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+}
+
+.animate-slideInDrawerLeft {
+  animation: slideInDrawerLeft var(--drawer-open-duration) var(--drawer-open-ease) forwards;
+}
+
+.animate-slideOutDrawerLeft {
+  animation: slideOutDrawerLeft var(--drawer-close-duration) var(--drawer-close-ease) forwards;
 }
 
 .animate-fadeOutBackdrop {
-  animation: fadeOutBackdrop 300ms ease-in forwards;
+  animation: fadeOutBackdrop var(--drawer-close-duration) var(--drawer-close-ease) forwards;
 }
 
 @keyframes fadeInSoft {

@@ -65,9 +65,12 @@ export default function TiendaClientView({
   } = useProductsStore({ initialProducts });
 
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filtersShouldRender, setFiltersShouldRender] = useState(false);
+  const [filtersClosing, setFiltersClosing] = useState(false);
   const [selectedWorld, setSelectedWorld] = useState<string>("PELUQUERIA");
   const [cartNotice, setCartNotice] = useState<CartNotice | null>(null);
   const hasCheckedFirstVisitRef = useRef(false);
+  const filtersCloseTimerRef = useRef<number | null>(null);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
 
   const availableCategories = categories;
@@ -133,6 +136,65 @@ export default function TiendaClientView({
     const timer = window.setTimeout(() => setCartNotice(null), 2600);
     return () => window.clearTimeout(timer);
   }, [cartNotice]);
+
+  useEffect(() => {
+    if (filtersOpen) {
+      if (filtersCloseTimerRef.current !== null) {
+        window.clearTimeout(filtersCloseTimerRef.current);
+        filtersCloseTimerRef.current = null;
+      }
+      setFiltersShouldRender(true);
+      setFiltersClosing(false);
+      return;
+    }
+
+    if (!filtersShouldRender || filtersClosing) return;
+
+    setFiltersClosing(true);
+    filtersCloseTimerRef.current = window.setTimeout(() => {
+      setFiltersClosing(false);
+      setFiltersShouldRender(false);
+      filtersCloseTimerRef.current = null;
+    }, 300);
+  }, [filtersOpen, filtersShouldRender, filtersClosing]);
+
+  useEffect(() => {
+    return () => {
+      if (filtersCloseTimerRef.current !== null) {
+        window.clearTimeout(filtersCloseTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isQuickViewOpen) return;
+
+    window.history.pushState({ ...(window.history.state ?? {}), shopQuickViewOpen: true }, "", window.location.href);
+
+    const handlePopState = () => {
+      closeQuickView();
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [isQuickViewOpen, closeQuickView]);
+
+  useEffect(() => {
+    if (!filtersOpen) return;
+
+    window.history.pushState({ ...(window.history.state ?? {}), shopFiltersOpen: true }, "", window.location.href);
+
+    const handlePopState = () => {
+      setFiltersOpen(false);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [filtersOpen]);
 
   const handleAddFeedback = ({ ok, name }: { ok: boolean; name: string }) => {
     setCartNotice({
@@ -273,7 +335,7 @@ export default function TiendaClientView({
           </div>
         )}
 
-        {filtersOpen && (
+        {filtersShouldRender && (
           <div className="fixed inset-0 z-50 md:hidden">
             <FiltersSidebar
               categories={availableCategories}
@@ -285,7 +347,7 @@ export default function TiendaClientView({
                 sort: setSortBy,
               }}
               onClearFilters={clearFilters}
-              isOpen={filtersOpen}
+              isOpen={!filtersClosing}
               onClose={() => setFiltersOpen(false)}
             />
           </div>

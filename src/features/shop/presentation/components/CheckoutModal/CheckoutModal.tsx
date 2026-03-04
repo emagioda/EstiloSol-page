@@ -67,6 +67,15 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
 
   useEffect(() => {
     if (!open) return;
+
+    document.body.classList.add("shop-modal-open");
+    return () => {
+      document.body.classList.remove("shop-modal-open");
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     if (items.length === 0) return;
 
     if (prevalidationDebounceRef.current !== null) {

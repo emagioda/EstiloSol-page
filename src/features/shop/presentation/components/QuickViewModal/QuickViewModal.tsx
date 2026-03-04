@@ -74,6 +74,15 @@ export default function QuickViewModal({
   useEffect(() => {
     if (!open) return;
 
+    document.body.classList.add("shop-modal-open");
+    return () => {
+      document.body.classList.remove("shop-modal-open");
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+
     closeButtonRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {

@@ -41,3 +41,8 @@ select,
 button {
   font-weight: 400;
 }
+
+body.shop-modal-open #main-navbar {
+  opacity: 0;
+  pointer-events: none;
+}
