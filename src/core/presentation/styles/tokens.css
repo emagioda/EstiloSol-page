@@ -231,6 +231,36 @@
   animation: fadeOutBackdrop var(--drawer-close-duration) var(--drawer-close-ease) forwards;
 }
 
+@keyframes slideInSheetUp {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideOutSheetDown {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+.animate-slideInSheetUp {
+  animation: slideInSheetUp var(--drawer-open-duration) var(--drawer-open-ease) forwards;
+}
+
+.animate-slideOutSheetDown {
+  animation: slideOutSheetDown var(--drawer-close-duration) var(--drawer-close-ease) forwards;
+}
+
 @keyframes fadeInSoft {
   from {
     opacity: 0;

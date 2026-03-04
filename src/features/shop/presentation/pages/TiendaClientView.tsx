@@ -26,6 +26,14 @@ type CartNotice = {
   message: string;
 };
 
+const sortOptions = [
+  { value: "newest" as const, label: "Más recientes" },
+  { value: "price-asc" as const, label: "Menor precio" },
+  { value: "price-desc" as const, label: "Mayor precio" },
+  { value: "name-asc" as const, label: "A - Z" },
+  { value: "name-desc" as const, label: "Z - A" },
+];
+
 const departamentOptions = [
   {
     value: "PELUQUERIA",
@@ -80,11 +88,17 @@ export default function TiendaClientView({
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filtersShouldRender, setFiltersShouldRender] = useState(false);
   const [filtersClosing, setFiltersClosing] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
+  const [sortShouldRender, setSortShouldRender] = useState(false);
+  const [sortClosing, setSortClosing] = useState(false);
   const [cartNotice, setCartNotice] = useState<CartNotice | null>(null);
   const hasCheckedFirstVisitRef = useRef(false);
   const filtersCloseTimerRef = useRef<number | null>(null);
+  const sortCloseTimerRef = useRef<number | null>(null);
   const filtersOpenRef = useRef(false);
   const filtersShouldRenderRef = useRef(false);
+  const sortOpenRef = useRef(false);
+  const introBlockRef = useRef<HTMLDivElement | null>(null);
   const hasInitializedFromQueryRef = useRef(false);
   const skipNextUrlSyncRef = useRef(false);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
@@ -102,6 +116,27 @@ export default function TiendaClientView({
       typeof p.departament === "string" &&
       p.departament.toLowerCase() === selectedWorld.toLowerCase()
   );
+
+  const activeFilterChips = [
+    ...(filters.category
+      ? [
+          {
+            key: "category",
+            label: filters.category,
+            onRemove: () => setCategory(null),
+          },
+        ]
+      : []),
+    ...(filters.searchTerm.trim()
+      ? [
+          {
+            key: "search",
+            label: filters.searchTerm.trim(),
+            onRemove: () => setSearchTerm(""),
+          },
+        ]
+      : []),
+  ];
 
   useEffect(() => {
     if (hasCheckedFirstVisitRef.current) return;
@@ -158,9 +193,37 @@ export default function TiendaClientView({
   }, [filtersOpen, filtersShouldRender, filtersClosing]);
 
   useEffect(() => {
+    sortOpenRef.current = sortOpen;
+  }, [sortOpen]);
+
+  useEffect(() => {
+    if (sortOpen) {
+      if (sortCloseTimerRef.current !== null) {
+        window.clearTimeout(sortCloseTimerRef.current);
+        sortCloseTimerRef.current = null;
+      }
+      setSortShouldRender(true);
+      setSortClosing(false);
+      return;
+    }
+
+    if (!sortShouldRender || sortClosing) return;
+
+    setSortClosing(true);
+    sortCloseTimerRef.current = window.setTimeout(() => {
+      setSortClosing(false);
+      setSortShouldRender(false);
+      sortCloseTimerRef.current = null;
+    }, 300);
+  }, [sortOpen, sortShouldRender, sortClosing]);
+
+  useEffect(() => {
     return () => {
       if (filtersCloseTimerRef.current !== null) {
         window.clearTimeout(filtersCloseTimerRef.current);
+      }
+      if (sortCloseTimerRef.current !== null) {
+        window.clearTimeout(sortCloseTimerRef.current);
       }
     };
   }, []);
@@ -196,7 +259,26 @@ export default function TiendaClientView({
   }, [filtersOpen]);
 
   useEffect(() => {
+    if (!sortOpen) return;
+
+    window.history.pushState({ ...(window.history.state ?? {}), shopSortOpen: true }, "", window.location.href);
+
+    const handlePopState = () => {
+      setSortOpen(false);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [sortOpen]);
+
+  useEffect(() => {
     const handleToggleFilters = () => {
+      if (sortOpenRef.current) {
+        setSortOpen(false);
+      }
+
       const isDrawerVisible = filtersOpenRef.current || filtersShouldRenderRef.current;
 
       if (isDrawerVisible) {
@@ -217,6 +299,58 @@ export default function TiendaClientView({
     window.addEventListener("shop:toggle-filters", handleToggleFilters);
     return () => {
       window.removeEventListener("shop:toggle-filters", handleToggleFilters);
+    };
+  }, []);
+
+  useEffect(() => {
+    const readPxVar = (varName: string) => {
+      const value = getComputedStyle(document.documentElement).getPropertyValue(varName);
+      const parsed = Number.parseFloat(value.replace("px", "").trim());
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    const getHideThreshold = () => {
+      const isDesktop = window.matchMedia("(min-width: 768px)").matches;
+
+      if (isDesktop) {
+        const desktopBase = readPxVar("--header-height-desktop-base");
+        const desktopTicker = readPxVar("--shop-ticker-height-desktop");
+        return desktopBase + desktopTicker;
+      }
+
+      const mobileBase = readPxVar("--header-height-mobile-base");
+      const mobileTicker = readPxVar("--shop-ticker-height-mobile");
+      const safeAreaTop = readPxVar("--safe-area-top");
+      return mobileBase + mobileTicker + safeAreaTop;
+    };
+
+    const updateTickerVisibility = () => {
+      const blockEl = introBlockRef.current;
+      if (!blockEl) return;
+
+      const rect = blockEl.getBoundingClientRect();
+      const hideThreshold = getHideThreshold();
+      const visible = rect.bottom > hideThreshold;
+
+      window.dispatchEvent(
+        new CustomEvent("shop:ticker-visibility", {
+          detail: { visible },
+        })
+      );
+    };
+
+    updateTickerVisibility();
+    window.addEventListener("scroll", updateTickerVisibility, { passive: true });
+    window.addEventListener("resize", updateTickerVisibility);
+
+    return () => {
+      window.removeEventListener("scroll", updateTickerVisibility);
+      window.removeEventListener("resize", updateTickerVisibility);
+      window.dispatchEvent(
+        new CustomEvent("shop:ticker-visibility", {
+          detail: { visible: true },
+        })
+      );
     };
   }, []);
 
@@ -269,7 +403,10 @@ export default function TiendaClientView({
           ]}
         />
         <header className="mb-8 text-center md:mb-10">
-          <div className="glass-panel mt-5 mx-auto w-full max-w-4xl rounded-2xl border border-white/10 p-4 md:p-4">
+          <div
+            ref={introBlockRef}
+            className="glass-panel mt-3 mx-auto w-full max-w-4xl rounded-2xl border border-white/10 p-2.5 md:p-3"
+          >
             <p className="mb-2 text-center text-xs uppercase tracking-[0.18em] text-[var(--brand-gold-300)] sm:text-sm">
               Tu estilo ideal empieza acá
             </p>
@@ -328,11 +465,45 @@ export default function TiendaClientView({
             </div>
 
             <div className="flex-1">
-              <StoreToolbar
-                searchTerm={filters.searchTerm}
-                onSearchChange={setSearchTerm}
-                onFiltersClick={() => setFiltersOpen(true)}
-              />
+              <div className="sticky top-[var(--header-height-mobile)] z-30 -mx-1 rounded-xl bg-[var(--brand-violet-950)] px-1 pt-1 md:top-[var(--header-height-desktop)] md:-mx-2 md:rounded-2xl md:px-2">
+                <StoreToolbar
+                  searchTerm={filters.searchTerm}
+                  onSearchChange={setSearchTerm}
+                  onFiltersClick={() => {
+                    setSortOpen(false);
+                    setFiltersOpen(true);
+                  }}
+                  onSortClick={() => {
+                    setFiltersOpen(false);
+                    setSortOpen(true);
+                  }}
+                />
+
+                {activeFilterChips.length > 0 && (
+                  <div className="mb-1.5 flex items-center gap-2 overflow-x-auto px-2 py-1 md:px-1.5">
+                    {activeFilterChips.map((chip) => (
+                      <button
+                        key={chip.key}
+                        type="button"
+                        onClick={chip.onRemove}
+                        className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-white/28 bg-white/14 px-2.5 text-[11px] font-medium leading-none text-[var(--brand-cream)] transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                        aria-label={`Quitar filtro ${chip.label}`}
+                      >
+                        <span className="leading-none">{chip.label}</span>
+                        <span aria-hidden className="text-[var(--brand-gold-300)] leading-none">×</span>
+                      </button>
+                    ))}
+
+                    <button
+                      type="button"
+                      onClick={clearFilters}
+                      className="inline-flex h-6 shrink-0 items-center text-[11px] font-semibold leading-none text-[var(--brand-cream)] underline underline-offset-2 transition-colors hover:text-[var(--brand-gold-300)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                    >
+                      Borrar filtros
+                    </button>
+                  </div>
+                )}
+              </div>
 
               {loading ? (
                 <LoadingGrid />
@@ -398,7 +569,58 @@ export default function TiendaClientView({
               onClearFilters={clearFilters}
               isOpen={!filtersClosing}
               onClose={() => setFiltersOpen(false)}
+              showSortSection={false}
             />
+          </div>
+        )}
+
+        {sortShouldRender && (
+          <div className="fixed inset-0 z-[60] md:hidden">
+            <div
+              className={`absolute inset-0 bg-black/50 ${sortOpen ? "animate-fadeInBackdrop" : "animate-fadeOutBackdrop"}`}
+              onClick={() => setSortOpen(false)}
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Ordenar productos"
+              className={`absolute inset-x-0 bottom-0 rounded-t-2xl border border-white/10 bg-[var(--brand-violet-950)] px-4 pb-[calc(1rem+var(--safe-area-bottom))] pt-3 shadow-[0_-16px_36px_rgba(18,8,35,0.4)] ${sortOpen ? "animate-slideInSheetUp" : "animate-slideOutSheetDown"}`}
+            >
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-[var(--brand-cream)]">
+                  Ordenar por
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setSortOpen(false)}
+                  className="rounded-full border border-[var(--brand-gold-400)]/30 p-1.5 text-[var(--brand-cream)] transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                  aria-label="Cerrar orden"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="mt-2 flex flex-col gap-1.5" role="radiogroup" aria-label="Ordenar productos">
+                {sortOptions.map((option) => (
+                  <label
+                    key={option.value}
+                    className="flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/82 transition-colors hover:border-[var(--brand-gold-300)]/20 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
+                  >
+                    <input
+                      type="radio"
+                      name="sort-mobile"
+                      value={option.value}
+                      checked={filters.sortBy === option.value}
+                      onChange={() => {
+                        setSortBy(option.value);
+                        setSortOpen(false);
+                      }}
+                      className="h-3.5 w-3.5 cursor-pointer accent-[var(--brand-gold-400)]"
+                    />
+                    {option.label}
+                  </label>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 

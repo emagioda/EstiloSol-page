@@ -14,15 +14,17 @@ interface FiltersSidebarProps {
   onClearFilters: () => void;
   isOpen?: boolean;
   onClose?: () => void;
+  showSortSection?: boolean;
 }
 
 export default function FiltersSidebar({
   categories,
   filters,
   onFilterChange,
-  onClearFilters,
+  onClearFilters: _onClearFilters,
   isOpen = true,
   onClose,
+  showSortSection = true,
 }: FiltersSidebarProps) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     departament: true,
@@ -37,8 +39,6 @@ export default function FiltersSidebar({
     }));
   };
 
-  const hasActiveFilters =
-    filters.category || filters.searchTerm || filters.departament;
   const isMobileDrawer = Boolean(onClose);
   const drawerAnimationClass = isMobileDrawer
     ? isOpen
@@ -53,7 +53,7 @@ export default function FiltersSidebar({
     <>
       {isMobileDrawer && (
         <div
-          className={`fixed inset-0 z-30 bg-black/50 md:hidden ${backdropAnimationClass}`}
+          className={`fixed inset-x-0 bottom-0 top-[var(--header-height-mobile)] z-30 bg-black/50 md:hidden ${backdropAnimationClass}`}
           onClick={() => onClose?.()}
         />
       )}
@@ -61,26 +61,23 @@ export default function FiltersSidebar({
       <aside
         role="complementary"
         aria-label="Filtros de productos"
-        className={`elegant-scrollbar fixed left-0 top-0 z-40 h-screen w-72 overflow-y-auto border-r border-[var(--brand-gold-300)]/20 bg-[var(--brand-violet-950)]/94 backdrop-blur-sm md:relative md:top-auto md:h-auto md:w-full md:rounded-2xl md:border md:border-[var(--brand-gold-300)]/24 md:bg-white/[0.09] md:px-5 md:py-4 md:shadow-[0_16px_36px_rgba(18,8,35,0.28)] ${drawerAnimationClass}`}
+        className={`elegant-scrollbar fixed left-0 top-[var(--header-height-mobile)] z-40 h-[calc(100dvh-var(--header-height-mobile))] w-72 overflow-y-auto border-r border-[var(--brand-gold-300)]/20 bg-[var(--brand-violet-950)]/94 backdrop-blur-sm md:relative md:top-auto md:h-auto md:w-full md:rounded-2xl md:border md:border-[var(--brand-gold-300)]/24 md:bg-white/[0.09] md:px-5 md:py-4 md:shadow-[0_16px_36px_rgba(18,8,35,0.28)] ${drawerAnimationClass}`}
       >
-        <div className="flex flex-col gap-5 p-5 pt-16 md:p-0">
+        <div className="flex flex-col gap-5 p-5 pt-5 md:p-0">
           {onClose && (
-            <button
-              onClick={onClose}
-              className="absolute right-4 top-4 rounded-full border border-[var(--brand-gold-400)]/30 p-1.5 transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] md:hidden"
-              aria-label="Cerrar filtros"
-            >
-              <span className="text-2xl text-[var(--brand-cream)]">✕</span>
-            </button>
-          )}
-
-          {hasActiveFilters && (
-            <button
-              onClick={onClearFilters}
-              className="rounded-md border border-[var(--brand-gold-400)]/24 px-3 py-1.5 text-left text-[11px] uppercase tracking-[0.14em] text-[var(--brand-gold-300)]/95 transition-colors hover:border-[var(--brand-gold-400)] hover:bg-white/5 hover:text-[var(--brand-gold-400)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
-            >
-              Limpiar filtros
-            </button>
+            <div className="-mx-5 -mt-5 mb-1 border-b border-black/10 bg-white px-3 py-2 md:hidden">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-[var(--brand-violet-950)]">Filtrar por</p>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="inline-flex h-6 w-6 items-center justify-center text-[var(--brand-violet-950)] transition hover:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-violet-600)]"
+                  aria-label="Cerrar filtros"
+                >
+                  <span className="text-lg leading-none">✕</span>
+                </button>
+              </div>
+            </div>
           )}
 
           {/* departament section */}
@@ -119,6 +116,7 @@ export default function FiltersSidebar({
             )}
           </div>
 
+          {showSortSection && (
           <div className="border-b border-[var(--brand-gold-300)]/12 pb-3.5">
             <button
               onClick={() => toggleSection("sort")}
@@ -156,6 +154,7 @@ export default function FiltersSidebar({
               </div>
             )}
           </div>
+          )}
 
           <div className="border-b border-[var(--brand-gold-300)]/12 pb-3.5">
             <button

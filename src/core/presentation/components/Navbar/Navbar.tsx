@@ -62,13 +62,16 @@ export default function Navbar() {
       return;
     }
 
-    const handleScroll = () => {
-      setShowTicker(window.scrollY < 24);
+    const handleTickerVisibility = (event: Event) => {
+      const customEvent = event as CustomEvent<{ visible?: boolean }>;
+      if (typeof customEvent.detail?.visible !== "boolean") return;
+      setShowTicker(customEvent.detail.visible);
     };
 
-    handleScroll();
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => window.removeEventListener("scroll", handleScroll);
+    window.addEventListener("shop:ticker-visibility", handleTickerVisibility as EventListener);
+    return () => {
+      window.removeEventListener("shop:ticker-visibility", handleTickerVisibility as EventListener);
+    };
   }, [isTienda]);
 
   const cartIcon = (
