@@ -3,10 +3,12 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import brandConfig from "@/src/config/brand";
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import CartBadge from "@/src/features/shop/presentation/components/CartBadge/CartBadge";
+import TopInfoTicker from "@/src/core/presentation/components/TopInfoTicker/TopInfoTicker";
 
 export default function Navbar() {
   const { navLinks, brandName, logo } = brandConfig;
@@ -25,6 +27,8 @@ export default function Navbar() {
   const isHome = (pathname ?? "/") === "/";
   const isContacto = pathnameSegments.includes("contacto");
   const isHomeStyle = isHome || isContacto;
+  const tickerMessages = ["Agregar texto", "Agregar texto", "Agregar texto"];
+  const [showTicker, setShowTicker] = useState(true);
   const mobileRightLinks = isTienda ? [] : mobileLinks.slice(1);
   const cartCount = items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
   const cartTotal = items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0);
@@ -33,6 +37,39 @@ export default function Navbar() {
     currency: "ARS",
     maximumFractionDigits: 0,
   }).format(cartTotal);
+
+  useEffect(() => {
+    const root = document.documentElement;
+
+    if (isTienda && showTicker) {
+      root.style.setProperty("--header-height-mobile", "calc(var(--header-height-mobile-base) + var(--safe-area-top) + var(--shop-ticker-height-mobile))");
+      root.style.setProperty("--header-height-desktop", "calc(var(--header-height-desktop-base) + var(--shop-ticker-height-desktop))");
+      return;
+    }
+
+    root.style.setProperty("--header-height-mobile", "calc(var(--header-height-mobile-base) + var(--safe-area-top))");
+    root.style.setProperty("--header-height-desktop", "var(--header-height-desktop-base)");
+
+    return () => {
+      root.style.setProperty("--header-height-mobile", "calc(var(--header-height-mobile-base) + var(--safe-area-top))");
+      root.style.setProperty("--header-height-desktop", "var(--header-height-desktop-base)");
+    };
+  }, [isTienda, showTicker]);
+
+  useEffect(() => {
+    if (!isTienda) {
+      setShowTicker(true);
+      return;
+    }
+
+    const handleScroll = () => {
+      setShowTicker(window.scrollY < 24);
+    };
+
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [isTienda]);
 
   const cartIcon = (
     <svg
@@ -53,8 +90,9 @@ export default function Navbar() {
 
   return (
     <header id="main-navbar" className="fixed inset-x-0 top-0 z-[200] w-full bg-[var(--brand-violet-500)] pt-[var(--safe-area-top)]">
+      {isTienda && <TopInfoTicker messages={tickerMessages} durationSeconds={72} hidden={!showTicker} />}
       <nav
-        className="h-[var(--header-height-mobile-base)] border-b border-[var(--brand-gold-400)] md:h-[var(--header-height-desktop)]"
+        className="h-[var(--header-height-mobile-base)] border-b border-[var(--brand-gold-400)] md:h-[var(--header-height-desktop-base)]"
       >
         <div
           className={`mx-auto flex h-full w-full items-center justify-between gap-6 px-4 md:pl-8 ${
@@ -63,15 +101,32 @@ export default function Navbar() {
         >
           {/* Mobile: Left links */}
           <div className="flex flex-1 items-center justify-start md:hidden">
-            {mobileLinks.slice(0, 1).map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-cream)] transition hover:text-[var(--brand-gold-300)]"
+            {isTienda ? (
+              <button
+                type="button"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent("shop:toggle-filters"));
+                }}
+                className="inline-flex h-8 w-8 items-center justify-center text-[var(--brand-cream)] transition hover:text-[var(--brand-gold-300)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                aria-label="Abrir filtros"
               >
-                {link.label}
-              </Link>
-            ))}
+                <span aria-hidden className="inline-flex h-3.5 w-4 flex-col justify-between">
+                  <span className="h-px w-full bg-current" />
+                  <span className="h-px w-full bg-current" />
+                  <span className="h-px w-full bg-current" />
+                </span>
+              </button>
+            ) : (
+              mobileLinks.slice(0, 1).map((link) => (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-cream)] transition hover:text-[var(--brand-gold-300)]"
+                >
+                  {link.label}
+                </Link>
+              ))
+            )}
           </div>
 
           {/* Logo center - visible on all screens */}

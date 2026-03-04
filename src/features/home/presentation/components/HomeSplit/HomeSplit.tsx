@@ -19,20 +19,7 @@ export default function HomeSplit() {
   return (
     <div className="flex flex-1 flex-col">
       <main className="flex flex-1 flex-col">
-        <div className="pointer-events-none relative z-50 mx-auto mt-3 -mb-4 w-fit max-w-[94vw] rounded-full border border-[var(--brand-violet-700)] bg-[var(--brand-cream)] px-4 py-2 text-center text-[10px] tracking-[0.12em] text-[var(--brand-violet-950)] shadow-[0_8px_24px_rgba(28,10,48,0.25)] sm:px-6 sm:text-sm sm:tracking-[0.16em]">
-          <span
-            style={{
-              fontFamily: typography.body,
-              color: "color-mix(in srgb, var(--brand-violet-950) 78%, black)",
-            }}
-          >
-            <span className="sm:hidden">TU LUGAR PARA BRILLAR</span>
-            <span className="hidden sm:inline">
-              ELEGÍ CÓMO QUERÉS EMPEZAR: RESERVÁ TU TURNO O COMPRÁ ONLINE
-            </span>
-          </span>
-        </div>
-        <section className="relative z-0 flex min-h-[calc(100dvh-var(--header-height-mobile)-2.5rem)] w-full flex-1 flex-col overflow-hidden md:min-h-0 md:flex-row md:hover:[&>article:not(:hover)]:scale-[0.996] md:[&>article:hover]:scale-[1.028]">
+        <section className="relative z-0 flex min-h-[calc(100dvh-var(--header-height-mobile))] w-full flex-1 flex-col overflow-hidden md:min-h-[calc(100dvh-var(--header-height-desktop))] md:flex-row md:hover:[&>article:not(:hover)]:scale-[0.996] md:[&>article:hover]:scale-[1.028]">
           {heroSections.map((section, index) => {
             const isBookingSection = index === 0;
             const titleShadow = isBookingSection
@@ -77,6 +64,14 @@ export default function HomeSplit() {
                     isBookingSection
                       ? "absolute -bottom-1 left-0 right-0 h-24 bg-gradient-to-t from-[#130d1a] to-transparent z-[2]"
                       : "absolute -top-1 left-0 right-0 h-24 bg-gradient-to-b from-[#130d1a] to-transparent z-[2]"
+                  }`}
+                />
+                <div
+                  aria-hidden="true"
+                  className={`md:hidden ${
+                    isBookingSection
+                      ? "absolute -top-1 left-0 right-0 h-20 bg-gradient-to-b from-[#130d1a]/55 to-transparent z-[2]"
+                      : "absolute -bottom-1 left-0 right-0 h-20 bg-gradient-to-t from-[#130d1a]/55 to-transparent z-[2]"
                   }`}
                 />
                 <Link

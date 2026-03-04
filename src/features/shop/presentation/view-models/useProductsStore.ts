@@ -186,7 +186,7 @@ export const useProductsStore = ({
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [filters, setFilters] = useState<FilterState>({
     searchTerm: "",
-    departament: null,
+    departament: "PELUQUERIA",
     category: null,
     sortBy: "newest",
   });
@@ -336,7 +336,7 @@ export const useProductsStore = ({
   }, []);
 
   const setDepartament = useCallback((dep: string | null) => {
-    setFilters((prev) => ({ ...prev, departament: dep, category: null }));
+    setFilters((prev) => ({ ...prev, departament: dep ?? "PELUQUERIA", category: null }));
   }, []);
 
   const setCategory = useCallback((category: string | null) => {
@@ -351,7 +351,7 @@ export const useProductsStore = ({
     setFilters({
       searchTerm: "",
       category: null,
-      departament: null,
+      departament: "PELUQUERIA",
       sortBy: "newest",
     });
   }, []);

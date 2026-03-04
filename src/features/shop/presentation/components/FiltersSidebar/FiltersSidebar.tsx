@@ -97,7 +97,6 @@ export default function FiltersSidebar({
             {expandedSections.departament && (
               <div className="mt-2.5 flex flex-col gap-1.5" role="radiogroup" aria-label="Filtrar por rubro">
                 {[
-                  { value: null, label: "Todos" },
                   { value: "PELUQUERIA", label: "Peluquería" },
                   { value: "BIJOUTERIE", label: "Bijouterie" },
                 ].map((opt) => (

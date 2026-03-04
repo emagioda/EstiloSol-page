@@ -43,8 +43,11 @@ export default function RootLayout({
     --safe-area-top: env(safe-area-inset-top, 0px);
     --safe-area-bottom: env(safe-area-inset-bottom, 0px);
     --header-height-mobile-base: 56px;
+    --header-height-desktop-base: 72px;
+    --shop-ticker-height-mobile: 28px;
+    --shop-ticker-height-desktop: 30px;
     --header-height-mobile: calc(var(--header-height-mobile-base) + var(--safe-area-top));
-    --header-height-desktop: 72px;
+    --header-height-desktop: var(--header-height-desktop-base);
     --brand-violet-950: ${palette.violet.deepest};
     --brand-violet-900: ${palette.violet.deep};
     --brand-violet-800: ${palette.violet.base};
@@ -68,7 +71,7 @@ export default function RootLayout({
               <div className="flex min-h-screen flex-col">
                 <Navbar />
                 <WebVitalsReporter />
-                <div className="flex min-h-0 flex-1 flex-col pt-[var(--header-height-mobile)] md:pt-[var(--header-height-desktop)]">{children}</div>
+                <div className="flex min-h-0 flex-1 flex-col pt-[var(--header-height-mobile)] transition-[padding-top] duration-300 ease-out md:pt-[var(--header-height-desktop)]">{children}</div>
                 <GlobalFooter />
               </div>
             </CartBadgeVisibilityProvider>

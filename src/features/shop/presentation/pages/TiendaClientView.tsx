@@ -1,5 +1,6 @@
 "use client";
 import dynamic from "next/dynamic";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { hasSessionCatalogCache, useProductsStore } from "../view-models/useProductsStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
@@ -18,8 +19,6 @@ const QuickViewModal = dynamic(
 type TiendaClientViewProps = {
   initialProducts: Product[];
   staticDetailHandles?: string[];
-  storeHeading?: string;
-  storeDescription?: string;
 };
 
 type CartNotice = {
@@ -38,13 +37,27 @@ const departamentOptions = [
   },
 ];
 
+const normalizeDepartamentParam = (value: string | null): string | null => {
+  if (!value) return null;
+  const normalized = value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase();
+
+  if (normalized === "PELUQUERIA" || normalized === "BIJOUTERIE") {
+    return normalized;
+  }
+
+  return null;
+};
+
 export default function TiendaClientView({
   initialProducts,
   staticDetailHandles = [],
-  storeHeading = "Tienda Híbrida · Estilo y Cuidado",
-  storeDescription =
-    "Comprá Productos Profesionales para peluquería y Diseños Únicos de bijouterie. Elegí tus favoritos y coordinamos el pago por transferencia o efectivo.",
 }: TiendaClientViewProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const {
     products,
     loading,
@@ -67,28 +80,28 @@ export default function TiendaClientView({
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filtersShouldRender, setFiltersShouldRender] = useState(false);
   const [filtersClosing, setFiltersClosing] = useState(false);
-  const [selectedWorld, setSelectedWorld] = useState<string>("PELUQUERIA");
   const [cartNotice, setCartNotice] = useState<CartNotice | null>(null);
   const hasCheckedFirstVisitRef = useRef(false);
   const filtersCloseTimerRef = useRef<number | null>(null);
+  const filtersOpenRef = useRef(false);
+  const filtersShouldRenderRef = useRef(false);
+  const hasInitializedFromQueryRef = useRef(false);
+  const skipNextUrlSyncRef = useRef(false);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
 
   const availableCategories = categories;
+  const selectedWorld = filters.departament ?? "PELUQUERIA";
+  const rubroFromQuery = normalizeDepartamentParam(searchParams.get("rubro"));
   const selectedWorldIndex = Math.max(
     departamentOptions.findIndex((option) => option.value === selectedWorld),
     0
   );
 
-  const departamentFilteredProducts = !filters.departament
-    ? products
-    : (() => {
-        const depFilter = filters.departament;
-        return products.filter(
-          (p) =>
-            typeof p.departament === "string" &&
-            p.departament.toLowerCase() === depFilter.toLowerCase()
-        );
-      })();
+  const departamentFilteredProducts = products.filter(
+    (p) =>
+      typeof p.departament === "string" &&
+      p.departament.toLowerCase() === selectedWorld.toLowerCase()
+  );
 
   useEffect(() => {
     if (hasCheckedFirstVisitRef.current) return;
@@ -106,23 +119,6 @@ export default function TiendaClientView({
   }, [loadProducts, status]);
 
   useEffect(() => {
-    if (filters.departament || products.length === 0) return;
-    const counts: Record<string, number> = {};
-    products.forEach((p) => {
-      if (typeof p.departament === "string") {
-        counts[p.departament] = (counts[p.departament] || 0) + 1;
-      }
-    });
-    const winner = Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .map((entry) => entry[0])[0];
-    if (winner && winner !== selectedWorld) {
-      setSelectedWorld(winner);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products]);
-
-  useEffect(() => {
     setSuppressBadge(isQuickViewOpen);
     setSuppressFloatingCart(isQuickViewOpen);
     return () => {
@@ -138,6 +134,9 @@ export default function TiendaClientView({
   }, [cartNotice]);
 
   useEffect(() => {
+    filtersOpenRef.current = filtersOpen;
+    filtersShouldRenderRef.current = filtersShouldRender;
+
     if (filtersOpen) {
       if (filtersCloseTimerRef.current !== null) {
         window.clearTimeout(filtersCloseTimerRef.current);
@@ -196,6 +195,61 @@ export default function TiendaClientView({
     };
   }, [filtersOpen]);
 
+  useEffect(() => {
+    const handleToggleFilters = () => {
+      const isDrawerVisible = filtersOpenRef.current || filtersShouldRenderRef.current;
+
+      if (isDrawerVisible) {
+        setFiltersOpen(false);
+        return;
+      }
+
+      if (filtersCloseTimerRef.current !== null) {
+        window.clearTimeout(filtersCloseTimerRef.current);
+        filtersCloseTimerRef.current = null;
+      }
+
+      setFiltersClosing(false);
+      setFiltersShouldRender(true);
+      setFiltersOpen(true);
+    };
+
+    window.addEventListener("shop:toggle-filters", handleToggleFilters);
+    return () => {
+      window.removeEventListener("shop:toggle-filters", handleToggleFilters);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (hasInitializedFromQueryRef.current) return;
+
+    hasInitializedFromQueryRef.current = true;
+
+    if (!rubroFromQuery || rubroFromQuery === selectedWorld) return;
+
+    skipNextUrlSyncRef.current = true;
+    setCategory(null);
+    setDepartament(rubroFromQuery);
+  }, [rubroFromQuery, selectedWorld, setCategory, setDepartament]);
+
+  useEffect(() => {
+    if (skipNextUrlSyncRef.current) {
+      skipNextUrlSyncRef.current = false;
+      return;
+    }
+
+    if (!pathname) return;
+
+    if (rubroFromQuery === selectedWorld) return;
+
+    const params = new URLSearchParams(searchParams.toString());
+    const desiredRubro = selectedWorld.toLowerCase();
+
+    params.set("rubro", desiredRubro);
+    const nextUrl = `${pathname}?${params.toString()}`;
+    router.replace(nextUrl, { scroll: false });
+  }, [pathname, router, rubroFromQuery, searchParams, selectedWorld]);
+
   const handleAddFeedback = ({ ok, name }: { ok: boolean; name: string }) => {
     setCartNotice({
       type: ok ? "success" : "error",
@@ -215,36 +269,31 @@ export default function TiendaClientView({
           ]}
         />
         <header className="mb-8 text-center md:mb-10">
-          <h1 className="text-3xl font-semibold leading-tight tracking-wide text-[var(--brand-cream)] sm:text-4xl md:text-5xl">
-            {storeHeading}
-          </h1>
-          <p className="mx-auto mt-2 max-w-3xl text-sm leading-relaxed text-[var(--brand-cream)]/75 sm:text-base md:mt-3 md:max-w-none md:whitespace-nowrap md:text-lg">
-            {storeDescription}
-          </p>
-
           <div className="glass-panel mt-5 mx-auto w-full max-w-4xl rounded-2xl border border-white/10 p-4 md:p-4">
             <p className="mb-2 text-center text-xs uppercase tracking-[0.18em] text-[var(--brand-gold-300)] sm:text-sm">
               Tu estilo ideal empieza acá
             </p>
-            <div className="relative mx-auto grid w-full max-w-2xl grid-cols-2 rounded-full border border-white/15 bg-[var(--brand-violet-950)]/35 p-1">
+            <div className="relative mx-auto grid w-full max-w-3xl grid-cols-2 items-center rounded-full border border-white/15 bg-[var(--brand-violet-950)]/35 p-1.5">
               <span
                 aria-hidden="true"
-                className="pointer-events-none absolute bottom-1 left-1 top-1 w-[calc(50%-0.25rem)] rounded-full border border-[var(--brand-gold-400)] bg-white/12 shadow-[0_6px_14px_rgba(0,0,0,0.18)] transition-transform duration-300 ease-out"
-                style={{ transform: `translateX(${selectedWorldIndex * 100}%)` }}
+                className="pointer-events-none absolute left-1.5 top-1.5 h-[calc(100%-0.75rem)] w-[calc(50%-0.375rem)] rounded-full border border-[var(--brand-gold-400)] bg-white/12 shadow-[0_6px_14px_rgba(0,0,0,0.18)] transition-transform duration-300 ease-out"
+                style={{
+                  transform: `translateX(${selectedWorldIndex * 100}%)`,
+                }}
               />
-              {departamentOptions.map((opt) => {
+              {departamentOptions.map((opt, index) => {
                 const active = selectedWorld === opt.value;
                 return (
                   <button
                     key={opt.value}
                     type="button"
                     onClick={() => {
-                      setSelectedWorld(opt.value);
                       setCategory(null);
                       setDepartament(opt.value);
                     }}
                     className="relative z-10 rounded-full border border-transparent px-4 py-2 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                     aria-pressed={active}
+                    aria-label={`Filtrar por ${opt.label}`}
                   >
                     <span
                       className={`block text-[11px] font-semibold uppercase tracking-[0.16em] sm:text-sm ${

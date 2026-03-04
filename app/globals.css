@@ -46,3 +46,14 @@ body.shop-modal-open #main-navbar {
   opacity: 0;
   pointer-events: none;
 }
+
+@keyframes ticker-marquee {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
