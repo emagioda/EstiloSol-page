@@ -40,7 +40,7 @@ export const brandConfig = {
   ] as BrandLink[],
   palette: {
     violet: {
-      deepest: "#a890c8",
+      deepest: "#b497d6",
       deep: "#b8a3d8",
       base: "#c8b4e8",
       light: "#e0d5f0",

@@ -130,7 +130,6 @@ export default function ProductDetail({ product, slug }: Props) {
         items={[
           { label: "INICIO", href: "/" },
           { label: "Tienda", href: "/tienda" },
-          { label: currentProduct.departament || "Productos", href: `/tienda?departament=${currentProduct.departament}` },
           { label: currentProduct.name },
         ]}
       />

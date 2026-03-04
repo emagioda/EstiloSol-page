@@ -26,10 +26,13 @@ export default function HomeSplit() {
               color: "color-mix(in srgb, var(--brand-violet-950) 78%, black)",
             }}
           >
-            ELEGÍ CÓMO QUERÉS EMPEZAR: RESERVÁ TU TURNO O COMPRÁ ONLINE
+            <span className="sm:hidden">TU LUGAR PARA BRILLAR</span>
+            <span className="hidden sm:inline">
+              ELEGÍ CÓMO QUERÉS EMPEZAR: RESERVÁ TU TURNO O COMPRÁ ONLINE
+            </span>
           </span>
         </div>
-        <section className="relative z-0 flex w-full flex-1 flex-col overflow-hidden md:flex-row md:hover:[&>article:not(:hover)]:scale-[0.996] md:[&>article:hover]:scale-[1.028]">
+        <section className="relative z-0 flex min-h-[calc(100dvh-var(--header-height-mobile)-2.5rem)] w-full flex-1 flex-col overflow-hidden md:min-h-0 md:flex-row md:hover:[&>article:not(:hover)]:scale-[0.996] md:[&>article:hover]:scale-[1.028]">
           {heroSections.map((section, index) => {
             const isBookingSection = index === 0;
             const titleShadow = isBookingSection
@@ -48,7 +51,7 @@ export default function HomeSplit() {
             return (
               <article
                 key={section.title}
-                className={`group relative isolate flex min-h-[50vh] w-full flex-1 flex-col items-center justify-center overflow-visible bg-[var(--brand-violet-800)] px-6 py-20 text-center text-[var(--brand-cream)] transition-transform md:min-h-0 md:basis-1/2 md:px-10 md:py-24 ${hoverOverlapClassName}`}
+                className={`group relative isolate flex w-full flex-1 flex-col items-center justify-center overflow-visible bg-[var(--brand-violet-800)] px-6 py-10 text-center text-[var(--brand-cream)] transition-transform sm:py-14 md:basis-1/2 md:px-10 md:py-24 ${hoverOverlapClassName}`}
                 style={{
                   transitionDuration: "460ms",
                   transitionTimingFunction: "cubic-bezier(0.22,1,0.36,1)",
@@ -68,14 +71,22 @@ export default function HomeSplit() {
                   aria-hidden="true"
                   className={`absolute inset-0 z-[1] ${isBookingSection ? "bg-black/30" : "bg-black/45"}`}
                 />
+                <div
+                  aria-hidden="true"
+                  className={`md:hidden ${
+                    isBookingSection
+                      ? "absolute -bottom-1 left-0 right-0 h-24 bg-gradient-to-t from-[#130d1a] to-transparent z-[2]"
+                      : "absolute -top-1 left-0 right-0 h-24 bg-gradient-to-b from-[#130d1a] to-transparent z-[2]"
+                  }`}
+                />
                 <Link
                   href={section.ctaHref}
                   aria-label={section.ctaLabel}
                   className="relative z-10 flex h-full w-full items-center justify-center outline-none"
                 >
-                  <div className="flex h-full w-full max-w-2xl flex-col items-center justify-center gap-5">
+                  <div className="flex h-full w-full max-w-2xl flex-col items-center justify-center gap-4 sm:gap-5">
                     <span
-                      className="inline-flex items-center rounded-full border border-[var(--brand-gold-300)]/50 bg-black/35 px-4 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--brand-gold-300)]"
+                      className="inline-flex items-center rounded-full border border-[var(--brand-gold-300)]/50 bg-black/35 px-5 py-1.5 text-xs font-medium uppercase tracking-[0.16em] text-[var(--brand-gold-300)] sm:text-sm"
                       style={{ fontFamily: typography.body }}
                     >
                       {heroSupport[index]?.kicker}
@@ -99,7 +110,7 @@ export default function HomeSplit() {
                       {section.ctaLabel}
                     </span>
                     <p
-                      className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--brand-cream)]/85 sm:text-sm"
+                      className="whitespace-nowrap text-[11px] font-medium uppercase tracking-[0.06em] text-[var(--brand-cream)]/85 sm:text-sm sm:tracking-[0.12em]"
                       style={{ fontFamily: typography.body, textShadow: bodyShadow }}
                     >
                       {heroSupport[index]?.trust}

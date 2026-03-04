@@ -18,6 +18,18 @@ const INITIAL_STATE: FormState = {
   website: "",
 };
 
+const isValidPhone = (value: string): boolean => {
+  const normalized = value.trim();
+  if (!/^[\d\s()+-]+$/.test(normalized)) return false;
+  const digits = normalized.replace(/\D/g, "");
+  return digits.length >= 8 && digits.length <= 15;
+};
+
+const isValidEmail = (value: string): boolean => {
+  const normalized = value.trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
+};
+
 const socialNetworks = [
   {
     name: "Instagram",
@@ -37,19 +49,63 @@ export default function ContactoPage() {
   const [form, setForm] = useState<FormState>(INITIAL_STATE);
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "ok" | "error"; text: string } | null>(null);
+  const [touched, setTouched] = useState<Record<"nombre" | "telefono" | "email" | "mensaje", boolean>>({
+    nombre: false,
+    telefono: false,
+    email: false,
+    mensaje: false,
+  });
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+
+  const fieldErrors = useMemo(() => {
+    const nombre = form.nombre.trim().length === 0 ? "Ingresá tu nombre." : null;
+    const telefono =
+      form.telefono.trim().length === 0
+        ? "Ingresá tu teléfono."
+        : !isValidPhone(form.telefono)
+          ? "Ingresá un teléfono válido (8 a 15 dígitos)."
+          : null;
+    const email =
+      form.email.trim().length === 0
+        ? "Ingresá tu email."
+        : !isValidEmail(form.email)
+          ? "Ingresá un email válido."
+          : null;
+    const mensaje =
+      form.mensaje.trim().length === 0
+        ? "Escribí tu mensaje."
+        : form.mensaje.trim().length < 10
+          ? "El mensaje debe tener al menos 10 caracteres."
+          : null;
+
+    return { nombre, telefono, email, mensaje };
+  }, [form]);
 
   const isValid = useMemo(() => {
     return (
-      form.nombre.trim().length > 0 &&
-      form.telefono.trim().length > 0 &&
-      form.email.trim().length > 0 &&
-      form.mensaje.trim().length >= 10
+      !fieldErrors.nombre &&
+      !fieldErrors.telefono &&
+      !fieldErrors.email &&
+      !fieldErrors.mensaje
     );
-  }, [form]);
+  }, [fieldErrors]);
+
+  const shouldShowError = (field: "nombre" | "telefono" | "email" | "mensaje") => {
+    return Boolean(fieldErrors[field]) && (touched[field] || submitAttempted);
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!isValid || submitting) return;
+    if (submitting) return;
+    setSubmitAttempted(true);
+
+    if (!isValid) {
+      setFeedback({
+        type: "error",
+        text: "Revisá los campos marcados para poder enviar el formulario.",
+      });
+      return;
+    }
 
     setSubmitting(true);
     setFeedback(null);
@@ -75,6 +131,8 @@ export default function ContactoPage() {
 
       setFeedback({ type: "ok", text: data.message ?? "Mensaje enviado correctamente." });
       setForm(INITIAL_STATE);
+      setTouched({ nombre: false, telefono: false, email: false, mensaje: false });
+      setSubmitAttempted(false);
     } catch {
       setFeedback({
         type: "error",
@@ -97,7 +155,7 @@ export default function ContactoPage() {
 
             <form
               onSubmit={handleSubmit}
-              className="mt-8 rounded-2xl border border-[var(--brand-gold-300)]/25 bg-white/5 p-5 md:p-6"
+              className="mt-8 rounded-2xl border border-[var(--brand-gold-300)]/40 bg-[var(--brand-violet-900)]/45 p-5 backdrop-blur-[1px] md:p-6"
             >
               <label className="hidden" aria-hidden="true">
                 Website
@@ -112,59 +170,109 @@ export default function ContactoPage() {
 
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="flex flex-col gap-1.5 text-sm">
-                  <span className="text-[var(--brand-gold-300)]">Nombre</span>
+                  <span className="font-medium text-[var(--brand-gold-300)]">Nombre</span>
                   <input
                     value={form.nombre}
                     onChange={(e) => setForm((prev) => ({ ...prev, nombre: e.target.value }))}
+                    onBlur={() => setTouched((prev) => ({ ...prev, nombre: true }))}
                     type="text"
                     required
-                    className="rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-[var(--brand-cream)] placeholder:text-[var(--brand-cream)]/45 focus:border-[var(--brand-gold-300)] focus:outline-none"
+                    autoFocus
+                    aria-invalid={shouldShowError("nombre")}
+                    className={`rounded-lg border px-3 py-2 text-[var(--brand-cream)] placeholder:text-[var(--brand-cream)]/60 focus:outline-none ${
+                      shouldShowError("nombre")
+                        ? "border-rose-300 bg-rose-950/35 ring-1 ring-rose-300/40 focus:border-rose-200"
+                        : "border-[var(--brand-gold-300)]/30 bg-[var(--brand-violet-950)]/45 focus:border-[var(--brand-gold-300)]"
+                    }`}
                     placeholder="Tu nombre"
                   />
+                  {shouldShowError("nombre") && (
+                    <span className="pl-2 text-xs font-semibold text-rose-100">
+                      {fieldErrors.nombre}
+                    </span>
+                  )}
                 </label>
 
                 <label className="flex flex-col gap-1.5 text-sm">
-                  <span className="text-[var(--brand-gold-300)]">Teléfono</span>
+                  <span className="font-medium text-[var(--brand-gold-300)]">Teléfono</span>
                   <input
                     value={form.telefono}
                     onChange={(e) => setForm((prev) => ({ ...prev, telefono: e.target.value }))}
+                    onBlur={() => setTouched((prev) => ({ ...prev, telefono: true }))}
                     type="tel"
                     required
-                    className="rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-[var(--brand-cream)] placeholder:text-[var(--brand-cream)]/45 focus:border-[var(--brand-gold-300)] focus:outline-none"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    pattern="^[\\d\\s()+-]+$"
+                    title="Ingresá un teléfono válido (8 a 15 dígitos)."
+                    maxLength={24}
+                    aria-invalid={shouldShowError("telefono")}
+                    className={`rounded-lg border px-3 py-2 text-[var(--brand-cream)] placeholder:text-[var(--brand-cream)]/60 focus:outline-none ${
+                      shouldShowError("telefono")
+                        ? "border-rose-300 bg-rose-950/35 ring-1 ring-rose-300/40 focus:border-rose-200"
+                        : "border-[var(--brand-gold-300)]/30 bg-[var(--brand-violet-950)]/45 focus:border-[var(--brand-gold-300)]"
+                    }`}
                     placeholder="Tu teléfono"
                   />
+                  {shouldShowError("telefono") && (
+                    <span className="pl-2 text-xs font-semibold text-rose-100">
+                      {fieldErrors.telefono}
+                    </span>
+                  )}
                 </label>
 
                 <label className="flex flex-col gap-1.5 text-sm md:col-span-2">
-                  <span className="text-[var(--brand-gold-300)]">Email</span>
+                  <span className="font-medium text-[var(--brand-gold-300)]">Email</span>
                   <input
                     value={form.email}
                     onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
+                    onBlur={() => setTouched((prev) => ({ ...prev, email: true }))}
                     type="email"
                     required
-                    className="rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-[var(--brand-cream)] placeholder:text-[var(--brand-cream)]/45 focus:border-[var(--brand-gold-300)] focus:outline-none"
+                    aria-invalid={shouldShowError("email")}
+                    className={`rounded-lg border px-3 py-2 text-[var(--brand-cream)] placeholder:text-[var(--brand-cream)]/60 focus:outline-none ${
+                      shouldShowError("email")
+                        ? "border-rose-300 bg-rose-950/35 ring-1 ring-rose-300/40 focus:border-rose-200"
+                        : "border-[var(--brand-gold-300)]/30 bg-[var(--brand-violet-950)]/45 focus:border-[var(--brand-gold-300)]"
+                    }`}
                     placeholder="tuemail@ejemplo.com"
                   />
+                  {shouldShowError("email") && (
+                    <span className="pl-2 text-xs font-semibold text-rose-100">
+                      {fieldErrors.email}
+                    </span>
+                  )}
                 </label>
 
                 <label className="flex flex-col gap-1.5 text-sm md:col-span-2">
-                  <span className="text-[var(--brand-gold-300)]">Mensaje</span>
+                  <span className="font-medium text-[var(--brand-gold-300)]">Mensaje</span>
                   <textarea
                     value={form.mensaje}
                     onChange={(e) => setForm((prev) => ({ ...prev, mensaje: e.target.value }))}
+                    onBlur={() => setTouched((prev) => ({ ...prev, mensaje: true }))}
                     required
                     minLength={10}
                     rows={6}
-                    className="rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-[var(--brand-cream)] placeholder:text-[var(--brand-cream)]/45 focus:border-[var(--brand-gold-300)] focus:outline-none"
+                    aria-invalid={shouldShowError("mensaje")}
+                    className={`rounded-lg border px-3 py-2 text-[var(--brand-cream)] placeholder:text-[var(--brand-cream)]/60 focus:outline-none ${
+                      shouldShowError("mensaje")
+                        ? "border-rose-300 bg-rose-950/35 ring-1 ring-rose-300/40 focus:border-rose-200"
+                        : "border-[var(--brand-gold-300)]/30 bg-[var(--brand-violet-950)]/45 focus:border-[var(--brand-gold-300)]"
+                    }`}
                     placeholder="Contanos cómo podemos ayudarte"
                   />
+                  {shouldShowError("mensaje") && (
+                    <span className="pl-2 text-xs font-semibold text-rose-100">
+                      {fieldErrors.mensaje}
+                    </span>
+                  )}
                 </label>
               </div>
 
               <div className="mt-5 flex items-center justify-between gap-3">
                 <button
                   type="submit"
-                  disabled={!isValid || submitting}
+                  disabled={submitting}
                   className="rounded-lg bg-[var(--brand-gold-300)] px-5 py-3 text-sm font-semibold text-black shadow-[0_8px_22px_rgba(26,10,48,0.28)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {submitting ? "Enviando..." : "Enviar"}
@@ -172,8 +280,10 @@ export default function ContactoPage() {
 
                 {feedback && (
                   <p
-                    className={`text-sm ${
-                      feedback.type === "ok" ? "text-emerald-300" : "text-rose-300"
+                    className={`rounded-md border px-3 py-2 text-sm font-semibold ${
+                      feedback.type === "ok"
+                        ? "border-emerald-300/50 bg-emerald-900/35 text-emerald-200"
+                        : "border-transparent bg-transparent p-0 text-rose-100"
                     }`}
                     role="status"
                     aria-live="polite"

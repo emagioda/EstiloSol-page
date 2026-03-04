@@ -7,6 +7,7 @@ import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGr
 import FiltersSidebar from "@/src/features/shop/presentation/components/FiltersSidebar/FiltersSidebar";
 import StoreToolbar from "@/src/features/shop/presentation/components/StoreToolbar/StoreToolbar";
 import LoadingGrid from "@/src/features/shop/presentation/components/LoadingGrid/LoadingGrid";
+import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs";
 import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
 
 const QuickViewModal = dynamic(
@@ -145,6 +146,12 @@ export default function TiendaClientView({
   return (
     <main className="min-h-screen bg-[var(--brand-violet-950)]">
       <div className="mx-auto max-w-7xl px-4 pb-16 pt-4 text-[var(--brand-cream)] md:pt-6">
+        <Breadcrumbs
+          items={[
+            { label: "INICIO", href: "/" },
+            { label: "Tienda" },
+          ]}
+        />
         <header className="mb-8 text-center md:mb-10">
           <h1 className="text-3xl font-semibold leading-tight tracking-wide text-[var(--brand-cream)] sm:text-4xl md:text-5xl">
             {storeHeading}

@@ -23,6 +23,12 @@ const isValidEmail = (value: string): boolean => {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 };
 
+const isValidPhone = (value: string): boolean => {
+  if (!/^[\d\s()+-]+$/.test(value)) return false;
+  const digits = value.replace(/\D/g, "");
+  return digits.length >= 8 && digits.length <= 15;
+};
+
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as ContactPayload;
 
@@ -70,6 +76,13 @@ export async function POST(request: Request) {
   if (!isValidEmail(email)) {
     return NextResponse.json(
       { ok: false, error: "El email no tiene un formato válido." },
+      { status: 400 }
+    );
+  }
+
+  if (!isValidPhone(telefono)) {
+    return NextResponse.json(
+      { ok: false, error: "El teléfono no tiene un formato válido." },
       { status: 400 }
     );
   }
