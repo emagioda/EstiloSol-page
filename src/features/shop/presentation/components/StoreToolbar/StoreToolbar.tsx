@@ -26,7 +26,7 @@ export default function StoreToolbar({
   };
 
   return (
-    <div className="mb-1.5 flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-3 md:mb-4 md:gap-4 md:rounded-2xl md:p-4">
+    <div className="mb-1.5 flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-3 md:hidden">
       {/* Search Input */}
       <div className="relative w-full flex-1">
         <label htmlFor="store-search" className="sr-only">
@@ -69,19 +69,6 @@ export default function StoreToolbar({
           )}
         </div>
       )}
-
-      <div className="hidden shrink-0 items-center md:flex">
-        {onFiltersClick && (
-          <button
-            onClick={onFiltersClick}
-            className="inline-flex items-center justify-center gap-1 rounded-lg border border-[var(--brand-violet-800)] bg-[var(--brand-violet-950)]/60 px-2 py-1.5 text-[11px] text-[var(--brand-cream)] transition duration-200 hover:-translate-y-0.5 hover:bg-[var(--brand-violet-900)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
-            aria-label="Abrir filtros"
-          >
-            <span>⚙️</span>
-            Filtros
-          </button>
-        )}
-      </div>
     </div>
   );
 }

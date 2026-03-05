@@ -402,43 +402,31 @@ export default function TiendaClientView({
             { label: "Tienda" },
           ]}
         />
-        <header className="mb-8 text-center md:mb-10">
-          <div
-            ref={introBlockRef}
-            className="glass-panel mt-3 mx-auto w-full max-w-4xl rounded-2xl border border-white/10 p-2.5 md:p-3"
-          >
+        <section className="mt-6">
+          <div ref={introBlockRef}>
+          {/* Rubro toggle — full width, desktop only */}
+          <div className="glass-panel mb-6 hidden md:block w-full rounded-2xl border border-white/10 p-2.5 md:p-3">
             <p className="mb-2 text-center text-xs uppercase tracking-[0.18em] text-[var(--brand-gold-300)] sm:text-sm">
               Tu estilo ideal empieza acá
             </p>
-            <div className="relative mx-auto grid w-full max-w-3xl grid-cols-2 items-center rounded-full border border-white/15 bg-[var(--brand-violet-950)]/35 p-1.5">
+            <div className="relative grid w-full grid-cols-2 items-center rounded-full border border-white/15 bg-[var(--brand-violet-950)]/35 p-1.5">
               <span
                 aria-hidden="true"
                 className="pointer-events-none absolute left-1.5 top-1.5 h-[calc(100%-0.75rem)] w-[calc(50%-0.375rem)] rounded-full border border-[var(--brand-gold-400)] bg-white/12 shadow-[0_6px_14px_rgba(0,0,0,0.18)] transition-transform duration-300 ease-out"
-                style={{
-                  transform: `translateX(${selectedWorldIndex * 100}%)`,
-                }}
+                style={{ transform: `translateX(${selectedWorldIndex * 100}%)` }}
               />
-              {departamentOptions.map((opt, index) => {
+              {departamentOptions.map((opt) => {
                 const active = selectedWorld === opt.value;
                 return (
                   <button
                     key={opt.value}
                     type="button"
-                    onClick={() => {
-                      setCategory(null);
-                      setDepartament(opt.value);
-                    }}
+                    onClick={() => { setCategory(null); setDepartament(opt.value); }}
                     className="relative z-10 rounded-full border border-transparent px-4 py-2 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                     aria-pressed={active}
                     aria-label={`Filtrar por ${opt.label}`}
                   >
-                    <span
-                      className={`block text-[11px] font-semibold uppercase tracking-[0.16em] sm:text-sm ${
-                        active
-                          ? "text-[var(--brand-cream)]"
-                          : "text-[var(--brand-cream)]/80"
-                      }`}
-                    >
+                    <span className={`block text-[11px] font-semibold uppercase tracking-[0.16em] sm:text-sm ${active ? "text-[var(--brand-cream)]" : "text-[var(--brand-cream)]/80"}`}>
                       {opt.label}
                     </span>
                   </button>
@@ -446,9 +434,39 @@ export default function TiendaClientView({
               })}
             </div>
           </div>
-        </header>
 
-        <section className="mt-8">
+          {/* Rubro toggle — mobile only */}
+          <div className="glass-panel mb-4 w-full rounded-2xl border border-white/10 p-2.5 md:hidden">
+            <p className="mb-2 text-center text-xs uppercase tracking-[0.18em] text-[var(--brand-gold-300)] sm:text-sm">
+              Tu estilo ideal empieza acá
+            </p>
+            <div className="relative grid w-full grid-cols-2 items-center rounded-full border border-white/15 bg-[var(--brand-violet-950)]/35 p-1.5">
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute left-1.5 top-1.5 h-[calc(100%-0.75rem)] w-[calc(50%-0.375rem)] rounded-full border border-[var(--brand-gold-400)] bg-white/12 shadow-[0_6px_14px_rgba(0,0,0,0.18)] transition-transform duration-300 ease-out"
+                style={{ transform: `translateX(${selectedWorldIndex * 100}%)` }}
+              />
+              {departamentOptions.map((opt) => {
+                const active = selectedWorld === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => { setCategory(null); setDepartament(opt.value); }}
+                    className="relative z-10 rounded-full border border-transparent px-4 py-2 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
+                    aria-pressed={active}
+                    aria-label={`Filtrar por ${opt.label}`}
+                  >
+                    <span className={`block text-[11px] font-semibold uppercase tracking-[0.16em] sm:text-sm ${active ? "text-[var(--brand-cream)]" : "text-[var(--brand-cream)]/80"}`}>
+                      {opt.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          </div>
+
           <div className="grid grid-cols-1 gap-6 md:grid-cols-[280px_1fr] md:gap-8">
             <div className="hidden md:block">
               <FiltersSidebar
@@ -461,11 +479,13 @@ export default function TiendaClientView({
                   sort: setSortBy,
                 }}
                 onClearFilters={clearFilters}
+                showSortSection={false}
+                showDepartamentSection={false}
               />
             </div>
 
             <div className="flex-1">
-              <div className="sticky top-[var(--header-height-mobile)] z-30 -mx-1 rounded-xl bg-[var(--brand-violet-950)] px-1 pt-1 md:top-[var(--header-height-desktop)] md:-mx-2 md:rounded-2xl md:px-2">
+              <div className="sticky top-[var(--header-height-mobile)] z-30 -mx-1 rounded-xl bg-[var(--brand-violet-950)] px-1 pt-1 md:hidden">
                 <StoreToolbar
                   searchTerm={filters.searchTerm}
                   onSearchChange={setSearchTerm}
@@ -480,7 +500,7 @@ export default function TiendaClientView({
                 />
 
                 {activeFilterChips.length > 0 && (
-                  <div className="mb-1.5 flex items-center gap-2 overflow-x-auto px-2 py-1 md:px-1.5">
+                  <div className="mb-1.5 flex items-center gap-2 overflow-x-auto px-2 py-1 md:hidden">
                     {activeFilterChips.map((chip) => (
                       <button
                         key={chip.key}
@@ -503,6 +523,39 @@ export default function TiendaClientView({
                     </button>
                   </div>
                 )}
+              </div>
+
+              {/* Search + Sort row — desktop only, aligned to product grid columns */}
+              <div className="mb-4 hidden md:grid grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4 lg:gap-5 items-center">
+                <div className="col-span-2 lg:col-span-3 relative">
+                  <label htmlFor="desktop-search" className="sr-only">Buscar productos</label>
+                  <input
+                    id="desktop-search"
+                    type="text"
+                    placeholder="¿Qué estás buscando?"
+                    value={filters.searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full rounded-xl border border-white/20 bg-white/10 px-3.5 py-2.5 text-sm text-[var(--brand-cream)] placeholder-[var(--brand-cream)]/55 backdrop-blur-sm transition duration-200 focus:border-[var(--brand-gold-300)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]/55"
+                  />
+                  <span aria-hidden className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--brand-gold-300)]/90">🔍</span>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <span className="text-xs text-[var(--brand-cream)]/70 shrink-0">Ordenar:</span>
+                  <div className="relative flex-1">
+                    <select
+                      value={filters.sortBy}
+                      onChange={(e) => setSortBy(e.target.value as typeof filters.sortBy)}
+                      className="w-full cursor-pointer appearance-none rounded-lg border border-white/20 bg-white/8 py-1.5 pl-3 pr-7 text-sm text-[var(--brand-cream)] transition hover:border-white/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                    >
+                      {sortOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value} className="bg-[#1a0a2e]">
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span aria-hidden className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-[var(--brand-cream)]/60">▼</span>
+                  </div>
+                </div>
               </div>
 
               {loading ? (

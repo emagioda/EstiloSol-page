@@ -15,22 +15,44 @@ interface FiltersSidebarProps {
   isOpen?: boolean;
   onClose?: () => void;
   showSortSection?: boolean;
+  showDepartamentSection?: boolean;
 }
+
+const sortLabels: Record<FilterState["sortBy"], string> = {
+  newest: "Más recientes",
+  "price-asc": "Menor precio",
+  "price-desc": "Mayor precio",
+  "name-asc": "A - Z",
+  "name-desc": "Z - A",
+};
 
 export default function FiltersSidebar({
   categories,
   filters,
   onFilterChange,
-  onClearFilters: _onClearFilters,
+  onClearFilters,
   isOpen = true,
   onClose,
   showSortSection = true,
+  showDepartamentSection = true,
 }: FiltersSidebarProps) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     departament: true,
     category: true,
     sort: true,
   });
+
+  const activeChips = [
+    ...(filters.category
+      ? [{ key: "category", label: filters.category, onRemove: () => onFilterChange.category(null) }]
+      : []),
+    ...(filters.searchTerm.trim()
+      ? [{ key: "search", label: filters.searchTerm.trim(), onRemove: () => onFilterChange.search("") }]
+      : []),
+    ...(showSortSection && filters.sortBy !== "newest"
+      ? [{ key: "sort", label: sortLabels[filters.sortBy], onRemove: () => onFilterChange.sort("newest") }]
+      : []),
+  ];
 
   const toggleSection = (section: string) => {
     setExpandedSections((prev) => ({
@@ -80,7 +102,40 @@ export default function FiltersSidebar({
             </div>
           )}
 
+          {/* Applied filter chips */}
+          {activeChips.length > 0 && (
+            <div className="border-b border-[var(--brand-gold-300)]/12 pb-3.5">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--brand-cream)]/85">
+                  Filtros aplicados
+                </span>
+                <button
+                  type="button"
+                  onClick={onClearFilters}
+                  className="text-[11px] font-semibold text-[var(--brand-cream)] underline underline-offset-2 transition-colors hover:text-[var(--brand-gold-300)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                >
+                  Borrar todo
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {activeChips.map((chip) => (
+                  <button
+                    key={chip.key}
+                    type="button"
+                    onClick={chip.onRemove}
+                    className="inline-flex items-center gap-1 rounded-full border border-white/28 bg-white/14 px-2.5 py-1 text-[11px] font-medium text-[var(--brand-cream)] transition-colors hover:bg-white/22 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                    aria-label={`Quitar filtro ${chip.label}`}
+                  >
+                    <span className="leading-none">{chip.label}</span>
+                    <span aria-hidden className="text-[var(--brand-gold-300)] leading-none">×</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* departament section */}
+          {showDepartamentSection && (
           <div className="border-b border-[var(--brand-gold-300)]/12 pb-3.5">
             <button
               onClick={() => toggleSection("departament")}
@@ -115,6 +170,7 @@ export default function FiltersSidebar({
               </div>
             )}
           </div>
+          )}
 
           {showSortSection && (
           <div className="border-b border-[var(--brand-gold-300)]/12 pb-3.5">
