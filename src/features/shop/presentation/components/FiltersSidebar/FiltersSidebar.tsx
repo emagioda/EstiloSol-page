@@ -21,7 +21,6 @@ export default function FiltersSidebar({
   categories,
   filters,
   onFilterChange,
-  onClearFilters: _onClearFilters,
   isOpen = true,
   onClose,
   showSortSection = true,

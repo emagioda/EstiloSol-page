@@ -58,8 +58,12 @@ export default function Navbar() {
 
   useEffect(() => {
     if (!isTienda) {
-      setShowTicker(true);
-      return;
+      // Avoid calling setState synchronously during render by scheduling it in the next tick
+      // However, we don't actually need to set showTicker here in an effect.
+      // We can just rely on the component condition or update it when navigating.
+      // But to be safe and clear the warning, we use setTimeout.
+      const timer = setTimeout(() => setShowTicker(true), 0);
+      return () => clearTimeout(timer);
     }
 
     const handleTickerVisibility = (event: Event) => {

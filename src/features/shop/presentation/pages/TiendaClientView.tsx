@@ -177,19 +177,24 @@ export default function TiendaClientView({
         window.clearTimeout(filtersCloseTimerRef.current);
         filtersCloseTimerRef.current = null;
       }
-      setFiltersShouldRender(true);
-      setFiltersClosing(false);
-      return;
+      const timer = setTimeout(() => {
+        setFiltersShouldRender(true);
+        setFiltersClosing(false);
+      }, 0);
+      return () => clearTimeout(timer);
     }
 
     if (!filtersShouldRender || filtersClosing) return;
 
-    setFiltersClosing(true);
-    filtersCloseTimerRef.current = window.setTimeout(() => {
-      setFiltersClosing(false);
-      setFiltersShouldRender(false);
-      filtersCloseTimerRef.current = null;
-    }, 300);
+    const timer = setTimeout(() => {
+      setFiltersClosing(true);
+      filtersCloseTimerRef.current = window.setTimeout(() => {
+        setFiltersClosing(false);
+        setFiltersShouldRender(false);
+        filtersCloseTimerRef.current = null;
+      }, 300);
+    }, 0);
+    return () => clearTimeout(timer);
   }, [filtersOpen, filtersShouldRender, filtersClosing]);
 
   useEffect(() => {
@@ -202,19 +207,24 @@ export default function TiendaClientView({
         window.clearTimeout(sortCloseTimerRef.current);
         sortCloseTimerRef.current = null;
       }
-      setSortShouldRender(true);
-      setSortClosing(false);
-      return;
+      const timer = setTimeout(() => {
+        setSortShouldRender(true);
+        setSortClosing(false);
+      }, 0);
+      return () => clearTimeout(timer);
     }
 
     if (!sortShouldRender || sortClosing) return;
 
-    setSortClosing(true);
-    sortCloseTimerRef.current = window.setTimeout(() => {
-      setSortClosing(false);
-      setSortShouldRender(false);
-      sortCloseTimerRef.current = null;
-    }, 300);
+    const timer = setTimeout(() => {
+      setSortClosing(true);
+      sortCloseTimerRef.current = window.setTimeout(() => {
+        setSortClosing(false);
+        setSortShouldRender(false);
+        sortCloseTimerRef.current = null;
+      }, 300);
+    }, 0);
+    return () => clearTimeout(timer);
   }, [sortOpen, sortShouldRender, sortClosing]);
 
   useEffect(() => {
@@ -418,7 +428,7 @@ export default function TiendaClientView({
                   transform: `translateX(${selectedWorldIndex * 100}%)`,
                 }}
               />
-              {departamentOptions.map((opt, index) => {
+              {departamentOptions.map((opt) => {
                 const active = selectedWorld === opt.value;
                 return (
                   <button

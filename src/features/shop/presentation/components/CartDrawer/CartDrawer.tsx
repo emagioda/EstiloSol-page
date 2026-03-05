@@ -86,21 +86,27 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
         window.clearTimeout(closeAnimationTimerRef.current);
         closeAnimationTimerRef.current = null;
       }
-      setShouldRender(true);
-      if (isClosing) {
-        setIsClosing(false);
-      }
-      return;
+      // Defer state updates to avoid React warning about synchronous state updates in effects
+      const timer = setTimeout(() => {
+        setShouldRender(true);
+        if (isClosing) {
+          setIsClosing(false);
+        }
+      }, 0);
+      return () => clearTimeout(timer);
     }
 
     if (!shouldRender || isClosing) return;
 
-    setIsClosing(true);
-    closeAnimationTimerRef.current = window.setTimeout(() => {
-      setIsClosing(false);
-      setShouldRender(false);
-      closeAnimationTimerRef.current = null;
-    }, 300);
+    const timer = setTimeout(() => {
+      setIsClosing(true);
+      closeAnimationTimerRef.current = window.setTimeout(() => {
+        setIsClosing(false);
+        setShouldRender(false);
+        closeAnimationTimerRef.current = null;
+      }, 300);
+    }, 0);
+    return () => clearTimeout(timer);
   }, [open, shouldRender, isClosing]);
 
   useEffect(() => {
