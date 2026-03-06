@@ -26,6 +26,13 @@ const sortLabels: Record<FilterState["sortBy"], string> = {
   "name-desc": "Z - A",
 };
 
+const optionClass = (active: boolean) =>
+  `flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] ${
+    active
+      ? "font-medium text-[var(--brand-gold-300)]"
+      : "text-[var(--brand-cream)]/78 hover:border-[var(--brand-gold-300)]/20 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
+  }`;
+
 export default function FiltersSidebar({
   categories,
   filters,
@@ -75,7 +82,7 @@ export default function FiltersSidebar({
     <>
       {isMobileDrawer && (
         <div
-          className={`fixed inset-x-0 bottom-0 top-[var(--header-height-mobile)] z-30 bg-black/50 md:hidden ${backdropAnimationClass}`}
+          className={`fixed inset-0 z-[230] bg-black/50 md:hidden ${backdropAnimationClass}`}
           onClick={() => onClose?.()}
         />
       )}
@@ -83,7 +90,7 @@ export default function FiltersSidebar({
       <aside
         role="complementary"
         aria-label="Filtros de productos"
-        className={`elegant-scrollbar fixed left-0 top-[var(--header-height-mobile)] z-40 h-[calc(100dvh-var(--header-height-mobile))] w-72 overflow-y-auto border-r border-[var(--brand-gold-300)]/20 bg-[var(--brand-violet-950)]/94 backdrop-blur-sm md:relative md:top-auto md:h-auto md:w-full md:rounded-2xl md:border md:border-[var(--brand-gold-300)]/24 md:bg-white/[0.09] md:px-5 md:py-4 md:shadow-[0_16px_36px_rgba(18,8,35,0.28)] ${drawerAnimationClass}`}
+        className={`elegant-scrollbar fixed left-0 top-0 z-[240] h-full w-72 overflow-y-auto border-r border-[var(--brand-gold-300)]/20 bg-[var(--brand-violet-950)]/94 backdrop-blur-sm md:relative md:top-auto md:z-auto md:h-auto md:w-full md:rounded-2xl md:border md:border-[var(--brand-gold-300)]/24 md:bg-white/[0.09] md:px-5 md:py-4 md:shadow-[0_16px_36px_rgba(18,8,35,0.28)] ${drawerAnimationClass}`}
       >
         <div className="flex flex-col gap-5 p-5 pt-5 md:p-0">
           {onClose && (
@@ -134,7 +141,7 @@ export default function FiltersSidebar({
             </div>
           )}
 
-          {/* departament section */}
+          {/* Departament section */}
           {showDepartamentSection && (
           <div className="border-b border-[var(--brand-gold-300)]/12 pb-3.5">
             <button
@@ -151,27 +158,41 @@ export default function FiltersSidebar({
                 {[
                   { value: "PELUQUERIA", label: "Peluquería" },
                   { value: "BIJOUTERIE", label: "Bijouterie" },
-                ].map((opt) => (
-                  <label
-                    key={String(opt.value)}
-                    className="flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/78 transition-colors hover:border-[var(--brand-gold-300)]/20 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
-                  >
-                    <input
-                      type="radio"
-                      name="departament"
-                      value={opt.value ?? ""}
-                      checked={filters.departament === opt.value}
-                      onChange={() => onFilterChange.departament(opt.value)}
-                      className="h-3.5 w-3.5 cursor-pointer accent-[var(--brand-gold-400)]"
-                    />
-                    {opt.label}
-                  </label>
-                ))}
+                ].map((opt) => {
+                  const active = filters.departament === opt.value;
+                  return (
+                    <label
+                      key={opt.value}
+                      className={optionClass(active)}
+                    >
+                      <input
+                        type="radio"
+                        name="departament"
+                        value={opt.value}
+                        checked={active}
+                        onChange={() => onFilterChange.departament(opt.value)}
+                        className="sr-only"
+                      />
+                      <span
+                        aria-hidden="true"
+                        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+                          active
+                            ? "border-[var(--brand-gold-400)]"
+                            : "border-[var(--brand-cream)]/40"
+                        }`}
+                      >
+                        {active && <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand-gold-400)]" />}
+                      </span>
+                      <span className="flex-1">{opt.label}</span>
+                    </label>
+                  );
+                })}
               </div>
             )}
           </div>
           )}
 
+          {/* Sort section */}
           {showSortSection && (
           <div className="border-b border-[var(--brand-gold-300)]/12 pb-3.5">
             <button
@@ -191,27 +212,41 @@ export default function FiltersSidebar({
                   { value: "price-desc" as const, label: "Mayor precio" },
                   { value: "name-asc" as const, label: "A - Z" },
                   { value: "name-desc" as const, label: "Z - A" },
-                ].map((option) => (
-                  <label
-                    key={option.value}
-                    className="flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/78 transition-colors hover:border-[var(--brand-gold-300)]/20 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
-                  >
-                    <input
-                      type="radio"
-                      name="sort"
-                      value={option.value}
-                      checked={filters.sortBy === option.value}
-                      onChange={() => onFilterChange.sort(option.value)}
-                      className="h-3.5 w-3.5 cursor-pointer accent-[var(--brand-gold-400)]"
-                    />
-                    {option.label}
-                  </label>
-                ))}
+                ].map((option) => {
+                  const active = filters.sortBy === option.value;
+                  return (
+                    <label
+                      key={option.value}
+                      className={optionClass(active)}
+                    >
+                      <input
+                        type="radio"
+                        name="sort"
+                        value={option.value}
+                        checked={active}
+                        onChange={() => onFilterChange.sort(option.value)}
+                        className="sr-only"
+                      />
+                      <span
+                        aria-hidden="true"
+                        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+                          active
+                            ? "border-[var(--brand-gold-400)]"
+                            : "border-[var(--brand-cream)]/40"
+                        }`}
+                      >
+                        {active && <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand-gold-400)]" />}
+                      </span>
+                      <span className="flex-1">{option.label}</span>
+                    </label>
+                  );
+                })}
               </div>
             )}
           </div>
           )}
 
+          {/* Category section */}
           <div className="border-b border-[var(--brand-gold-300)]/12 pb-3.5">
             <button
               onClick={() => toggleSection("category")}
@@ -224,31 +259,61 @@ export default function FiltersSidebar({
             </button>
             {expandedSections.category && (
               <div className="mt-2.5 flex flex-col gap-1.5" role="radiogroup" aria-label="Filtrar por categoría">
-                <label className="flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/78 transition-colors hover:border-[var(--brand-gold-300)]/20 hover:bg-white/5 hover:text-[var(--brand-gold-300)]">
-                  <input
-                    type="radio"
-                    name="category"
-                    checked={filters.category === null}
-                    onChange={() => onFilterChange.category(null)}
-                    className="h-3.5 w-3.5 cursor-pointer accent-[var(--brand-gold-400)]"
-                  />
-                  Todas
-                </label>
-                {categories.map((cat) => (
-                  <label
-                    key={cat}
-                    className="flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/78 transition-colors hover:border-[var(--brand-gold-300)]/20 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
-                  >
-                    <input
-                      type="radio"
-                      name="category"
-                      checked={filters.category === cat}
-                      onChange={() => onFilterChange.category(filters.category === cat ? null : cat)}
-                      className="h-3.5 w-3.5 cursor-pointer accent-[var(--brand-gold-400)]"
-                    />
-                    {cat}
-                  </label>
-                ))}
+                {(() => {
+                  const allActive = filters.category === null;
+                  return (
+                    <label className={optionClass(allActive)}>
+                      <input
+                        type="radio"
+                        name="category"
+                        value=""
+                        checked={allActive}
+                        onChange={() => onFilterChange.category(null)}
+                        className="sr-only"
+                      />
+                      <span
+                        aria-hidden="true"
+                        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+                          allActive
+                            ? "border-[var(--brand-gold-400)]"
+                            : "border-[var(--brand-cream)]/40"
+                        }`}
+                      >
+                        {allActive && <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand-gold-400)]" />}
+                      </span>
+                      <span className="flex-1">Todas</span>
+                    </label>
+                  );
+                })()}
+                {categories.map((cat) => {
+                  const active = filters.category === cat;
+                  return (
+                    <label
+                      key={cat}
+                      className={optionClass(active)}
+                    >
+                      <input
+                        type="radio"
+                        name="category"
+                        value={cat}
+                        checked={active}
+                        onChange={() => onFilterChange.category(active ? null : cat)}
+                        className="sr-only"
+                      />
+                      <span
+                        aria-hidden="true"
+                        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+                          active
+                            ? "border-[var(--brand-gold-400)]"
+                            : "border-[var(--brand-cream)]/40"
+                        }`}
+                      >
+                        {active && <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand-gold-400)]" />}
+                      </span>
+                      <span className="flex-1">{cat}</span>
+                    </label>
+                  );
+                })}
                 {categories.length === 0 && (
                   <p className="px-2 py-1 text-xs text-[var(--brand-cream)]/60">
                     No hay categorías disponibles para este rubro.

@@ -609,7 +609,7 @@ export default function TiendaClientView({
         )}
 
         {filtersShouldRender && (
-          <div className="fixed inset-0 z-50 md:hidden">
+          <div className="fixed inset-0 z-[250] md:hidden">
             <FiltersSidebar
               categories={availableCategories}
               filters={filters}
@@ -653,25 +653,42 @@ export default function TiendaClientView({
                 </button>
               </div>
               <div className="mt-2 flex flex-col gap-1.5" role="radiogroup" aria-label="Ordenar productos">
-                {sortOptions.map((option) => (
-                  <label
-                    key={option.value}
-                    className="flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm text-[var(--brand-cream)]/82 transition-colors hover:border-[var(--brand-gold-300)]/20 hover:bg-white/5 hover:text-[var(--brand-gold-300)]"
-                  >
-                    <input
-                      type="radio"
-                      name="sort-mobile"
-                      value={option.value}
-                      checked={filters.sortBy === option.value}
-                      onChange={() => {
-                        setSortBy(option.value);
-                        setSortOpen(false);
-                      }}
-                      className="h-3.5 w-3.5 cursor-pointer accent-[var(--brand-gold-400)]"
-                    />
-                    {option.label}
-                  </label>
-                ))}
+                {sortOptions.map((option) => {
+                  const active = filters.sortBy === option.value;
+                  return (
+                    <label
+                      key={option.value}
+                      className={`flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm transition-colors hover:border-[var(--brand-gold-300)]/20 hover:bg-white/5 hover:text-[var(--brand-gold-300)] ${
+                        active
+                          ? "font-medium text-[var(--brand-gold-300)]"
+                          : "text-[var(--brand-cream)]/82"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="sort-mobile"
+                        value={option.value}
+                        checked={active}
+                        onChange={() => {
+                          setSortBy(option.value);
+                          setSortOpen(false);
+                        }}
+                        className="sr-only"
+                      />
+                      <span
+                        aria-hidden="true"
+                        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+                          active
+                            ? "border-[var(--brand-gold-400)]"
+                            : "border-[var(--brand-cream)]/40"
+                        }`}
+                      >
+                        {active && <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand-gold-400)]" />}
+                      </span>
+                      {option.label}
+                    </label>
+                  );
+                })}
               </div>
             </div>
           </div>

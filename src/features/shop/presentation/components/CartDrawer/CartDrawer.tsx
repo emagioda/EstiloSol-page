@@ -18,7 +18,6 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const [shouldRender, setShouldRender] = useState(open);
-  const [drawerTop, setDrawerTop] = useState(64);
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const confirmCancelButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -111,27 +110,10 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
     };
   }, []);
 
-  useEffect(() => {
-    if (!open && !shouldRender) return;
-
-    const updateDrawerTop = () => {
-      const navbar = document.getElementById("main-navbar");
-      if (!navbar) return;
-      const height = Math.round(navbar.getBoundingClientRect().height);
-      if (height > 0) {
-        setDrawerTop(height);
-      }
-    };
-
-    updateDrawerTop();
-    window.addEventListener("resize", updateDrawerTop);
-    return () => window.removeEventListener("resize", updateDrawerTop);
-  }, [open, shouldRender]);
-
   if (!open && !shouldRender) return null;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[180] flex" style={{ top: drawerTop }}>
+    <div className="fixed inset-0 z-[250] flex">
       <div className={`absolute inset-0 bg-black/40 ${isClosing ? 'animate-fadeOutBackdrop' : 'animate-fadeInBackdrop'}`} onClick={handleClose} />
       <aside
         role="dialog"

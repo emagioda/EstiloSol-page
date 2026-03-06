@@ -145,7 +145,7 @@ export default function ContactoPage() {
 
   return (
     <main className="bg-[var(--brand-violet-950)] text-[var(--brand-cream)]">
-      <div className="mx-auto w-full max-w-7xl px-4 py-10 md:px-8 md:py-14">
+      <div className="mx-auto w-full max-w-7xl px-4 pb-10 pt-4 md:px-8 md:pb-14 md:pt-6">
         <div className="grid gap-8 lg:grid-cols-4 lg:gap-6">
           <section className="lg:col-span-3">
             <h1 className="text-3xl font-semibold md:text-4xl">Contacto</h1>
