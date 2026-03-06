@@ -8,6 +8,7 @@ import { CartDrawerProvider } from "@/src/features/shop/presentation/view-models
 import { CartProvider } from "@/src/features/shop/presentation/view-models/useCartStore";
 import { CartBadgeVisibilityProvider } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
 import WebVitalsReporter from "@/src/core/presentation/components/WebVitalsReporter";
+import AppToaster from "@/src/core/presentation/components/AppToaster/AppToaster";
 
 const brandDisplay = Lora({
   variable: "--font-brand-display",
@@ -71,6 +72,7 @@ export default function RootLayout({
               <div className="flex min-h-screen flex-col">
                 <Navbar />
                 <WebVitalsReporter />
+                <AppToaster />
                 <div className="flex min-h-0 flex-1 flex-col pt-[var(--header-height-mobile)] transition-[padding-top] duration-300 ease-out md:pt-[var(--header-height-desktop)]">{children}</div>
                 <GlobalFooter />
               </div>

@@ -2,6 +2,7 @@
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { hasSessionCatalogCache, useProductsStore } from "../view-models/useProductsStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
@@ -9,7 +10,9 @@ import FiltersSidebar from "@/src/features/shop/presentation/components/FiltersS
 import StoreToolbar from "@/src/features/shop/presentation/components/StoreToolbar/StoreToolbar";
 import LoadingGrid from "@/src/features/shop/presentation/components/LoadingGrid/LoadingGrid";
 import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs";
+import { showCartAddedToast } from "@/src/features/shop/presentation/lib/cartToast";
 import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
+import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 
 const QuickViewModal = dynamic(
   () => import("@/src/features/shop/presentation/components/QuickViewModal/QuickViewModal"),
@@ -19,11 +22,6 @@ const QuickViewModal = dynamic(
 type TiendaClientViewProps = {
   initialProducts: Product[];
   staticDetailHandles?: string[];
-};
-
-type CartNotice = {
-  type: "success" | "error";
-  message: string;
 };
 
 const sortOptions = [
@@ -91,7 +89,6 @@ export default function TiendaClientView({
   const [sortOpen, setSortOpen] = useState(false);
   const [sortShouldRender, setSortShouldRender] = useState(false);
   const [sortClosing, setSortClosing] = useState(false);
-  const [cartNotice, setCartNotice] = useState<CartNotice | null>(null);
   const hasCheckedFirstVisitRef = useRef(false);
   const filtersCloseTimerRef = useRef<number | null>(null);
   const sortCloseTimerRef = useRef<number | null>(null);
@@ -102,6 +99,7 @@ export default function TiendaClientView({
   const hasInitializedFromQueryRef = useRef(false);
   const skipNextUrlSyncRef = useRef(false);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
+  const { setOpen } = useCartDrawer();
 
   const availableCategories = categories;
   const selectedWorld = filters.departament ?? "PELUQUERIA";
@@ -161,13 +159,6 @@ export default function TiendaClientView({
       setSuppressFloatingCart(false);
     };
   }, [isQuickViewOpen, setSuppressBadge, setSuppressFloatingCart]);
-
-  useEffect(() => {
-    if (!cartNotice) return;
-    const timer = window.setTimeout(() => setCartNotice(null), 2600);
-    return () => window.clearTimeout(timer);
-  }, [cartNotice]);
-
   useEffect(() => {
     filtersOpenRef.current = filtersOpen;
     filtersShouldRenderRef.current = filtersShouldRender;
@@ -384,12 +375,16 @@ export default function TiendaClientView({
     router.replace(nextUrl, { scroll: false });
   }, [pathname, router, rubroFromQuery, searchParams, selectedWorld]);
 
-  const handleAddFeedback = ({ ok, name }: { ok: boolean; name: string }) => {
-    setCartNotice({
-      type: ok ? "success" : "error",
-      message: ok
-        ? `${name} se agregó al carrito con éxito.`
-        : `No pudimos agregar ${name}. Intentá nuevamente.`,
+  const handleAddFeedback = ({ ok, name, image }: { ok: boolean; name: string; image?: string }) => {
+    if (!ok) {
+      toast.error(`No pudimos agregar ${name}. Intentá nuevamente.`);
+      return;
+    }
+
+    showCartAddedToast({
+      productName: name,
+      image,
+      onViewCart: () => setOpen(true),
     });
   };
 
@@ -588,25 +583,6 @@ export default function TiendaClientView({
             </div>
           </div>
         </section>
-
-        {cartNotice && (
-          <div className="pointer-events-none fixed inset-x-0 top-24 z-[70] flex justify-center px-4">
-            <div
-              className={`rounded-xl border px-4 py-2.5 text-sm font-medium shadow-[0_12px_30px_rgba(10,4,20,0.35)] backdrop-blur animate-fade-up ${
-                cartNotice.type === "success"
-                  ? "border-emerald-200/60 bg-emerald-600/85 text-white"
-                  : "border-rose-200/60 bg-rose-600/85 text-white"
-              }`}
-              role="status"
-              aria-live="polite"
-            >
-              <span className="inline-flex items-center gap-2">
-                <span aria-hidden>{cartNotice.type === "success" ? "✓" : "⚠"}</span>
-                {cartNotice.message}
-              </span>
-            </div>
-          </div>
-        )}
 
         {filtersShouldRender && (
           <div className="fixed inset-0 z-[250] md:hidden">

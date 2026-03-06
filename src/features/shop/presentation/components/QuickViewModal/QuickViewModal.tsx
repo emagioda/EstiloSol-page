@@ -10,7 +10,7 @@ type QuickViewModalProps = {
   product: Product | null;
   open: boolean;
   onClose: () => void;
-  onAddFeedback?: (params: { ok: boolean; name: string }) => void;
+  onAddFeedback?: (params: { ok: boolean; name: string; image?: string }) => void;
 };
 
 export default function QuickViewModal({
@@ -210,7 +210,7 @@ export default function QuickViewModal({
                         qty,
                         image: currentImage,
                       });
-                      onAddFeedback?.({ ok: true, name: product.name });
+                      onAddFeedback?.({ ok: true, name: product.name, image: currentImage });
                     } catch {
                       onAddFeedback?.({ ok: false, name: product.name });
                     }

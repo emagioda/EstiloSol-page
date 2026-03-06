@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useProductsStore } from "../view-models/useProductsStore";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs";
 import FormattedDescription from "@/src/features/shop/presentation/components/FormattedDescription";
+import { showCartAddedToast } from "@/src/features/shop/presentation/lib/cartToast";
+import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
@@ -12,11 +15,6 @@ type Props = {
   product: Product;
   // slug is passed by the route; used to re-find product after a reload
   slug?: string;
-};
-
-type CartNotice = {
-  type: "success" | "error";
-  message: string;
 };
 
 const formatMoney = (value: number) =>
@@ -82,8 +80,8 @@ export default function ProductDetail({ product, slug }: Props) {
   );
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [qty, setQty] = useState(1);
-  const [cartNotice, setCartNotice] = useState<CartNotice | null>(null);
   const { addItem } = useCart();
+  const { setOpen } = useCartDrawer();
 
   const safeUnitPrice = isValidPrice(currentProduct.price) ? currentProduct.price : 0;
   const displayPrice = isValidPrice(currentProduct.price) ? formatMoney(currentProduct.price) : "Consultar";
@@ -96,13 +94,7 @@ export default function ProductDetail({ product, slug }: Props) {
       ? currentProduct.description
       : LONG_DESCRIPTION_PLACEHOLDER;
 
-  useEffect(() => {
-    if (!cartNotice) return;
-    const timer = window.setTimeout(() => setCartNotice(null), 2400);
-    return () => window.clearTimeout(timer);
-  }, [cartNotice]);
-
-  const handleAddToCart = () => {
+    const handleAddToCart = () => {
     try {
       addItem({
         productId: currentProduct.id,
@@ -112,15 +104,13 @@ export default function ProductDetail({ product, slug }: Props) {
         image: images[0] ?? "",
       });
       setQty(1);
-      setCartNotice({
-        type: "success",
-        message: `${currentProduct.name} se agregó al carrito con éxito.`,
+      showCartAddedToast({
+        productName: currentProduct.name,
+        image: images[0],
+        onViewCart: () => setOpen(true),
       });
     } catch {
-      setCartNotice({
-        type: "error",
-        message: `No pudimos agregar ${currentProduct.name}. Intentá nuevamente.`,
-      });
+      toast.error(`No pudimos agregar ${currentProduct.name}. Intentá nuevamente.`);
     }
   };
 
@@ -211,25 +201,6 @@ export default function ProductDetail({ product, slug }: Props) {
           </div>
         </div>
       </section>
-
-      {cartNotice && (
-        <div className="pointer-events-none fixed inset-x-0 top-24 z-[70] flex justify-center px-4">
-          <div
-            className={`rounded-xl border px-4 py-2.5 text-sm font-medium shadow-[0_12px_30px_rgba(10,4,20,0.35)] backdrop-blur animate-fade-up ${
-              cartNotice.type === "success"
-                ? "border-emerald-200/60 bg-emerald-600/85 text-white"
-                : "border-rose-200/60 bg-rose-600/85 text-white"
-            }`}
-            role="status"
-            aria-live="polite"
-          >
-            <span className="inline-flex items-center gap-2">
-              <span aria-hidden>{cartNotice.type === "success" ? "✓" : "⚠"}</span>
-              {cartNotice.message}
-            </span>
-          </div>
-        </div>
-      )}
 
       {currentProduct.product_type === "KIT" && Array.isArray(currentProduct.includes) && currentProduct.includes.length > 0 && (
         <section className="mt-10">
