@@ -9,12 +9,18 @@ export type CartItem = {
   image?: string;
 };
 
+export type PaymentMethod = "mercadopago" | "transfer" | "cash";
+
 type CartContextValue = {
   items: CartItem[];
+  paymentMethod: PaymentMethod;
   addItem: (item: CartItem) => void;
   removeItem: (productId: string) => void;
   updateQty: (productId: string, qty: number) => void;
   clear: () => void;
+  setPaymentMethod: (method: PaymentMethod) => void;
+  getTotal: () => number;
+  getDiscountedTotal: () => number;
 };
 
 const STORAGE_KEY = "es_sol_cart_v1";
@@ -62,6 +68,7 @@ const readItemsFromStorage = (): CartItem[] => {
 
 export const CartProvider = ({ children }: { children: React.ReactNode }) => {
   const [items, setItems] = useState<CartItem[]>(() => readItemsFromStorage());
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("mercadopago");
 
   useEffect(() => {
     try {
@@ -109,16 +116,22 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const clear = () => setItems([]);
+  const getTotal = () => items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0);
+  const getDiscountedTotal = () => Math.round(getTotal() * 0.9);
 
   const value = useMemo(
     () => ({
       items,
+      paymentMethod,
       addItem,
       removeItem,
       updateQty,
       clear,
+      setPaymentMethod,
+      getTotal,
+      getDiscountedTotal,
     }),
-    [items]
+    [items, paymentMethod]
   );
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

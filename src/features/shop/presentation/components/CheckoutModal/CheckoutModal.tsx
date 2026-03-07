@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import type { CartItem } from "../../view-models/useCartStore";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CartItem, PaymentMethod } from "../../view-models/useCartStore";
 import { useCart } from "../../view-models/useCartStore";
 import { refreshProductsMemoryCacheFromSource } from "../../view-models/useProductsStore";
 
@@ -10,6 +10,8 @@ const formatMoney = (value: number) =>
     currency: "ARS",
     maximumFractionDigits: 0,
   }).format(value);
+
+const DEFAULT_WHATSAPP_NUMBER = "5493416888926";
 
 interface Props {
   open: boolean;
@@ -24,53 +26,125 @@ type CheckoutErrorState = {
 };
 
 export default function CheckoutModal({ open, onClose, items, subtotal }: Props) {
-  const { removeItem } = useCart();
+  const {
+    removeItem,
+    setPaymentMethod,
+    getTotal,
+    getDiscountedTotal,
+  } = useCart();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod | null>(null);
+  const [transferInfoOpen, setTransferInfoOpen] = useState(false);
   const [checkoutPhase, setCheckoutPhase] = useState<"idle" | "validating" | "redirecting">("idle");
   const [slowValidationVisible, setSlowValidationVisible] = useState(false);
   const [error, setError] = useState<CheckoutErrorState | null>(null);
   const isTestPublicKey = (process.env.NEXT_PUBLIC_MP_PUBLIC_KEY || "").toUpperCase().startsWith("TEST-");
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const onCloseRef = useRef(onClose);
   const slowValidationTimerRef = useRef<number | null>(null);
   const prevalidationDebounceRef = useRef<number | null>(null);
 
   useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  const total = useMemo(() => {
+    const fromStore = getTotal();
+    if (Number.isFinite(fromStore) && fromStore > 0) {
+      return Math.round(fromStore);
+    }
+    return Math.round(subtotal);
+  }, [getTotal, subtotal]);
+
+  const discountedTotal = useMemo(() => {
+    const fromStore = getDiscountedTotal();
+    if (Number.isFinite(fromStore) && fromStore > 0) {
+      return Math.round(fromStore);
+    }
+    return Math.round(total * 0.9);
+  }, [getDiscountedTotal, total]);
+
+  const whatsappNumber = (process.env.NEXT_PUBLIC_WHATSAPP_NUMBER || DEFAULT_WHATSAPP_NUMBER).replace(/\D/g, "");
+
+  const isDiscountMethod =
+    selectedPaymentMethod === "cash" || selectedPaymentMethod === "transfer";
+
+  const checkoutMessage = useMemo(() => {
+    const orderLines = items.map((item) => `- ${item.qty}x ${item.name}`).join("\n");
+    const paymentText =
+      selectedPaymentMethod === "transfer"
+        ? "transferencia bancaria"
+        : selectedPaymentMethod === "cash"
+        ? "efectivo"
+        : "Mercado Pago / tarjetas";
+    const finalTotal = isDiscountMethod ? discountedTotal : total;
+    const closingLine =
+      selectedPaymentMethod === "transfer"
+        ? "Adjunto el comprobante."
+        : selectedPaymentMethod === "cash"
+        ? "Quiero coordinar el pago en efectivo."
+        : "Quiero continuar con el pago.";
+
+    return [
+      `Hola, quiero continuar mi pedido con pago por ${paymentText}.`,
+      "",
+      `Total: ${formatMoney(finalTotal)}`,
+      "",
+      "Detalle del pedido:",
+      orderLines || "- Sin productos",
+      name.trim() ? `Nombre: ${name.trim()}` : "",
+      phone.trim() ? `WhatsApp: ${phone.trim()}` : "",
+      notes.trim() ? `Notas: ${notes.trim()}` : "",
+      "",
+      closingLine,
+    ]
+      .filter((line, index, all) => !(line === "" && all[index - 1] === ""))
+      .join("\n");
+  }, [discountedTotal, isDiscountMethod, items, name, notes, phone, selectedPaymentMethod, total]);
+
+  const checkoutWhatsappUrl = useMemo(
+    () => `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(checkoutMessage)}`,
+    [checkoutMessage, whatsappNumber]
+  );
+
+  const handlePaymentMethodChange = (method: PaymentMethod) => {
+    if (checkoutPhase !== "idle") return;
+    setSelectedPaymentMethod(method);
+    setPaymentMethod(method);
+    if (method !== "transfer") {
+      setTransferInfoOpen(false);
+    }
+    setError(null);
+    setSlowValidationVisible(false);
+  };
+
+  useEffect(() => {
     if (!open) return;
 
-    const resetStateTimer = window.setTimeout(() => {
-      setError(null);
-      setCheckoutPhase("idle");
-      setSlowValidationVisible(false);
-    }, 0);
+    setError(null);
+    setSelectedPaymentMethod(null);
+    setTransferInfoOpen(false);
+    setCheckoutPhase("idle");
+    setSlowValidationVisible(false);
 
     closeButtonRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => {
-      window.clearTimeout(resetStateTimer);
       window.removeEventListener("keydown", onKeyDown);
       if (slowValidationTimerRef.current !== null) {
         window.clearTimeout(slowValidationTimerRef.current);
         slowValidationTimerRef.current = null;
       }
       setSlowValidationVisible(false);
-    };
-  }, [open, onClose]);
-
-  useEffect(() => {
-    if (!open) return;
-
-    document.body.classList.add("shop-modal-open");
-    return () => {
-      document.body.classList.remove("shop-modal-open");
     };
   }, [open]);
 
@@ -115,7 +189,7 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
         await refreshProductsMemoryCacheFromSource();
 
         setError({
-          message: data?.error || "Algunos productos del carrito ya no están disponibles.",
+          message: data?.error || "Algunos productos del carrito ya no estan disponibles.",
           invalidProducts: data.invalidProducts
             .map((item) => ({
               productId: typeof item?.productId === "string" ? item.productId : "",
@@ -180,10 +254,11 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
   };
 
   const startCheckout = async () => {
+    if (selectedPaymentMethod !== "mercadopago") return;
     if (items.length === 0 || checkoutPhase !== "idle") return;
 
     if (!name.trim() || !phone.trim()) {
-      setError({ message: "Completá nombre y WhatsApp para continuar." });
+      setError({ message: "Completa nombre y WhatsApp para continuar." });
       return;
     }
 
@@ -226,7 +301,7 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
         clearSlowValidationTimer();
         setCheckoutPhase("idle");
         setError({
-          message: data?.error || "No pudimos iniciar el pago. Intentá nuevamente.",
+          message: data?.error || "No pudimos iniciar el pago. Intenta nuevamente.",
           invalidProducts:
             Array.isArray(data?.invalidProducts) && data?.invalidProducts.length > 0
               ? data.invalidProducts
@@ -251,8 +326,21 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
     } catch {
       clearSlowValidationTimer();
       setCheckoutPhase("idle");
-      setError({ message: "Ocurrió un error de conexión. Intentá nuevamente." });
+      setError({ message: "Ocurrio un error de conexion. Intenta nuevamente." });
     }
+  };
+
+  const startDiscountCheckout = () => {
+    if (!isDiscountMethod) return;
+    if (items.length === 0 || checkoutPhase !== "idle") return;
+
+    if (!name.trim() || !phone.trim()) {
+      setError({ message: "Completa nombre y WhatsApp para continuar." });
+      return;
+    }
+
+    setError(null);
+    window.open(checkoutWhatsappUrl, "_blank", "noopener,noreferrer");
   };
 
   const removeInvalidProducts = () => {
@@ -263,7 +351,7 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
       removeItem(item.productId);
     });
 
-    setError({ message: "Quitamos los productos no disponibles. Ya podés continuar con el pago." });
+    setError({ message: "Quitamos los productos no disponibles. Ya podes continuar con el pago." });
   };
 
   return (
@@ -273,18 +361,127 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
         role="dialog"
         aria-modal="true"
         aria-label="Finalizar compra"
-        className="relative z-10 w-full max-w-md rounded bg-[var(--brand-violet-950)] p-6 text-[var(--brand-cream)]"
+        className="relative z-10 max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded bg-[var(--brand-violet-950)] p-6 text-[var(--brand-cream)]"
       >
         <h3 className="text-lg font-semibold">Finalizar compra</h3>
-        <p className="text-sm text-[var(--brand-cream)]/60">Completá tus datos para continuar con Mercado Pago Checkout Pro.</p>
+        <p className="text-sm text-[var(--brand-cream)]/60">
+          Completa tus datos y elegi como queres pagar.
+        </p>
 
         <div className="mt-4 flex flex-col gap-3">
           <label className="text-xs uppercase tracking-[0.08em] text-[var(--brand-cream)]/70" htmlFor="checkout-name">Nombre</label>
-          <input id="checkout-name" className="w-full rounded border border-[var(--brand-violet-800)] bg-transparent px-3 py-2 text-[var(--brand-cream)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]" placeholder="Tu nombre" value={name} onChange={(e)=>setName(e.target.value)} />
+          <input
+            id="checkout-name"
+            className="w-full rounded border border-[var(--brand-violet-800)] bg-transparent px-3 py-2 text-[var(--brand-cream)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+            placeholder="Tu nombre"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
           <label className="text-xs uppercase tracking-[0.08em] text-[var(--brand-cream)]/70" htmlFor="checkout-phone">WhatsApp</label>
-          <input id="checkout-phone" className="w-full rounded border border-[var(--brand-violet-800)] bg-transparent px-3 py-2 text-[var(--brand-cream)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]" placeholder="Ej: 54911..." value={phone} onChange={(e)=>setPhone(e.target.value)} />
+          <input
+            id="checkout-phone"
+            className="w-full rounded border border-[var(--brand-violet-800)] bg-transparent px-3 py-2 text-[var(--brand-cream)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+            placeholder="Ej: 54911..."
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+          />
           <label className="text-xs uppercase tracking-[0.08em] text-[var(--brand-cream)]/70" htmlFor="checkout-notes">Notas (opcional)</label>
-          <textarea id="checkout-notes" className="w-full rounded border border-[var(--brand-violet-800)] bg-transparent px-3 py-2 text-[var(--brand-cream)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]" placeholder="Indicaciones para tu pedido" value={notes} onChange={(e)=>setNotes(e.target.value)} />
+          <textarea
+            id="checkout-notes"
+            className="w-full rounded border border-[var(--brand-violet-800)] bg-transparent px-3 py-2 text-[var(--brand-cream)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+            placeholder="Indicaciones para tu pedido"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </div>
+
+        <div className="mt-5">
+          <p className="text-xs uppercase tracking-[0.08em] text-[var(--brand-cream)]/70">Metodo de pago</p>
+          <div className="mt-2 grid gap-2">
+            <label className="cursor-pointer rounded-lg border border-green-400/45 bg-green-500/10 p-3 transition hover:border-green-300">
+              <div className="flex items-start gap-3">
+                <input
+                  type="radio"
+                  name="payment-method"
+                  checked={selectedPaymentMethod === "cash"}
+                  onChange={() => handlePaymentMethodChange("cash")}
+                  className="mt-1"
+                  disabled={checkoutPhase !== "idle"}
+                />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-green-200">Efectivo</p>
+                    <span className="rounded-full bg-green-200 px-2 py-0.5 text-[10px] font-bold text-green-900">10% OFF</span>
+                  </div>
+                  <p className="text-xs font-semibold text-green-300">Total con descuento: {formatMoney(discountedTotal)}</p>
+                </div>
+              </div>
+            </label>
+
+            <div className="rounded-lg border border-green-400/45 bg-green-500/10 p-3">
+              <label className="cursor-pointer">
+                <div className="flex items-start gap-3">
+                  <input
+                    type="radio"
+                    name="payment-method"
+                    checked={selectedPaymentMethod === "transfer"}
+                    onChange={() => handlePaymentMethodChange("transfer")}
+                    className="mt-1"
+                    disabled={checkoutPhase !== "idle"}
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-green-200">Transferencia bancaria</p>
+                      <span className="rounded-full bg-green-200 px-2 py-0.5 text-[10px] font-bold text-green-900">10% OFF</span>
+                    </div>
+                    <p className="text-xs font-semibold text-green-300">Total con descuento: {formatMoney(discountedTotal)}</p>
+                  </div>
+                </div>
+              </label>
+
+              <button
+                type="button"
+                onClick={() => setTransferInfoOpen((prev) => !prev)}
+                className="ml-6 mt-1 inline-flex items-center gap-1 text-xs font-medium text-green-100 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-300"
+              >
+                <span className="underline underline-offset-4">
+                  {transferInfoOpen ? "Ocultar datos bancarios" : "Ver datos bancarios"}
+                </span>
+                <span aria-hidden className="no-underline">{transferInfoOpen ? "▴" : "▾"}</span>
+              </button>
+
+              {transferInfoOpen && (
+                <div className="ml-6 mt-2 rounded-lg border border-green-300/40 bg-green-50 p-3 text-green-900">
+                  <div className="space-y-1 text-xs sm:text-sm">
+                    <p><span className="font-semibold">Banco:</span> Banco Galicia</p>
+                    <p><span className="font-semibold">Titular:</span> Estilo Sol</p>
+                    <p className="break-all"><span className="font-semibold">CBU:</span> 0000000000000000000000</p>
+                    <p><span className="font-semibold">Alias:</span> ESTILOSOL.OK</p>
+                  </div>
+                  <div className="mx-auto my-3 flex h-28 w-28 items-center justify-center rounded-lg bg-gray-200 text-center text-xs text-gray-500">
+                    [Imagen QR aqui]
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <label className="cursor-pointer rounded-lg border border-[var(--brand-violet-700)] bg-white/5 p-3 transition hover:border-[var(--brand-gold-300)]/70">
+              <div className="flex items-start gap-3">
+                <input
+                  type="radio"
+                  name="payment-method"
+                  checked={selectedPaymentMethod === "mercadopago"}
+                  onChange={() => handlePaymentMethodChange("mercadopago")}
+                  className="mt-1"
+                  disabled={checkoutPhase !== "idle"}
+                />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-[var(--brand-cream)]">Mercado Pago / Tarjetas</p>
+                  <p className="text-xs text-[var(--brand-cream)]/70">Total: {formatMoney(total)}</p>
+                </div>
+              </div>
+            </label>
+          </div>
         </div>
 
         {error ? (
@@ -318,36 +515,50 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
           </div>
         ) : null}
 
-        {checkoutPhase === "validating" ? (
+        {selectedPaymentMethod === "mercadopago" && checkoutPhase === "validating" ? (
           <p className="mt-3 text-xs text-[var(--brand-cream)]/75" role="status" aria-live="polite">
-            Verificando precios y disponibilidad…
+            Verificando precios y disponibilidad...
           </p>
         ) : null}
 
-        {checkoutPhase === "redirecting" ? (
+        {selectedPaymentMethod === "mercadopago" && checkoutPhase === "redirecting" ? (
           <p className="mt-3 text-xs text-[var(--brand-cream)]/75" role="status" aria-live="polite">
-            Redirigiendo a Mercado Pago…
+            Redirigiendo a Mercado Pago...
           </p>
         ) : null}
 
-        {slowValidationVisible && checkoutPhase === "validating" ? (
+        {selectedPaymentMethod === "mercadopago" && slowValidationVisible && checkoutPhase === "validating" ? (
           <p className="mt-2 text-xs text-[var(--brand-gold-300)]" role="status" aria-live="polite">
             Esto puede demorar unos segundos.
           </p>
         ) : null}
 
         <div className="mt-4 flex gap-2">
-          <button
-            onClick={startCheckout}
-            disabled={checkoutPhase !== "idle" || items.length === 0}
-            className="flex-1 rounded bg-[var(--brand-gold-300)] py-2 text-black disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-950)]"
-          >
-            {checkoutPhase === "validating"
-              ? "Verificando..."
-              : checkoutPhase === "redirecting"
-              ? "Redirigiendo..."
-              : `Pagar ${formatMoney(subtotal)}`}
-          </button>
+          {selectedPaymentMethod === "mercadopago" ? (
+            <button
+              onClick={startCheckout}
+              disabled={checkoutPhase !== "idle" || items.length === 0}
+              className="flex-1 rounded bg-[var(--brand-gold-300)] py-2 text-black disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-950)]"
+            >
+              {checkoutPhase === "validating"
+                ? "Verificando..."
+                : checkoutPhase === "redirecting"
+                ? "Redirigiendo..."
+                : `Pagar ${formatMoney(total)}`}
+            </button>
+          ) : isDiscountMethod ? (
+            <button
+              type="button"
+              onClick={startDiscountCheckout}
+              disabled={items.length === 0 || checkoutPhase !== "idle"}
+              className="flex-1 rounded bg-[var(--brand-gold-300)] py-2 text-black shadow-[0_10px_20px_rgba(18,8,35,0.25)] transition-transform hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-950)]"
+            >
+              {selectedPaymentMethod === "transfer"
+                ? "Enviar Comprobante de Transferencia"
+                : "Coordinar Pago en Efectivo"}
+            </button>
+          ) : <div className="flex-1" />}
+
           <button
             ref={closeButtonRef}
             onClick={onClose}

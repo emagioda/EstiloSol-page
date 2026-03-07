@@ -104,6 +104,9 @@ export default function ProductDetail({ product, slug }: Props) {
 
   const safeUnitPrice = isValidPrice(currentProduct.price) ? currentProduct.price : 0;
   const displayPrice = isValidPrice(currentProduct.price) ? formatMoney(currentProduct.price) : "Consultar";
+  const discountedPrice = isValidPrice(currentProduct.price)
+    ? formatMoney(Math.round(currentProduct.price * 0.9))
+    : null;
   const shortDescription = useMemo(
     () => getShortDescription(currentProduct.short_description, currentProduct.description),
     [currentProduct.short_description, currentProduct.description]
@@ -161,6 +164,11 @@ export default function ProductDetail({ product, slug }: Props) {
           <p className="text-3xl font-extrabold text-yellow-100">
             {displayPrice}
           </p>
+          {discountedPrice && (
+            <div className="mt-2 w-fit rounded-md border border-green-200 bg-green-50 px-3 py-2 text-green-700">
+              <span className="font-bold">10% OFF</span> en Efectivo/Transferencia: {discountedPrice}
+            </div>
+          )}
 
           <p className="max-w-[62ch] text-sm leading-relaxed text-[var(--brand-cream)]/90">{shortDescription}</p>
 
