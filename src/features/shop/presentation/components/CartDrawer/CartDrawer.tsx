@@ -1,9 +1,9 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 import "@/src/core/presentation/styles/tokens.css";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCart } from "../../view-models/useCartStore";
-import CheckoutModal from "../CheckoutModal/CheckoutModal";
 
 const formatMoney = (value: number) =>
   new Intl.NumberFormat("es-AR", {
@@ -14,7 +14,6 @@ const formatMoney = (value: number) =>
 
 export default function CartDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { items, updateQty, removeItem, clear } = useCart();
-  const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const [shouldRender, setShouldRender] = useState(open);
@@ -63,21 +62,6 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
     if (!confirmClearOpen) return;
     confirmCancelButtonRef.current?.focus();
   }, [confirmClearOpen]);
-
-  useEffect(() => {
-    if (!checkoutOpen) return;
-
-    window.history.pushState({ ...(window.history.state ?? {}), shopCheckoutOpen: true }, "", window.location.href);
-
-    const handlePopState = () => {
-      setCheckoutOpen(false);
-    };
-
-    window.addEventListener("popstate", handlePopState);
-    return () => {
-      window.removeEventListener("popstate", handlePopState);
-    };
-  }, [checkoutOpen]);
 
   useEffect(() => {
     if (open) {
@@ -193,13 +177,22 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
           </div>
 
           <div className="mt-4 flex gap-2">
-            <button
-              disabled={items.length===0}
-              onClick={() => setCheckoutOpen(true)}
-              className="flex-1 rounded bg-[var(--brand-gold-300)] py-2 text-black shadow-[0_10px_20px_rgba(18,8,35,0.25)] transition-transform hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-950)]"
-            >
-              Continuar al pago
-            </button>
+            {items.length > 0 ? (
+              <Link
+                href="/tienda/checkout"
+                onClick={handleClose}
+                className="flex-1 rounded bg-[var(--brand-gold-300)] py-2 text-center text-black shadow-[0_10px_20px_rgba(18,8,35,0.25)] transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-950)]"
+              >
+                Continuar al pago
+              </Link>
+            ) : (
+              <button
+                disabled
+                className="flex-1 rounded bg-[var(--brand-gold-300)] py-2 text-black opacity-50"
+              >
+                Continuar al pago
+              </button>
+            )}
             <button
               onClick={handleRequestClearCart}
               className="rounded border border-[var(--brand-violet-900)] px-3 py-2 transition-colors hover:border-[var(--brand-gold-300)] hover:text-[var(--brand-gold-300)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
@@ -245,7 +238,6 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
           </div>
         )}
 
-        <CheckoutModal open={checkoutOpen} onClose={() => setCheckoutOpen(false)} items={items} subtotal={subtotal} />
       </aside>
     </div>
   );
