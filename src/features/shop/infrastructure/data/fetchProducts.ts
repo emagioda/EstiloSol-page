@@ -64,6 +64,60 @@ const toBoolean = (value: unknown): boolean => {
   return false;
 };
 
+const toNumberOrNull = (value: unknown): number | null => {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    if (!normalized) return null;
+    const parsed = Number(normalized.replace(/[^0-9.-]+/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+};
+
+const toSpecifications = (value: unknown): Record<string, string> => {
+  const toRecord = (input: unknown): Record<string, string> => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return {};
+    }
+
+    const entries = Object.entries(input as Record<string, unknown>).reduce<Record<string, string>>(
+      (acc, [key, rawValue]) => {
+        const normalizedKey = key.trim();
+        if (!normalizedKey) return acc;
+        if (typeof rawValue !== "string") return acc;
+
+        const normalizedValue = rawValue.trim();
+        if (!normalizedValue) return acc;
+
+        acc[normalizedKey] = normalizedValue;
+        return acc;
+      },
+      {}
+    );
+
+    return entries;
+  };
+
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    if (!normalized) return {};
+
+    try {
+      const parsed: unknown = JSON.parse(normalized);
+      return toRecord(parsed);
+    } catch {
+      return {};
+    }
+  }
+
+  return toRecord(value);
+};
+
 const toImagesArray = (rawImages: unknown): string[] => {
   if (Array.isArray(rawImages)) {
     return rawImages
@@ -121,6 +175,10 @@ const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null =>
     typeof priceRaw === "number"
       ? priceRaw
       : Number(String(priceRaw).replace(/[^0-9.-]+/g, ""));
+  const safePrice = Number.isFinite(price) ? price : 0;
+
+  const oldPriceRaw = row.old_price ?? row.oldPrice ?? row.PrecioAnterior ?? null;
+  const oldPrice = toNumberOrNull(oldPriceRaw);
 
   const departamentRaw = row.departament ?? row.Departamento ?? "";
   const departament =
@@ -136,13 +194,20 @@ const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null =>
       ? maybeSlug.trim()
       : id; // fallback a id cuando no hay slug explícito
 
+  const explicitSaleFlag = toBoolean(row.is_sale ?? row.Oferta);
+  const hasPriceDiscount = oldPrice !== null && oldPrice > safePrice;
+  const specifications = toSpecifications(
+    row.specifications ?? row.Specifications ?? row.specs ?? row.especificaciones
+  );
+
   return {
     id,
     name: String(row.name ?? row.Nombre ?? "Producto sin nombre"),
     slug: slugStr,
     departament: departament === "PELUQUERIA" || departament === "BIJOUTERIE" ? departament : undefined,
     category: String(row.category ?? row.Categoria ?? "General"),
-    price: Number.isFinite(price) ? price : 0,
+    price: safePrice,
+    old_price: oldPrice,
     currency: String(row.currency ?? row.Moneda ?? "ARS"),
     short_description: String(
       row.short_description ?? row.ShortDescription ?? row.shortDescription ?? ""
@@ -150,10 +215,11 @@ const adaptSheetRowToProduct = (row: Record<string, unknown>): Product | null =>
     description: String(row.description ?? row.Descripcion ?? ""),
     images: toImagesArray(rawImages),
     tags: toStringArray(row.tags_csv ?? row.Tags ?? ""),
+    specifications,
     product_type: productType === "KIT" ? "KIT" : "UNICO",
     includes: productType === "KIT" ? toStringArray(row.includes ?? row.Includes ?? "") : [],
     is_new: toBoolean(row.is_new ?? row.Nuevo),
-    is_sale: toBoolean(row.is_sale ?? row.Oferta),
+    is_sale: explicitSaleFlag || hasPriceDiscount,
     active: true, // ya filtramos arriba
   };
 };

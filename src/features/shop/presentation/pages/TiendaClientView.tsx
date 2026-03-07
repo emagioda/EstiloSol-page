@@ -75,8 +75,12 @@ export default function TiendaClientView({
     setDepartament,
     setCategory,
     setSortBy,
+    togglePromoFilter,
+    toggleKitFilter,
+    toggleSpecFilter,
     clearFilters,
     categories,
+    availableSpecifications,
     selectedProduct,
     isQuickViewOpen,
     openQuickView,
@@ -116,12 +120,21 @@ export default function TiendaClientView({
   );
 
   const activeFilterChips = [
-    ...(filters.category
+    ...(filters.showOnlyPromos
       ? [
           {
-            key: "category",
-            label: filters.category,
-            onRemove: () => setCategory(null),
+            key: "promo",
+            label: "Solo ofertas",
+            onRemove: togglePromoFilter,
+          },
+        ]
+      : []),
+    ...(filters.showOnlyKits
+      ? [
+          {
+            key: "kits",
+            label: "Combos",
+            onRemove: toggleKitFilter,
           },
         ]
       : []),
@@ -134,6 +147,11 @@ export default function TiendaClientView({
           },
         ]
       : []),
+    ...Object.entries(filters.selectedSpecs).map(([specKey, value]) => ({
+      key: `spec-${specKey}-${value}`,
+      label: `${specKey}: ${value}`,
+      onRemove: () => toggleSpecFilter(specKey, value),
+    })),
   ];
 
   useEffect(() => {
@@ -466,12 +484,16 @@ export default function TiendaClientView({
             <div className="hidden md:block">
               <FiltersSidebar
                 categories={availableCategories}
+                availableSpecifications={availableSpecifications}
                 filters={filters}
                 onFilterChange={{
                   departament: setDepartament,
                   category: setCategory,
                   search: setSearchTerm,
                   sort: setSortBy,
+                  togglePromo: togglePromoFilter,
+                  toggleKit: toggleKitFilter,
+                  toggleSpec: toggleSpecFilter,
                 }}
                 onClearFilters={clearFilters}
                 showSortSection={false}
@@ -588,17 +610,22 @@ export default function TiendaClientView({
           <div className="fixed inset-0 z-[250] md:hidden">
             <FiltersSidebar
               categories={availableCategories}
+              availableSpecifications={availableSpecifications}
               filters={filters}
               onFilterChange={{
                 departament: setDepartament,
                 category: setCategory,
                 search: setSearchTerm,
                 sort: setSortBy,
+                togglePromo: togglePromoFilter,
+                toggleKit: toggleKitFilter,
+                toggleSpec: toggleSpecFilter,
               }}
               onClearFilters={clearFilters}
               isOpen={!filtersClosing}
               onClose={() => setFiltersOpen(false)}
               showSortSection={false}
+              showDepartamentSection={false}
             />
           </div>
         )}

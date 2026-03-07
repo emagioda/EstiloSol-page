@@ -7,11 +7,13 @@ export interface ProductDTO {
   departament?: Departament;
   category?: string;
   price: number;
+  old_price?: number | null;
   currency?: string;
   short_description?: string | null;
   description?: string | null;
   images?: string[];
   tags?: string[];
+  specifications?: Record<string, string>;
   product_type?: ProductType;
   includes?: string[];
   is_new?: boolean;

@@ -8,22 +8,32 @@ import type { Product } from "@/src/features/shop/domain/entities/Product";
 
 export type FilterState = {
   searchTerm: string;
-  departament: string | null; // "PELUQUERIA" | "BIJOUTERIE"
+  departament: string | null;
   category: string | null;
   sortBy: "price-asc" | "price-desc" | "name-asc" | "name-desc" | "newest";
+  showOnlyPromos: boolean;
+  showOnlyKits: boolean;
+  selectedSpecs: Record<string, string>;
 };
 
 type ProductsStatus = "idle" | "loading" | "success" | "error";
+export type SelectedSpecsMap = Record<string, string>;
+export type SpecFiltersMap = Record<string, string[]>;
+
 const SESSION_CATALOG_CACHE_KEY = "es:shop:catalog:session:v1";
 const CATALOG_CACHE_UPDATED_EVENT = "es:catalog-cache-updated";
 
-// simple in‑memory cache that survives component unmounts while the
-// page is still open. it doesn’t persist across full reloads, but it
-// guarantees that navigating between store/detail pages won’t trigger a
-// network request or a loading spinner.
+// Simple in-memory cache that survives component unmounts while the
+// page is still open. It does not persist across full reloads, but it
+// avoids re-fetching when moving between store/detail pages.
 let cachedProducts: Product[] | null = null;
 let cachedProductsSignature: string | null = null;
 let catalogPrefetchPromise: Promise<boolean> | null = null;
+
+const normalizeSpecifications = (product: Product): Record<string, string> =>
+  product.specifications && typeof product.specifications === "object"
+    ? product.specifications
+    : {};
 
 const setMemoryCatalogCache = (products: Product[]) => {
   cachedProducts = products;
@@ -79,10 +89,12 @@ const productSignature = (products: Product[]): string =>
       const imagesCount = Array.isArray(product.images) ? product.images.length : 0;
       const includesCount = Array.isArray(product.includes) ? product.includes.length : 0;
       const tagsCount = Array.isArray(product.tags) ? product.tags.length : 0;
+      const specsCount = Object.keys(normalizeSpecifications(product)).length;
       return [
         product.id,
         product.slug ?? "",
         String(product.price),
+        String(product.old_price ?? ""),
         product.departament ?? "",
         product.category ?? "",
         product.product_type ?? "",
@@ -92,6 +104,7 @@ const productSignature = (products: Product[]): string =>
         String(imagesCount),
         String(includesCount),
         String(tagsCount),
+        String(specsCount),
       ].join("|");
     })
     .sort()
@@ -105,6 +118,59 @@ const updateMemoryCatalogCache = (products: Product[]) => {
 const updateCatalogCache = (products: Product[]) => {
   updateMemoryCatalogCache(products);
   writeSessionCachedProducts(products);
+};
+
+const sortProducts = (
+  productsToSort: Product[],
+  sortBy: FilterState["sortBy"]
+): Product[] => {
+  const sorted = [...productsToSort];
+
+  switch (sortBy) {
+    case "price-asc":
+      sorted.sort((a, b) => a.price - b.price);
+      break;
+    case "price-desc":
+      sorted.sort((a, b) => b.price - a.price);
+      break;
+    case "name-asc":
+      sorted.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+      break;
+    case "name-desc":
+      sorted.sort((a, b) => (b.name || "").localeCompare(a.name || ""));
+      break;
+    case "newest":
+    default:
+      break;
+  }
+
+  return sorted;
+};
+
+const applySpecFilters = (
+  productsToFilter: Product[],
+  selectedSpecs: SelectedSpecsMap
+): Product[] => {
+  const activeSpecs = Object.entries(selectedSpecs).filter(
+    ([, value]) => typeof value === "string" && value.trim().length > 0
+  );
+
+  if (activeSpecs.length === 0) {
+    return productsToFilter;
+  }
+
+  return productsToFilter.filter((product) => {
+    const specs = normalizeSpecifications(product);
+
+    return activeSpecs.every(([specKey, selectedValue]) => {
+      const productSpecValue = specs[specKey];
+      if (typeof productSpecValue !== "string" || productSpecValue.trim().length === 0) {
+        return false;
+      }
+
+      return productSpecValue === selectedValue;
+    });
+  });
 };
 
 export const refreshProductsMemoryCacheFromSource = async (): Promise<boolean> => {
@@ -173,9 +239,6 @@ export const useProductsStore = ({
   });
 
   const [status, setStatus] = useState<ProductsStatus>(
-    // cache takes precedence, otherwise fall back to the value computed
-    // from the prop. status is used later so we can decide whether to run
-    // the loader effect.
     cachedProducts && cachedProducts.length > 0
       ? "success"
       : initialProducts && initialProducts.length > 0
@@ -189,6 +252,9 @@ export const useProductsStore = ({
     departament: "PELUQUERIA",
     category: null,
     sortBy: "newest",
+    showOnlyPromos: false,
+    showOnlyKits: false,
+    selectedSpecs: {},
   });
 
   useEffect(() => {
@@ -197,9 +263,7 @@ export const useProductsStore = ({
     const syncFromCache = (event: Event) => {
       const customEvent = event as CustomEvent<{ products?: Product[] }>;
       const eventProducts = customEvent.detail?.products;
-      const sourceProducts = Array.isArray(eventProducts)
-        ? eventProducts
-        : cachedProducts;
+      const sourceProducts = Array.isArray(eventProducts) ? eventProducts : cachedProducts;
 
       if (!sourceProducts || sourceProducts.length === 0) return;
 
@@ -232,111 +296,165 @@ export const useProductsStore = ({
     return () => window.clearTimeout(hydrateTimer);
   }, []);
 
-  const loadProducts = useCallback(async (forceRefresh = false): Promise<boolean> => {
-    // if we've already fetched once this session just reuse the data
-    if (!forceRefresh && cachedProducts && cachedProducts.length > 0) {
-      setProducts(cachedProducts);
-      setStatus("success");
-      return true;
-    }
-
-    setStatus("loading");
-    setErrorMessage(null);
-
-    try {
-      const data = await fetchProductsFromSheets({
-        layer: "client-refresh",
-        cacheBust: forceRefresh,
-      });
-
-      const nextSignature = productSignature(data);
-      const hasChanged = nextSignature !== cachedProductsSignature;
-
-      updateCatalogCache(data);
-
-      setProducts((prev) => {
-        if (hasChanged || prev.length === 0 || status === "error") {
-          return data;
-        }
-        return prev;
-      });
-
-      setStatus("success");
-      return true;
-    } catch (error) {
-      if (!isMissingSheetsEndpointError(error)) {
-        console.error("Error fetching products:", error);
+  const loadProducts = useCallback(
+    async (forceRefresh = false): Promise<boolean> => {
+      if (!forceRefresh && cachedProducts && cachedProducts.length > 0) {
+        setProducts(cachedProducts);
+        setStatus("success");
+        return true;
       }
 
-      setProducts([]);
-      setStatus("error");
-      const message =
-        error instanceof Error
-          ? error.message
-          : "No se pudo cargar el catálogo. Verificá tu conexión e intentá nuevamente.";
-      setErrorMessage(message);
-      return false;
-    }
-  }, [status]);
+      setStatus("loading");
+      setErrorMessage(null);
+
+      try {
+        const data = await fetchProductsFromSheets({
+          layer: "client-refresh",
+          cacheBust: forceRefresh,
+        });
+
+        const nextSignature = productSignature(data);
+        const hasChanged = nextSignature !== cachedProductsSignature;
+
+        updateCatalogCache(data);
+
+        setProducts((prev) => {
+          if (hasChanged || prev.length === 0 || status === "error") {
+            return data;
+          }
+          return prev;
+        });
+
+        setStatus("success");
+        return true;
+      } catch (error) {
+        if (!isMissingSheetsEndpointError(error)) {
+          console.error("Error fetching products:", error);
+        }
+
+        setProducts([]);
+        setStatus("error");
+        const message =
+          error instanceof Error
+            ? error.message
+            : "No se pudo cargar el catalogo. Verifica tu conexion e intenta nuevamente.";
+        setErrorMessage(message);
+        return false;
+      }
+    },
+    [status]
+  );
+
+  const applyContextFilters = useCallback(
+    (productsToFilter: Product[]): Product[] => {
+      let filtered = [...productsToFilter];
+
+      if (filters.searchTerm) {
+        const term = filters.searchTerm.toLowerCase();
+        filtered = filtered.filter(
+          (product) =>
+            product.name?.toLowerCase().includes(term) ||
+            product.description?.toLowerCase().includes(term)
+        );
+      }
+
+      if (filters.departament) {
+        filtered = filtered.filter((product) => product.departament === filters.departament);
+      }
+
+      if (filters.showOnlyPromos) {
+        filtered = filtered.filter((product) => product.is_sale === true);
+      }
+
+      if (filters.showOnlyKits) {
+        filtered = filtered.filter((product) => product.product_type === "KIT");
+      }
+
+      return filtered;
+    },
+    [
+      filters.searchTerm,
+      filters.departament,
+      filters.showOnlyPromos,
+      filters.showOnlyKits,
+    ]
+  );
+
+  const contextFilteredProducts = useMemo(
+    () => applyContextFilters(products),
+    [applyContextFilters, products]
+  );
+
+  const filteredProducts = useMemo(() => {
+    const withCategory = filters.category
+      ? contextFilteredProducts.filter((product) => product.category === filters.category)
+      : contextFilteredProducts;
+    const withSpecs = applySpecFilters(withCategory, filters.selectedSpecs);
+    return sortProducts(withSpecs, filters.sortBy);
+  }, [contextFilteredProducts, filters.category, filters.selectedSpecs, filters.sortBy]);
 
   const categories = useMemo(() => {
     const cats = new Set<string>();
-    products.forEach((p) => {
-      if (filters.departament && p.departament !== filters.departament) return;
-      if (p.category) cats.add(p.category);
+    contextFilteredProducts.forEach((product) => {
+      if (product.category) {
+        cats.add(product.category);
+      }
     });
-    return Array.from(cats).sort();
-  }, [products, filters.departament]);
-
-  const applyFilters = useCallback((productsToFilter: Product[]): Product[] => {
-    let filtered = [...productsToFilter];
-
-    if (filters.searchTerm) {
-      const term = filters.searchTerm.toLowerCase();
-      filtered = filtered.filter(
-        (p) =>
-          p.name?.toLowerCase().includes(term) ||
-          p.description?.toLowerCase().includes(term)
-      );
-    }
-
-    if (filters.departament) {
-      filtered = filtered.filter((p) => p.departament === filters.departament);
-    }
-
     if (filters.category) {
-      filtered = filtered.filter((p) => p.category === filters.category);
+      cats.add(filters.category);
+    }
+    return Array.from(cats).sort((a, b) => a.localeCompare(b));
+  }, [contextFilteredProducts, filters.category]);
+
+  const specsSourceProducts = useMemo(() => {
+    if (!filters.category) {
+      return contextFilteredProducts;
     }
 
-    switch (filters.sortBy) {
-      case "price-asc":
-        filtered.sort((a, b) => a.price - b.price);
-        break;
-      case "price-desc":
-        filtered.sort((a, b) => b.price - a.price);
-        break;
-      case "name-asc":
-        filtered.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-        break;
-      case "name-desc":
-        filtered.sort((a, b) => (b.name || "").localeCompare(a.name || ""));
-        break;
-      case "newest":
-      default:
-        break;
-    }
+    return contextFilteredProducts.filter(
+      (product) => product.category === filters.category
+    );
+  }, [contextFilteredProducts, filters.category]);
 
-    return filtered;
-  }, [filters]);
+  const availableSpecifications = useMemo<SpecFiltersMap>(() => {
+    const specSets: Record<string, Set<string>> = {};
 
-  const filteredProducts = useMemo(() => applyFilters(products), [applyFilters, products]);
+    specsSourceProducts.forEach((product) => {
+      const specs = normalizeSpecifications(product);
+      Object.entries(specs).forEach(([specKey, rawValue]) => {
+        const key = specKey.trim();
+        const value = rawValue.trim();
+        if (!key || !value) return;
+
+        if (!specSets[key]) {
+          specSets[key] = new Set<string>();
+        }
+
+        specSets[key].add(value);
+      });
+    });
+
+    return Object.fromEntries(
+      Object.entries(specSets)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([specKey, valuesSet]) => [
+          specKey,
+          Array.from(valuesSet).sort((left, right) => left.localeCompare(right)),
+        ])
+    );
+  }, [specsSourceProducts]);
 
   const setSearchTerm = useCallback((term: string) => {
     setFilters((prev) => ({ ...prev, searchTerm: term }));
   }, []);
 
   const setDepartament = useCallback((dep: string | null) => {
-    setFilters((prev) => ({ ...prev, departament: dep ?? "PELUQUERIA", category: null }));
+    setFilters((prev) => ({
+      ...prev,
+      departament: dep ?? "PELUQUERIA",
+      category: null,
+      selectedSpecs: {},
+    }));
   }, []);
 
   const setCategory = useCallback((category: string | null) => {
@@ -347,12 +465,50 @@ export const useProductsStore = ({
     setFilters((prev) => ({ ...prev, sortBy: sort }));
   }, []);
 
+  const togglePromoFilter = useCallback(() => {
+    setFilters((prev) => ({ ...prev, showOnlyPromos: !prev.showOnlyPromos }));
+  }, []);
+
+  const toggleKitFilter = useCallback(() => {
+    setFilters((prev) => ({ ...prev, showOnlyKits: !prev.showOnlyKits }));
+  }, []);
+
+  const toggleSpecFilter = useCallback((specKey: string, specValue: string) => {
+    const normalizedKey = specKey.trim();
+    const normalizedValue = specValue.trim();
+
+    if (!normalizedKey || !normalizedValue) {
+      return;
+    }
+
+    setFilters((prev) => {
+      const currentValue = prev.selectedSpecs[normalizedKey];
+      const nextSelectedSpecs: SelectedSpecsMap = {
+        ...prev.selectedSpecs,
+      };
+
+      if (currentValue === normalizedValue) {
+        delete nextSelectedSpecs[normalizedKey];
+      } else {
+        nextSelectedSpecs[normalizedKey] = normalizedValue;
+      }
+
+      return {
+        ...prev,
+        selectedSpecs: nextSelectedSpecs,
+      };
+    });
+  }, []);
+
   const clearFilters = useCallback(() => {
     setFilters({
       searchTerm: "",
       category: null,
       departament: "PELUQUERIA",
       sortBy: "newest",
+      showOnlyPromos: false,
+      showOnlyKits: false,
+      selectedSpecs: {},
     });
   }, []);
 
@@ -378,9 +534,13 @@ export const useProductsStore = ({
     setDepartament,
     setCategory,
     setSortBy,
+    togglePromoFilter,
+    toggleKitFilter,
+    toggleSpecFilter,
     clearFilters,
     openQuickView,
     closeQuickView,
     categories,
+    availableSpecifications,
   } as const;
 };

@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import Image from "next/image";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useProductsStore } from "../view-models/useProductsStore";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
@@ -54,12 +56,16 @@ const getShortDescription = (shortDescription?: string, description?: string) =>
 export default function ProductDetail({ product, slug }: Props) {
   // load full catalog and sync; slug param is optional fallback if we
   // don't have the original product prop (e.g. client-side navigation).
-  const { products, status } = useProductsStore({
+  const { allProducts, status, loadProducts } = useProductsStore({
     initialProducts: product ? [product] : []
   });
 
+  useEffect(() => {
+    void loadProducts();
+  }, [loadProducts]);
+
   const currentProduct = useMemo(() => {
-    if (status !== "success" || products.length === 0) {
+    if (status !== "success" || allProducts.length === 0) {
       return product;
     }
 
@@ -68,8 +74,21 @@ export default function ProductDetail({ product, slug }: Props) {
       ? (p: Product) => p.slug === slug
       : () => false;
 
-    return products.find((p) => idMatch(p) || slugMatch(p)) ?? product;
-  }, [status, products, product, slug]);
+    return allProducts.find((p) => idMatch(p) || slugMatch(p)) ?? product;
+  }, [status, allProducts, product, slug]);
+
+  const similarProducts = useMemo(() => {
+    if (!currentProduct.category) {
+      return [];
+    }
+
+    return allProducts
+      .filter(
+        (candidate) =>
+          candidate.id !== currentProduct.id && candidate.category === currentProduct.category
+      )
+      .slice(0, 6);
+  }, [allProducts, currentProduct.category, currentProduct.id]);
 
   const images = useMemo(
     () =>
@@ -215,6 +234,70 @@ export default function ProductDetail({ product, slug }: Props) {
         <div className="mb-6 h-px bg-gradient-to-r from-[var(--brand-gold-400)]/40 via-[var(--brand-gold-300)]/20 to-transparent" />
         <FormattedDescription description={longDescription} />
       </section>
+
+      {similarProducts.length > 0 && (
+        <section className="mt-12">
+          <h2 className="mb-4 text-lg font-semibold text-[var(--brand-gold-300)]">
+            Tambien te puede gustar
+          </h2>
+          <div className="mb-6 h-px bg-gradient-to-r from-[var(--brand-gold-400)]/40 via-[var(--brand-gold-300)]/20 to-transparent" />
+
+          <div className="-mx-1 flex snap-x snap-mandatory gap-4 overflow-x-auto px-1 pb-2">
+            {similarProducts.map((similarProduct) => {
+              const similarPrice = isValidPrice(similarProduct.price)
+                ? formatMoney(similarProduct.price)
+                : "Consultar";
+              const oldPrice = isValidPrice(similarProduct.old_price)
+                ? similarProduct.old_price
+                : null;
+              const hasOldPrice =
+                oldPrice !== null &&
+                isValidPrice(similarProduct.price) &&
+                oldPrice > similarProduct.price;
+              const similarOldPrice = hasOldPrice
+                ? formatMoney(oldPrice)
+                : null;
+
+              return (
+                <Link
+                  key={similarProduct.id}
+                  href={`/tienda/producto/${similarProduct.slug || similarProduct.id}`}
+                  className="group snap-start shrink-0 basis-[74%] overflow-hidden rounded-2xl border border-[var(--brand-gold-300)]/22 bg-white/[0.12] shadow-lg shadow-black/20 transition-all duration-200 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/50 sm:basis-[46%] lg:basis-[30%]"
+                >
+                  <div className="relative aspect-[4/5] w-full">
+                    {Array.isArray(similarProduct.images) && similarProduct.images[0] ? (
+                      <Image
+                        src={similarProduct.images[0]}
+                        alt={similarProduct.name}
+                        fill
+                        className="object-cover transition-transform duration-300 group-hover:scale-105"
+                        sizes="(max-width:640px) 70vw, (max-width:1024px) 40vw, 24vw"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[var(--brand-gold-300)]">
+                        Sin imagen
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-1.5 p-3.5">
+                    {similarOldPrice && (
+                      <span className="text-xs text-[var(--brand-cream)]/60 line-through">
+                        {similarOldPrice}
+                      </span>
+                    )}
+                    <span className="text-sm font-semibold text-[var(--brand-gold-300)]">
+                      {similarPrice}
+                    </span>
+                    <p className="line-clamp-2 text-sm leading-relaxed text-[var(--brand-cream)]/92">
+                      {similarProduct.name}
+                    </p>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
     </main>
   );
 }
