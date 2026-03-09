@@ -9,6 +9,7 @@ type CheckoutBodyInput = {
   payer?: {
     name?: unknown;
     phone?: unknown;
+    email?: unknown;
   };
   notes?: unknown;
 };
@@ -23,6 +24,7 @@ export type ParsedCheckoutBody = {
   items: ParsedCheckoutItem[];
   payerName: string;
   payerPhone: string;
+  payerEmail: string;
   notes: string;
 };
 
@@ -52,6 +54,8 @@ const normalizeQuantity = (value: unknown) => {
   if (quantity < 1 || quantity > 50) return null;
   return quantity;
 };
+
+const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
 export const parseExternalReference = (value: string | null): ValidationResult<string> => {
   const ref = typeof value === "string" ? value.trim() : "";
@@ -97,10 +101,15 @@ export const parseCheckoutBody = (
 
   const payerName = sanitizeText(body.payer?.name, 100);
   const payerPhone = sanitizeText(body.payer?.phone, 30).replace(/[^\d+]/g, "");
+  const payerEmail = sanitizeText(body.payer?.email, 120).toLowerCase();
   const notes = sanitizeText(body.notes, 250);
 
   if (options.requirePayer && (!payerName || payerPhone.replace(/\D/g, "").length < 8)) {
-    return { ok: false, message: "Completá nombre y WhatsApp para continuar" };
+    return { ok: false, message: "Completa nombre y WhatsApp para continuar" };
+  }
+
+  if (payerEmail && !isValidEmail(payerEmail)) {
+    return { ok: false, message: "Ingresa un email valido para recibir el comprobante." };
   }
 
   return {
@@ -109,6 +118,7 @@ export const parseCheckoutBody = (
       items: parsedItems,
       payerName,
       payerPhone,
+      payerEmail,
       notes,
     },
   };

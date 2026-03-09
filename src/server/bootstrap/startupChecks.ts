@@ -38,14 +38,19 @@ const run = (): StartupCheckReport => {
     missingCritical.push(...paymentsEnv.missing);
   }
 
+  const serverEnv = env.validateServerEnv();
+  if (!serverEnv.ok) {
+    missingCritical.push(...serverEnv.missing);
+  }
+
+  const publicEnv = env.validatePublicEnv();
+  if (!publicEnv.ok) {
+    warnings.push(`Public env missing: ${publicEnv.missing.join(", ")}`);
+  }
+
   const webhookSecret = env.getOptionalServer("MP_WEBHOOK_SECRET");
   if (process.env.NODE_ENV === "production" && !webhookSecret) {
     missingCritical.push("MP_WEBHOOK_SECRET");
-  }
-
-  const appBaseUrl = env.getOptionalServer("APP_BASE_URL");
-  if (!appBaseUrl) {
-    warnings.push("APP_BASE_URL missing: fallbacks will use request origin");
   }
 
   const metricsToken = env.getOptionalServer("OPS_METRICS_TOKEN");
@@ -85,9 +90,11 @@ const run = (): StartupCheckReport => {
     warnings.push("OPS_METRICS_TOKEN looks like placeholder value");
   }
 
+  const uniqueMissingCritical = Array.from(new Set(missingCritical));
+
   const report: StartupCheckReport = {
-    ok: missingCritical.length === 0,
-    missingCritical,
+    ok: uniqueMissingCritical.length === 0,
+    missingCritical: uniqueMissingCritical,
     warnings,
     checkedAt: new Date().toISOString(),
   };

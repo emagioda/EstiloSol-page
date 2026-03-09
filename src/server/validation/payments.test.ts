@@ -5,7 +5,7 @@ describe("payments validation", () => {
   it("parses a valid checkout body", () => {
     const result = parseCheckoutBody({
       items: [{ productId: "abc-1", qty: 2 }],
-      payer: { name: "Ana Perez", phone: "+54 11 1234-5678" },
+      payer: { name: "Ana Perez", phone: "+54 11 1234-5678", email: "ana@example.com" },
       notes: "Sin apuro",
     });
 
@@ -16,6 +16,7 @@ describe("payments validation", () => {
     expect(result.value.items[0]).toEqual({ productId: "abc-1", qty: 2 });
     expect(result.value.payerName).toBe("Ana Perez");
     expect(result.value.payerPhone).toBe("+541112345678");
+    expect(result.value.payerEmail).toBe("ana@example.com");
     expect(result.value.notes).toBe("Sin apuro");
   });
 
@@ -44,6 +45,17 @@ describe("payments validation", () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.message).toContain("Completá nombre y WhatsApp");
+    expect(result.message).toContain("Completa nombre y WhatsApp");
+  });
+
+  it("rejects invalid payer email", () => {
+    const result = parseCheckoutBody({
+      items: [{ productId: "abc-1", qty: 1 }],
+      payer: { name: "Ana Perez", phone: "+54 11 1234-5678", email: "bad-email" },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toContain("email");
   });
 });

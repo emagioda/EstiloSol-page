@@ -1,4 +1,5 @@
 import Link from "next/link";
+import brandConfig from "@/src/config/brand";
 
 const primaryLinks = [
   { label: "Inicio", href: "/" },
@@ -11,23 +12,17 @@ const supportLinks = [
   { label: "Contacto y Redes", href: "/contacto" },
 ];
 
-const socialLinks = [
-  { label: "Instagram" },
-  { label: "WhatsApp" },
-];
-
-const whatsappHref =
-  "https://wa.me/5493416888926?text=Hola%20Estilo%20Sol%2C%20quisiera%20consultar%20sobre%20";
-
 export default function GlobalFooter() {
   const year = new Date().getFullYear();
+  const socialLinks = brandConfig.contactInfo.socialNetworks;
+  const brandName = brandConfig.brandName;
 
   return (
     <footer className="relative z-40 border-t border-[var(--brand-gold-400)]/25 bg-[var(--brand-violet-950)] text-[var(--brand-cream)]">
       <div className="mx-auto w-full max-w-6xl px-5 pb-[calc(1.25rem+var(--safe-area-bottom))] pt-3 md:px-8 md:pb-7 md:pt-4 xl:px-8">
         <div className="grid gap-6 md:grid-cols-[1.35fr_1fr_1fr_0.85fr] md:gap-8">
           <section className="md:flex md:flex-col md:items-center md:text-center">
-            <h2 className="text-2xl font-semibold text-[var(--brand-gold-300)]">Estilo Sol</h2>
+            <h2 className="text-2xl font-semibold text-[var(--brand-gold-300)]">{brandName}</h2>
             <p className="mt-2 text-xs uppercase tracking-[0.18em] text-[var(--brand-cream)]/75">
               Estilo y Cuidado
             </p>
@@ -75,15 +70,15 @@ export default function GlobalFooter() {
               Redes
             </h3>
             <div className="mt-4 flex items-center gap-4">
-              {socialLinks.map((social) => (
-                social.label === "WhatsApp" ? (
+              {socialLinks.map((social) =>
+                social.icon === "whatsapp" ? (
                   <a
-                    key={social.label}
-                    href={whatsappHref}
+                    key={social.name}
+                    href={social.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    aria-label="WhatsApp"
-                    title="Abrir WhatsApp"
+                    aria-label={social.name}
+                    title={`Abrir ${social.name}`}
                     className="inline-flex h-11 w-11 items-center justify-center text-[var(--brand-cream)]/75 transition hover:text-[var(--brand-gold-300)]"
                   >
                     <svg
@@ -102,9 +97,9 @@ export default function GlobalFooter() {
                   </a>
                 ) : (
                   <span
-                    key={social.label}
-                    aria-label={social.label}
-                    title={`${social.label} (próximamente)`}
+                    key={social.name}
+                    aria-label={social.name}
+                    title={`${social.name} (próximamente)`}
                     className="inline-flex h-11 w-11 cursor-not-allowed items-center justify-center text-[var(--brand-cream)]/75"
                   >
                     <svg
@@ -123,13 +118,13 @@ export default function GlobalFooter() {
                     </svg>
                   </span>
                 )
-              ))}
+              )}
             </div>
           </section>
         </div>
 
         <div className="mt-5 border-t border-[var(--brand-gold-400)]/20 pt-3 text-center text-xs text-[var(--brand-cream)]/65">
-          <p>© {year} Estilo Sol. Todos los derechos reservados.</p>
+          <p>© {year} {brandName}. Todos los derechos reservados.</p>
         </div>
       </div>
     </footer>

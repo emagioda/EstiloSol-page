@@ -17,9 +17,34 @@ const ESTILO_SOL_WHATSAPP_LABEL = "+54 9 341 688-8926";
 const ESTILO_SOL_WHATSAPP_PHONE = "5493416888926";
 const RECEIPT_PDF_MODE: "compact" | "a4" = "compact";
 
+const formatDateTime24h = (input?: string | number | Date) => {
+  const date = input ? new Date(input) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    return new Intl.DateTimeFormat("es-AR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(new Date());
+  }
+
+  return new Intl.DateTimeFormat("es-AR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
+};
+
 const buildWhatsappOrderMessage = (externalReference?: string, date?: string) => {
   const referenceText = externalReference?.trim() || "N/A";
-  const dateText = date?.trim() || new Date().toLocaleString("es-AR");
+  const dateText = date?.trim() || formatDateTime24h();
   return [
     "Hola Estilo Sol, quiero consultar por mi pedido.",
     `Numero de referencia: ${referenceText}`,
@@ -143,7 +168,7 @@ export default function SuccessPage() {
             approved: true,
             paymentId: paymentId ?? undefined,
             externalReference: ref,
-            date: new Date().toLocaleString("es-AR"),
+            date: formatDateTime24h(),
           }
         );
       }
@@ -176,7 +201,7 @@ export default function SuccessPage() {
         { label: "Estado", value: "Aprobado" },
         { label: "ID de pago", value: String(paymentData.paymentId || "N/A") },
         { label: "Numero de pedido", value: String(paymentData.externalReference || "N/A") },
-        { label: "Fecha de pago", value: String(paymentData.date || new Date().toLocaleString("es-AR")) },
+        { label: "Fecha de pago", value: String(paymentData.date || formatDateTime24h()) },
         { label: "Metodo", value: "Mercado Pago" },
       ];
 

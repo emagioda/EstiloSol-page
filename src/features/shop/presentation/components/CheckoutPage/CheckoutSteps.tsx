@@ -388,6 +388,7 @@ export default function CheckoutSteps({ subtotal, discountedTotal }: CheckoutSte
           payer: {
             name: fullName,
             phone: normalizePhoneDigits(whatsapp),
+            email: email.trim(),
           },
           notes: buildApiNotes({
             deliveryMethod,

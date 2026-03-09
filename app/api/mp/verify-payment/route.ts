@@ -8,6 +8,8 @@ import { REJECTED_PAYMENT_STATUSES, amountMatches } from "@/src/server/payments/
 import type { MpPaymentResponse, MpSearchResponse } from "@/src/server/payments/shared";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { parseExternalReference } from "@/src/server/validation/payments";
+import type { Order } from "@/src/server/orders/types";
+import { formatDateTime24h, sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
 
 export const runtime = "nodejs";
 
@@ -30,10 +32,44 @@ const buildApprovedResponse = (
       paymentId,
       externalReference,
       timestamp,
-      date: new Date(timestamp).toLocaleString("es-AR"),
+      date: formatDateTime24h(timestamp),
     },
     { status: 200 }
   );
+
+const trySendReceiptEmail = async (
+  order: Order,
+  paymentId: string | number | undefined,
+  approvedAt: number
+) => {
+  if (order.receiptEmailSentAt) return;
+
+  const result = await sendOrderReceiptEmail({
+    order,
+    paymentId,
+    approvedAt,
+  });
+
+  if (result.sent) {
+    await updateOrder(order.externalReference, { receiptEmailSentAt: Date.now() });
+    await trackBusinessEvent("payment.receipt_email.sent", { externalReference: order.externalReference });
+    return;
+  }
+
+  if (result.reason === "missing_customer_email") {
+    return;
+  }
+
+  logEvent("warn", "payments.receipt_email_failed", {
+    externalReference: order.externalReference,
+    reason: result.reason,
+    detail: result.detail,
+  });
+  await trackBusinessEvent("payment.receipt_email.failed", {
+    externalReference: order.externalReference,
+    reason: result.reason,
+  });
+};
 
 const isApprovedPaymentMatch = (
   payment: MpPaymentResponse | undefined,
@@ -133,6 +169,7 @@ export async function GET(request: NextRequest) {
           mpStatus: String(paymentById.data?.status || "approved"),
           approvedAt,
         });
+        await trySendReceiptEmail(order, paymentId, approvedAt);
         logEvent("info", "payments.approved_from_verify_payment_id", {
           externalReference: order.externalReference,
           paymentId,
@@ -200,6 +237,7 @@ export async function GET(request: NextRequest) {
       mpStatus: String(approvedPayment.status || "approved"),
       approvedAt,
     });
+    await trySendReceiptEmail(order, approvedPayment.id, approvedAt);
 
     logEvent("info", "payments.approved_from_verify", {
       externalReference: order.externalReference,

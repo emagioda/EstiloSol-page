@@ -40,6 +40,8 @@ export const BUSINESS_METRIC_NAMES = [
   "payment.verify.approved",
   "payment.verify.rejected",
   "payment.verify.pending",
+  "payment.receipt_email.sent",
+  "payment.receipt_email.failed",
   "payment.webhook.rate_limited",
   "payment.webhook.invalid_payload",
   "payment.webhook.no_data_id",

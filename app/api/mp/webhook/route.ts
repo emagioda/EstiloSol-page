@@ -18,9 +18,12 @@ import {
   markApproved,
   markRejected,
   paymentDedupeKey,
+  updateOrder,
   webhookDedupeKey,
 } from "@/src/server/orders/store";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
+import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
+import type { Order } from "@/src/server/orders/types";
 
 export const runtime = "nodejs";
 
@@ -28,6 +31,40 @@ type MpWebhookPayload = {
   data?: {
     id?: string | number;
   };
+};
+
+const trySendReceiptEmail = async (
+  order: Order,
+  paymentId: string | number | undefined,
+  approvedAt: number
+) => {
+  if (order.receiptEmailSentAt) return;
+
+  const result = await sendOrderReceiptEmail({
+    order,
+    paymentId,
+    approvedAt,
+  });
+
+  if (result.sent) {
+    await updateOrder(order.externalReference, { receiptEmailSentAt: Date.now() });
+    await trackBusinessEvent("payment.receipt_email.sent", { externalReference: order.externalReference });
+    return;
+  }
+
+  if (result.reason === "missing_customer_email") {
+    return;
+  }
+
+  logEvent("warn", "payments.receipt_email_failed", {
+    externalReference: order.externalReference,
+    reason: result.reason,
+    detail: result.detail,
+  });
+  await trackBusinessEvent("payment.receipt_email.failed", {
+    externalReference: order.externalReference,
+    reason: result.reason,
+  });
 };
 
 export async function POST(request: NextRequest) {
@@ -144,11 +181,13 @@ export async function POST(request: NextRequest) {
     const paymentKey = paymentDedupeKey(String(paymentInfo.id || paymentId));
     const paymentProcessed = await getJson<string>(paymentKey);
     if (!paymentProcessed) {
+      const approvedAt = Date.now();
       await markApproved(externalReference, {
         paymentId: String(paymentInfo.id || paymentId),
         mpStatus: status,
-        approvedAt: Date.now(),
+        approvedAt,
       });
+      await trySendReceiptEmail(order, String(paymentInfo.id || paymentId), approvedAt);
       await setJson(paymentKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
       logEvent("info", "payments.approved_from_webhook", {
         externalReference,

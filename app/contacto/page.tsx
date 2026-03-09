@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import brandConfig from "@/src/config/brand";
 
 type FormState = {
   nombre: string;
@@ -30,21 +31,6 @@ const isValidEmail = (value: string): boolean => {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
 };
 
-const socialNetworks = [
-  {
-    name: "Instagram",
-    label: "estilo-sol",
-    href: "https://www.instagram.com/estilo-sol",
-    icon: "instagram",
-  },
-  {
-    name: "WhatsApp",
-    label: "+54 9 341 688-8926",
-    href: "https://wa.me/5493416888926?text=Hola%20Estilo%20Sol%2C%20quisiera%20consultar%20sobre%20",
-    icon: "whatsapp",
-  },
-] as const;
-
 export default function ContactoPage() {
   const [form, setForm] = useState<FormState>(INITIAL_STATE);
   const [submitting, setSubmitting] = useState(false);
@@ -56,6 +42,7 @@ export default function ContactoPage() {
     mensaje: false,
   });
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  const socialNetworks = brandConfig.contactInfo.socialNetworks;
 
   const fieldErrors = useMemo(() => {
     const nombre = form.nombre.trim().length === 0 ? "Ingresá tu nombre." : null;

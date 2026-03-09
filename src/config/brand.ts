@@ -24,6 +24,38 @@ export type BrandDecorAsset = BrandImage & {
   fallback?: string;
 };
 
+export type BrandSocialNetwork = {
+  name: "Instagram" | "WhatsApp";
+  label: string;
+  href: string;
+  icon: "instagram" | "whatsapp";
+};
+
+export type BrandContactInfo = {
+  email: string;
+  whatsappPhone: string;
+  initialContactMessage: string;
+  socialNetworks: BrandSocialNetwork[];
+};
+
+const DEFAULT_WHATSAPP_PHONE = "5493416888926";
+const DEFAULT_WHATSAPP_MESSAGE = "Hola Estilo Sol, quisiera consultar sobre ";
+
+const buildWhatsappUrl = (phone: string, message: string): string => {
+  const cleanPhone = phone.replace(/\D/g, "");
+  return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+};
+
+const formatWhatsappLabel = (phone: string): string => {
+  const cleanPhone = phone.replace(/\D/g, "");
+  const argentinaMobileMatch = cleanPhone.match(/^(\d{2})(\d{1})(\d{3})(\d{3})(\d{4})$/);
+  if (argentinaMobileMatch) {
+    const [, country, mobilePrefix, areaCode, firstBlock, secondBlock] = argentinaMobileMatch;
+    return `+${country} ${mobilePrefix} ${areaCode} ${firstBlock}-${secondBlock}`;
+  }
+  return `+${cleanPhone}`;
+};
+
 export const brandConfig = {
   brandName: "Estilo Sol",
   logo: {
@@ -59,6 +91,25 @@ export const brandConfig = {
     display: "var(--font-brand-display)",
     body: "var(--font-brand-body)",
   },
+  contactInfo: {
+    email: "contacto@estilosol.com",
+    whatsappPhone: DEFAULT_WHATSAPP_PHONE,
+    initialContactMessage: DEFAULT_WHATSAPP_MESSAGE,
+    socialNetworks: [
+      {
+        name: "Instagram",
+        label: "estilo-sol",
+        href: "https://www.instagram.com/estilo-sol",
+        icon: "instagram",
+      },
+      {
+        name: "WhatsApp",
+        label: formatWhatsappLabel(DEFAULT_WHATSAPP_PHONE),
+        href: buildWhatsappUrl(DEFAULT_WHATSAPP_PHONE, DEFAULT_WHATSAPP_MESSAGE),
+        icon: "whatsapp",
+      },
+    ],
+  } as BrandContactInfo,
   heroLeft: {
     title: "Estilo y Cuidado Profesional",
     subtitle: "Reservá tu turno en minutos y recibí atención experta para potenciar tu look.",

@@ -42,7 +42,13 @@ export async function POST(request: NextRequest) {
     await trackBusinessEvent("checkout.preference.invalid_input", { route: "create-preference" });
     return NextResponse.json({ error: parsedBody.message }, { status: 400 });
   }
-  const { items: requestedItems, payerName: customerName, payerPhone: customerPhone, notes } = parsedBody.value;
+  const {
+    items: requestedItems,
+    payerName: customerName,
+    payerPhone: customerPhone,
+    payerEmail: customerEmail,
+    notes,
+  } = parsedBody.value;
 
   const catalog = await getProductsCatalog({ forceFresh: true }).catch((error) => {
     logEvent("error", "payments.catalog_fetch_error", {
@@ -110,11 +116,12 @@ export async function POST(request: NextRequest) {
     currency: "ARS",
     createdAt: now,
     updatedAt: now,
-    ...(customerName || customerPhone
+    ...(customerName || customerPhone || customerEmail
       ? {
           customer: {
             ...(customerName ? { name: customerName } : {}),
             ...(customerPhone ? { phone: customerPhone } : {}),
+            ...(customerEmail ? { email: customerEmail } : {}),
           },
         }
       : {}),

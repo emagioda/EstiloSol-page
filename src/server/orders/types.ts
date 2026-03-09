@@ -20,6 +20,7 @@ export type Order = {
   mpPaymentId?: string;
   mpStatus?: string;
   approvedAt?: number;
-  customer?: { name?: string; phone?: string };
+  customer?: { name?: string; phone?: string; email?: string };
   notes?: string;
+  receiptEmailSentAt?: number;
 };

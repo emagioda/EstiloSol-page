@@ -16,7 +16,25 @@ type ServerEnvKey =
 type PublicEnvKey =
 	| "NEXT_PUBLIC_MP_PUBLIC_KEY"
 	| "NEXT_PUBLIC_SHEETS_ENDPOINT"
-	| "NEXT_PUBLIC_BASE_PATH";
+	| "NEXT_PUBLIC_BASE_PATH"
+	| "NEXT_PUBLIC_MP_CHECKOUT_MODE"
+	| "NEXT_PUBLIC_WHATSAPP_NUMBER";
+
+type ValidationResult<Key extends string> = {
+	ok: boolean;
+	missing: Key[];
+};
+
+const REQUIRED_PAYMENTS_SERVER_ENV: readonly ServerEnvKey[] = ["MP_ACCESS_TOKEN"];
+const REQUIRED_SERVER_ENV: readonly ServerEnvKey[] = [
+	"APP_BASE_URL",
+	"RESEND_API_KEY",
+	"CONTACT_TO_EMAIL",
+];
+const REQUIRED_PUBLIC_ENV: readonly PublicEnvKey[] = [
+	"NEXT_PUBLIC_MP_PUBLIC_KEY",
+	"NEXT_PUBLIC_SHEETS_ENDPOINT",
+];
 
 const readEnv = (key: string): string | undefined => {
 	const value = process.env[key];
@@ -41,13 +59,24 @@ const getPublic = (key: PublicEnvKey): string | undefined => {
 	return readEnv(key);
 };
 
-const validatePaymentsServerEnv = (): { ok: boolean; missing: ServerEnvKey[] } => {
-	const required: ServerEnvKey[] = ["MP_ACCESS_TOKEN"];
+const validateKeys = <Key extends string>(required: readonly Key[]): ValidationResult<Key> => {
 	const missing = required.filter((key) => !readEnv(key));
 	return {
 		ok: missing.length === 0,
-		missing,
+		missing: [...missing],
 	};
+};
+
+const validatePaymentsServerEnv = (): ValidationResult<ServerEnvKey> => {
+	return validateKeys(REQUIRED_PAYMENTS_SERVER_ENV);
+};
+
+const validateServerEnv = (): ValidationResult<ServerEnvKey> => {
+	return validateKeys(REQUIRED_SERVER_ENV);
+};
+
+const validatePublicEnv = (): ValidationResult<PublicEnvKey> => {
+	return validateKeys(REQUIRED_PUBLIC_ENV);
 };
 
 export const env = {
@@ -55,5 +84,7 @@ export const env = {
 	getOptionalServer,
 	getPublic,
 	validatePaymentsServerEnv,
+	validateServerEnv,
+	validatePublicEnv,
 } as const;
 

@@ -30,6 +30,7 @@ export const privacyPolicy = {
   piiRules: {
     customerName: "Stored for checkout operations; anonymized after approval",
     customerPhone: "Stored for checkout operations; masked after approval",
+    customerEmail: "Stored for receipt delivery; removed after approval",
     notes: "Stored only while payment is in progress; removed after approval",
   },
   minimizeApprovedOrderPII: true,
@@ -37,7 +38,7 @@ export const privacyPolicy = {
     if (status === "approved") return ORDER_TTL_SECONDS;
     return SHORT_LIVED_ORDER_TTL_SECONDS;
   },
-  anonymizeCustomer(input?: { name?: string; phone?: string }) {
+  anonymizeCustomer(input?: { name?: string; phone?: string; email?: string }) {
     if (!input) return undefined;
 
     const name = input.name ? anonymizeName(input.name) : "";
