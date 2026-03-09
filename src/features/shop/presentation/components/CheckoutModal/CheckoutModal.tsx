@@ -41,6 +41,7 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
   const [slowValidationVisible, setSlowValidationVisible] = useState(false);
   const [error, setError] = useState<CheckoutErrorState | null>(null);
   const isTestPublicKey = (process.env.NEXT_PUBLIC_MP_PUBLIC_KEY || "").toUpperCase().startsWith("TEST-");
+  const checkoutMode = (process.env.NEXT_PUBLIC_MP_CHECKOUT_MODE || "").trim().toLowerCase();
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const onCloseRef = useRef(onClose);
   const slowValidationTimerRef = useRef<number | null>(null);
@@ -293,9 +294,14 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
           }
         | null;
 
-      const checkoutUrl = isTestPublicKey
-        ? data?.sandboxInitPoint || data?.initPoint
-        : data?.initPoint || data?.sandboxInitPoint;
+      const checkoutUrl =
+        checkoutMode === "sandbox"
+          ? data?.sandboxInitPoint || data?.initPoint
+          : checkoutMode === "production"
+          ? data?.initPoint || data?.sandboxInitPoint
+          : isTestPublicKey
+          ? data?.sandboxInitPoint || data?.initPoint
+          : data?.initPoint || data?.sandboxInitPoint;
 
       if (!response.ok || !checkoutUrl) {
         clearSlowValidationTimer();

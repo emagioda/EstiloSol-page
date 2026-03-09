@@ -56,4 +56,35 @@ describe("verify-payment confirmation flow", () => {
 
     fetchMock.mockRestore();
   });
+
+  it("confirms approved payment using payment_id when order is not found", async () => {
+    const ref = `es-${Date.now()}-missingorder`;
+    const paymentId = "148769407279";
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: paymentId,
+          status: "approved",
+          external_reference: ref,
+          transaction_amount: 58000,
+          currency_id: "ARS",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const request = new NextRequest(
+      `http://localhost:3000/api/mp/verify-payment?ref=${encodeURIComponent(ref)}&payment_id=${paymentId}`
+    );
+    const response = await GET(request);
+    const body = (await response.json()) as { approved?: boolean; externalReference?: string; paymentId?: string };
+
+    expect(response.status).toBe(200);
+    expect(body.approved).toBe(true);
+    expect(body.externalReference).toBe(ref);
+    expect(String(body.paymentId)).toBe(paymentId);
+
+    fetchMock.mockRestore();
+  });
 });

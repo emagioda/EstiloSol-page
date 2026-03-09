@@ -9,19 +9,35 @@ type BuildUrlsInput = {
   webhookUrl?: string;
 };
 
+const EXTERNAL_REFERENCE_PATTERNS = [/\{EXTERNAL_REFERENCE\}/g, /\{external_reference\}/g];
+
+const applyExternalReference = (url: string, externalReference: string) => {
+  const replaced = EXTERNAL_REFERENCE_PATTERNS.reduce(
+    (acc, pattern) => acc.replace(pattern, externalReference),
+    url
+  );
+
+  try {
+    const parsed = new URL(replaced);
+    if (!parsed.searchParams.has("ref") && !parsed.searchParams.has("external_reference")) {
+      parsed.searchParams.set("ref", externalReference);
+    }
+    return parsed.toString();
+  } catch {
+    return replaced;
+  }
+};
+
 export const buildPreferenceUrls = (input: BuildUrlsInput) => {
-  const success = (
-    input.successUrl || `${input.appBaseUrl}/tienda/success?ref={EXTERNAL_REFERENCE}`
-  ).replace("{EXTERNAL_REFERENCE}", input.externalReference);
+  const rawSuccess = input.successUrl || `${input.appBaseUrl}/tienda/success`;
+  const success = applyExternalReference(rawSuccess, input.externalReference);
 
   const failure = input.failureUrl || `${input.appBaseUrl}/tienda`;
   const pending = input.pendingUrl || `${input.appBaseUrl}/tienda`;
   const webhook = input.webhookUrl || `${input.appBaseUrl}/api/mp/webhook`;
 
   const isHttpsSuccessUrl = success.startsWith("https://");
-  const isLocalSuccessUrl =
-    success.startsWith("http://localhost") || success.startsWith("http://127.0.0.1");
-  const shouldUseAutoReturn = isHttpsSuccessUrl || isLocalSuccessUrl;
+  const shouldUseAutoReturn = isHttpsSuccessUrl;
 
   return {
     success,

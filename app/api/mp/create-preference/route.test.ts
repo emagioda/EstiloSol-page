@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/mp/create-preference/route";
 
-describe("create-preference fallback flow", () => {
+describe("create-preference local development flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     process.env.MP_ACCESS_TOKEN = "test-token";
@@ -14,7 +14,7 @@ describe("create-preference fallback flow", () => {
     delete process.env.MP_WEBHOOK_URL;
   });
 
-  it("retries without auto_return when first MP attempt fails on local success URL", async () => {
+  it("creates preference without auto_return when success url is non-https", async () => {
     const mpBodies: Array<Record<string, unknown>> = [];
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -39,13 +39,6 @@ describe("create-preference fallback flow", () => {
         const rawBody = typeof init?.body === "string" ? init.body : "{}";
         const parsedBody = JSON.parse(rawBody) as Record<string, unknown>;
         mpBodies.push(parsedBody);
-
-        if (mpBodies.length === 1) {
-          return new Response(JSON.stringify({ message: "auto_return not allowed" }), {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
 
         return new Response(
           JSON.stringify({
@@ -82,11 +75,12 @@ describe("create-preference fallback flow", () => {
     expect(body.initPoint).toBe("https://mp.test/init");
     expect(body.sandboxInitPoint).toBe("https://mp.test/sandbox");
     expect(typeof body.externalReference).toBe("string");
-    expect(body.externalReference?.startsWith("es-")).toBe(true);
 
-    expect(mpBodies).toHaveLength(2);
-    expect(mpBodies[0].auto_return).toBe("approved");
-    expect(mpBodies[1]).not.toHaveProperty("auto_return");
+    expect(mpBodies).toHaveLength(1);
+    expect(mpBodies[0]).not.toHaveProperty("auto_return");
+
+    const backUrls = mpBodies[0].back_urls as { success?: string } | undefined;
+    expect(backUrls?.success?.startsWith("http://localhost:3000/tienda/success?ref=es-")).toBe(true);
 
     fetchMock.mockRestore();
   });

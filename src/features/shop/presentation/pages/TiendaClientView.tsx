@@ -155,6 +155,23 @@ export default function TiendaClientView({
   ];
 
   useEffect(() => {
+    const paymentRef =
+      searchParams.get("ref") || searchParams.get("external_reference");
+
+    if (!paymentRef) return;
+
+    const paymentStatus = (
+      searchParams.get("status") ||
+      searchParams.get("collection_status") ||
+      ""
+    ).toLowerCase();
+
+    if (paymentStatus && paymentStatus !== "approved") return;
+
+    router.replace(`/tienda/success?ref=${encodeURIComponent(paymentRef)}`);
+  }, [router, searchParams]);
+
+  useEffect(() => {
     if (hasCheckedFirstVisitRef.current) return;
 
     hasCheckedFirstVisitRef.current = true;

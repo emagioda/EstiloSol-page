@@ -162,34 +162,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No se pudo crear la preferencia de pago" }, { status: 502 });
   }
 
-  if (!response.ok && urls.shouldUseAutoReturn && !urls.isHttpsSuccessUrl) {
-    const mpPayloadWithoutAutoReturn = buildPreferencePayload({
-      items,
-      customerName,
-      customerPhone,
-      notes,
-      externalReference,
-      urls,
-      includeAutoReturn: false,
-    });
-    delete mpPayloadWithoutAutoReturn.auto_return;
-    try {
-      const retryResult = await createPreferenceOnMp(mpPayloadWithoutAutoReturn, {
-        accessToken,
-        idempotencyKey: externalReference,
-      });
-      response = retryResult.response;
-      data = retryResult.data;
-    } catch (error) {
-      logEvent("error", "payments.create_preference_retry_network_error", {
-        externalReference,
-        error,
-      });
-      await trackBusinessEvent("checkout.preference.retry_network_error", { externalReference });
-      return NextResponse.json({ error: "No se pudo crear la preferencia de pago" }, { status: 502 });
-    }
-  }
-
   if (!response.ok || !data) {
     logEvent("error", "payments.create_preference_failed", {
       externalReference,

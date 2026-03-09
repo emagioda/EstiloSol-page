@@ -31,13 +31,24 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 ```bash
 MP_ACCESS_TOKEN=...
 NEXT_PUBLIC_MP_PUBLIC_KEY=...
+NEXT_PUBLIC_MP_CHECKOUT_MODE=
 APP_BASE_URL=http://localhost:3000
 MP_WEBHOOK_SECRET=...
-MP_WEBHOOK_URL=https://tu-dominio.com/api/mp/webhook
-MP_SUCCESS_URL=https://tu-dominio.com/tienda
-MP_FAILURE_URL=https://tu-dominio.com/tienda
-MP_PENDING_URL=https://tu-dominio.com/tienda
+MP_WEBHOOK_URL=http://localhost:3000/api/mp/webhook
+MP_SUCCESS_URL=http://localhost:3000/tienda/success?ref={EXTERNAL_REFERENCE}
+MP_FAILURE_URL=http://localhost:3000/tienda
+MP_PENDING_URL=http://localhost:3000/tienda
 ```
+
+`NEXT_PUBLIC_MP_CHECKOUT_MODE` (optional):
+- `sandbox`: force `sandbox_init_point` (recommended for local/testing).
+- `production`: force `init_point`.
+- empty: auto mode (`sandbox_init_point` only when key starts with `TEST-`).
+
+Production (Vercel) recommendation:
+- Set `APP_BASE_URL` and all `MP_*_URL` to your HTTPS domain.
+- Use `MP_SUCCESS_URL=https://tu-dominio.com/tienda/success?ref={EXTERNAL_REFERENCE}`.
+- `auto_return` only applies when `success` is HTTPS.
 
 3. In Mercado Pago Developers, configure `MP_WEBHOOK_URL` and copy the secret into `MP_WEBHOOK_SECRET`.
 4. Checkout Pro creates preferences from backend in `/api/mp/create-preference` and validates webhook signatures in `/api/mp/webhook`.

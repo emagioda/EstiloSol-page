@@ -26,13 +26,13 @@ describe("preferencePayload", () => {
     expect(urls.shouldUseAutoReturn).toBe(true);
   });
 
-  it("enables auto_return for localhost and disables it for non-https custom urls", () => {
+  it("enables auto_return only for https success urls", () => {
     const local = buildPreferenceUrls({
       appBaseUrl: "http://localhost:3000",
       externalReference: "es-123",
       successUrl: "http://localhost:3000/tienda/success?ref={EXTERNAL_REFERENCE}",
     });
-    expect(local.shouldUseAutoReturn).toBe(true);
+    expect(local.shouldUseAutoReturn).toBe(false);
     expect(local.isHttpsSuccessUrl).toBe(false);
 
     const customNonHttps = buildPreferenceUrls({
@@ -41,6 +41,26 @@ describe("preferencePayload", () => {
       successUrl: "http://my-internal-host/tienda/success?ref={EXTERNAL_REFERENCE}",
     });
     expect(customNonHttps.shouldUseAutoReturn).toBe(false);
+  });
+
+  it("injects ref when success url does not include placeholder", () => {
+    const urls = buildPreferenceUrls({
+      appBaseUrl: "https://example.com",
+      externalReference: "es-456",
+      successUrl: "https://example.com/tienda/success",
+    });
+
+    expect(urls.success).toBe("https://example.com/tienda/success?ref=es-456");
+  });
+
+  it("replaces lowercase external reference placeholder", () => {
+    const urls = buildPreferenceUrls({
+      appBaseUrl: "https://example.com",
+      externalReference: "es-789",
+      successUrl: "https://example.com/tienda/success?ref={external_reference}",
+    });
+
+    expect(urls.success).toBe("https://example.com/tienda/success?ref=es-789");
   });
 
   it("builds preference payload with and without auto_return", () => {
