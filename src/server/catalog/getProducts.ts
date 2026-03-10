@@ -1,7 +1,7 @@
 import { getJson, setJson } from "@/src/server/kv";
 import { env } from "@/src/config/env";
 
-type CatalogProduct = {
+export type CatalogProduct = {
   id: string;
   name: string;
   price: number;

@@ -1,6 +1,11 @@
 import { getJson, setJson } from "@/src/server/kv";
+import { logEvent } from "@/src/server/observability/log";
 import { privacyPolicy } from "@/src/server/privacy/policy";
-import type { Order, OrderStatus } from "./types";
+import {
+  appendOrderToSalesSheet,
+  updateOrderRowInSalesSheet,
+} from "@/src/server/sheets/repository";
+import type { Order, OrderPaymentStatus, OrderStatus } from "./types";
 
 export const WEBHOOK_DEDUPE_TTL_SECONDS = 7 * 24 * 3600;
 
@@ -9,26 +14,72 @@ const orderKey = (externalReference: string) => `es:order:${externalReference}`;
 export const webhookDedupeKey = (eventId: string) => `es:mp:webhook:${eventId}`;
 export const paymentDedupeKey = (paymentId: string) => `es:mp:payment:${paymentId}`;
 
+type StoredOrder = Omit<Order, "paymentStatus" | "shippingStatus"> &
+  Partial<Pick<Order, "paymentStatus" | "shippingStatus">>;
+
+type UpdateOrderOptions = {
+  syncSheet?: boolean;
+};
+
+const statusToPaymentStatus = (status: OrderStatus): OrderPaymentStatus => {
+  if (status === "approved") return "confirmed";
+  if (status === "rejected") return "cancelled";
+  return "pending";
+};
+
+const ensureOrderDefaults = (order: StoredOrder): Order => ({
+  ...order,
+  paymentStatus: order.paymentStatus ?? statusToPaymentStatus(order.status),
+  shippingStatus: order.shippingStatus ?? "in_process",
+});
+
 export async function createOrder(order: Order): Promise<void> {
-  await setJson(orderKey(order.externalReference), order, privacyPolicy.ttlSecondsForStatus(order.status));
+  const normalizedOrder = ensureOrderDefaults(order);
+  const key = orderKey(normalizedOrder.externalReference);
+  const existing = await getJson<StoredOrder>(key);
+
+  if (existing) {
+    throw new Error(`Order with external reference ${normalizedOrder.externalReference} already exists`);
+  }
+
+  await setJson(
+    key,
+    normalizedOrder,
+    privacyPolicy.ttlSecondsForStatus(normalizedOrder.status)
+  );
+
+  try {
+    await appendOrderToSalesSheet(normalizedOrder);
+  } catch (error) {
+    logEvent("error", "orders.sync_sheet_create_failed", {
+      externalReference: normalizedOrder.externalReference,
+      error,
+    });
+    throw error;
+  }
 }
 
 export async function getOrder(externalReference: string): Promise<Order | null> {
-  return getJson<Order>(orderKey(externalReference));
+  const stored = await getJson<StoredOrder>(orderKey(externalReference));
+  if (!stored) return null;
+  return ensureOrderDefaults(stored);
 }
 
 export async function updateOrder(
   externalReference: string,
-  patch: Partial<Omit<Order, "externalReference" | "createdAt">>
+  patch: Partial<Omit<Order, "externalReference" | "createdAt">>,
+  options: UpdateOrderOptions = {}
 ): Promise<Order | null> {
-  const current = await getOrder(externalReference);
+  const current = await getJson<StoredOrder>(orderKey(externalReference));
   if (!current) return null;
 
+  const normalizedCurrent = ensureOrderDefaults(current);
+
   const updated: Order = {
-    ...current,
+    ...normalizedCurrent,
     ...patch,
-    externalReference: current.externalReference,
-    createdAt: current.createdAt,
+    externalReference: normalizedCurrent.externalReference,
+    createdAt: normalizedCurrent.createdAt,
     updatedAt: Date.now(),
   };
 
@@ -37,6 +88,27 @@ export async function updateOrder(
     updated,
     privacyPolicy.ttlSecondsForStatus(updated.status)
   );
+
+  if (options.syncSheet !== false) {
+    try {
+      await updateOrderRowInSalesSheet(updated.externalReference, {
+        paymentStatus: updated.paymentStatus,
+        shippingStatus: updated.shippingStatus,
+        orderStatus: updated.status,
+        mpStatus: updated.mpStatus,
+        mpPaymentId: updated.mpPaymentId,
+        mpPreferenceId: updated.mpPreferenceId,
+        receiptEmailSentAt: updated.receiptEmailSentAt,
+        updatedAt: updated.updatedAt,
+      });
+    } catch (error) {
+      logEvent("warn", "orders.sync_sheet_update_failed", {
+        externalReference: updated.externalReference,
+        error,
+      });
+    }
+  }
+
   return updated;
 }
 
@@ -46,6 +118,7 @@ export async function markApproved(
 ): Promise<Order | null> {
   const updated = await updateOrder(externalReference, {
     status: "approved",
+    paymentStatus: "confirmed",
     mpPaymentId: input.paymentId,
     mpStatus: input.mpStatus,
     approvedAt: input.approvedAt ?? Date.now(),
@@ -58,7 +131,7 @@ export async function markApproved(
   return updateOrder(externalReference, {
     customer: privacyPolicy.anonymizeCustomer(updated.customer),
     notes: undefined,
-  });
+  }, { syncSheet: false });
 }
 
 export async function markRejected(
@@ -67,6 +140,7 @@ export async function markRejected(
 ): Promise<Order | null> {
   return updateOrder(externalReference, {
     status: "rejected",
+    paymentStatus: "cancelled",
     ...(input.paymentId ? { mpPaymentId: input.paymentId } : {}),
     mpStatus: input.mpStatus,
     notes: undefined,

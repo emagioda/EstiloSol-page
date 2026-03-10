@@ -1,5 +1,11 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/src/server/sheets/repository", () => ({
+  appendOrderToSalesSheet: vi.fn(async () => undefined),
+  updateOrderRowInSalesSheet: vi.fn(async () => undefined),
+}));
+
 import { GET } from "@/app/api/mp/verify-payment/route";
 import { createOrder } from "@/src/server/orders/store";
 
@@ -14,6 +20,8 @@ describe("verify-payment confirmation flow", () => {
     await createOrder({
       externalReference: ref,
       status: "created",
+      paymentStatus: "pending",
+      shippingStatus: "in_process",
       items: [
         {
           productId: "p1",

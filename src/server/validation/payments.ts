@@ -1,3 +1,5 @@
+import type { OrderDeliveryMethod, OrderPaymentMethod } from "@/src/server/orders/types";
+
 type CheckoutItemInput = {
   productId?: unknown;
   qty?: unknown;
@@ -6,6 +8,8 @@ type CheckoutItemInput = {
 
 type CheckoutBodyInput = {
   items?: unknown;
+  paymentMethod?: unknown;
+  deliveryMethod?: unknown;
   payer?: {
     name?: unknown;
     phone?: unknown;
@@ -22,6 +26,8 @@ export type ParsedCheckoutItem = {
 
 export type ParsedCheckoutBody = {
   items: ParsedCheckoutItem[];
+  paymentMethod: OrderPaymentMethod | null;
+  deliveryMethod: OrderDeliveryMethod | null;
   payerName: string;
   payerPhone: string;
   payerEmail: string;
@@ -56,6 +62,24 @@ const normalizeQuantity = (value: unknown) => {
 };
 
 const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
+const parsePaymentMethod = (value: unknown): OrderPaymentMethod | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "mercadopago" || normalized === "cash" || normalized === "transfer") {
+    return normalized;
+  }
+  return null;
+};
+
+const parseDeliveryMethod = (value: unknown): OrderDeliveryMethod | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "delivery" || normalized === "pickup") {
+    return normalized;
+  }
+  return null;
+};
 
 export const parseExternalReference = (value: string | null): ValidationResult<string> => {
   const ref = typeof value === "string" ? value.trim() : "";
@@ -103,6 +127,16 @@ export const parseCheckoutBody = (
   const payerPhone = sanitizeText(body.payer?.phone, 30).replace(/[^\d+]/g, "");
   const payerEmail = sanitizeText(body.payer?.email, 120).toLowerCase();
   const notes = sanitizeText(body.notes, 250);
+  const paymentMethod = parsePaymentMethod(body.paymentMethod);
+  const deliveryMethod = parseDeliveryMethod(body.deliveryMethod);
+
+  if (body.paymentMethod !== undefined && !paymentMethod) {
+    return { ok: false, message: "Metodo de pago invalido" };
+  }
+
+  if (body.deliveryMethod !== undefined && !deliveryMethod) {
+    return { ok: false, message: "Metodo de entrega invalido" };
+  }
 
   if (options.requirePayer && (!payerName || payerPhone.replace(/\D/g, "").length < 8)) {
     return { ok: false, message: "Completa nombre y WhatsApp para continuar" };
@@ -116,6 +150,8 @@ export const parseCheckoutBody = (
     ok: true,
     value: {
       items: parsedItems,
+      paymentMethod,
+      deliveryMethod,
       payerName,
       payerPhone,
       payerEmail,

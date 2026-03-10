@@ -64,6 +64,7 @@ export const buildWhatsappMessage = ({
   email,
   deliveryMethod,
   notes,
+  externalReference,
 }: {
   items: CartItem[];
   paymentMethod: PaymentMethod;
@@ -73,6 +74,7 @@ export const buildWhatsappMessage = ({
   email: string;
   deliveryMethod: DeliveryMethod;
   notes: string;
+  externalReference?: string;
 }) => {
   const orderLines = items.map((item) => `- ${item.qty}x ${item.name}`).join("\n");
   const paymentText = paymentMethodLabel(paymentMethod).toLowerCase();
@@ -90,6 +92,7 @@ export const buildWhatsappMessage = ({
     "",
     "Detalle del pedido:",
     orderLines || "- Sin productos",
+    externalReference ? `Pedido: ${externalReference}` : "",
     fullName ? `Nombre: ${fullName}` : "",
     whatsapp ? `WhatsApp: ${whatsapp}` : "",
     email ? `Email: ${email}` : "",

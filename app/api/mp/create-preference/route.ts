@@ -1,16 +1,15 @@
-import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/src/config/env";
 import { getProductsCatalog } from "@/src/server/catalog/getProducts";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
+import { buildOrderFromCheckout } from "@/src/server/orders/createFromCheckout";
 import { createOrder, markPreferenceCreated } from "@/src/server/orders/store";
-import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { createPreferenceOnMp } from "@/src/server/payments/mpClient";
 import { buildPreferencePayload, buildPreferenceUrls } from "@/src/server/payments/preferencePayload";
 import type { MpPreferenceResponse } from "@/src/server/payments/shared";
+import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { parseCheckoutBody } from "@/src/server/validation/payments";
-import type { Order, OrderItem } from "@/src/server/orders/types";
 
 export const runtime = "nodejs";
 
@@ -33,7 +32,7 @@ export async function POST(request: NextRequest) {
   if (!allowed) {
     logEvent("warn", "payments.rate_limited", { route: "create-preference" });
     await trackBusinessEvent("checkout.preference.rate_limited", { route: "create-preference" });
-    return NextResponse.json({ error: "Demasiadas solicitudes. Intentá nuevamente en un minuto." }, { status: 429 });
+    return NextResponse.json({ error: "Demasiadas solicitudes. Intenta nuevamente en un minuto." }, { status: 429 });
   }
 
   const rawBody = await request.json().catch(() => null);
@@ -42,13 +41,22 @@ export async function POST(request: NextRequest) {
     await trackBusinessEvent("checkout.preference.invalid_input", { route: "create-preference" });
     return NextResponse.json({ error: parsedBody.message }, { status: 400 });
   }
+
   const {
     items: requestedItems,
+    paymentMethod,
+    deliveryMethod,
     payerName: customerName,
     payerPhone: customerPhone,
     payerEmail: customerEmail,
     notes,
   } = parsedBody.value;
+
+  const resolvedPaymentMethod = paymentMethod || "mercadopago";
+  if (resolvedPaymentMethod !== "mercadopago") {
+    return NextResponse.json({ error: "Metodo de pago invalido para esta operacion" }, { status: 400 });
+  }
+  const resolvedDeliveryMethod = deliveryMethod || "delivery";
 
   const catalog = await getProductsCatalog({ forceFresh: true }).catch((error) => {
     logEvent("error", "payments.catalog_fetch_error", {
@@ -60,80 +68,54 @@ export async function POST(request: NextRequest) {
 
   if (!catalog) {
     await trackBusinessEvent("checkout.preference.catalog_unavailable", { route: "create-preference" });
-    return NextResponse.json({ error: "No se pudo validar el catálogo de productos" }, { status: 503 });
+    return NextResponse.json({ error: "No se pudo validar el catalogo de productos" }, { status: 503 });
   }
 
-  const items: OrderItem[] = [];
-  const invalidProducts: Array<{ productId: string; name: string }> = [];
-  for (const requestedItem of requestedItems) {
-    const product = catalog.get(requestedItem.productId);
-    if (!product) {
-      invalidProducts.push({
-        productId: requestedItem.productId,
-        name: requestedItem.name || requestedItem.productId,
-      });
-      continue;
-    }
-
-    items.push({
-      productId: product.id,
-      title: product.name,
-      unitPrice: product.price,
-      qty: requestedItem.qty,
-      currency: "ARS",
-    });
-  }
+  const { order, invalidProducts } = buildOrderFromCheckout({
+    items: requestedItems,
+    catalog,
+    customerName,
+    customerPhone,
+    customerEmail,
+    notes,
+    paymentMethod: resolvedPaymentMethod,
+    deliveryMethod: resolvedDeliveryMethod,
+  });
 
   if (invalidProducts.length > 0) {
-    const uniqueInvalidProducts = Array.from(
-      new Map(invalidProducts.map((item) => [item.productId, item])).values()
-    );
     await trackBusinessEvent("checkout.preference.invalid_product", {
       route: "create-preference",
-      invalidCount: uniqueInvalidProducts.length,
-      invalidProducts: uniqueInvalidProducts.map((item) => item.name),
+      invalidCount: invalidProducts.length,
+      invalidProducts: invalidProducts.map((item) => item.name),
     });
 
     return NextResponse.json(
       {
-        error: "Estos productos ya no están disponibles. Quitalos del carrito para continuar.",
-        invalidProducts: uniqueInvalidProducts,
+        error: "Estos productos ya no estan disponibles. Quitalos del carrito para continuar.",
+        invalidProducts,
       },
       { status: 400 }
     );
   }
 
-  const total = Number(items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0).toFixed(2));
+  if (!order) {
+    return NextResponse.json({ error: "No se pudo construir la orden" }, { status: 500 });
+  }
 
-  const externalReference = `es-${Date.now()}-${randomUUID().slice(0, 8)}`;
-  const now = Date.now();
-
-  const order: Order = {
-    externalReference,
-    status: "created",
-    items,
-    total,
-    currency: "ARS",
-    createdAt: now,
-    updatedAt: now,
-    ...(customerName || customerPhone || customerEmail
-      ? {
-          customer: {
-            ...(customerName ? { name: customerName } : {}),
-            ...(customerPhone ? { phone: customerPhone } : {}),
-            ...(customerEmail ? { email: customerEmail } : {}),
-          },
-        }
-      : {}),
-    ...(notes ? { notes } : {}),
-  };
-
-  await createOrder(order);
+  try {
+    await createOrder(order);
+  } catch (error) {
+    logEvent("error", "checkout.preference.order_create_failed", {
+      externalReference: order.externalReference,
+      error,
+    });
+    return NextResponse.json({ error: "No pudimos registrar tu pedido. Intenta nuevamente." }, { status: 502 });
+  }
 
   const appBaseUrl = (env.getOptionalServer("APP_BASE_URL") || request.nextUrl.origin).replace(/\/$/, "");
   const urls = buildPreferenceUrls({
     appBaseUrl,
-    externalReference,
+    externalReference: order.externalReference,
     successUrl: env.getOptionalServer("MP_SUCCESS_URL"),
     failureUrl: env.getOptionalServer("MP_FAILURE_URL"),
     pendingUrl: env.getOptionalServer("MP_PENDING_URL"),
@@ -141,11 +123,11 @@ export async function POST(request: NextRequest) {
   });
 
   const mpPayload = buildPreferencePayload({
-    items,
+    items: order.items,
     customerName,
     customerPhone,
     notes,
-    externalReference,
+    externalReference: order.externalReference,
     urls,
     includeAutoReturn: urls.shouldUseAutoReturn,
   });
@@ -156,47 +138,42 @@ export async function POST(request: NextRequest) {
   try {
     const firstAttempt = await createPreferenceOnMp(mpPayload, {
       accessToken,
-      idempotencyKey: externalReference,
+      idempotencyKey: order.externalReference,
     });
     response = firstAttempt.response;
     data = firstAttempt.data;
   } catch (error) {
     logEvent("error", "payments.create_preference_network_error", {
-      externalReference,
+      externalReference: order.externalReference,
       error,
     });
-    await trackBusinessEvent("checkout.preference.network_error", { externalReference });
+    await trackBusinessEvent("checkout.preference.network_error", { externalReference: order.externalReference });
     return NextResponse.json({ error: "No se pudo crear la preferencia de pago" }, { status: 502 });
   }
 
   if (!response.ok || !data) {
     logEvent("error", "payments.create_preference_failed", {
-      externalReference,
+      externalReference: order.externalReference,
       status: response.status,
       message: typeof data?.message === "string" ? data.message : "unknown",
       cause: typeof data?.cause === "object" && data.cause !== null ? data.cause : undefined,
     });
     await trackBusinessEvent("checkout.preference.failed", {
-      externalReference,
+      externalReference: order.externalReference,
       status: response.status,
     });
-    return NextResponse.json(
-      {
-        error: "No se pudo crear la preferencia de pago",
-      },
-      { status: 502 }
-    );
+    return NextResponse.json({ error: "No se pudo crear la preferencia de pago" }, { status: 502 });
   }
 
-  await markPreferenceCreated(externalReference, { preferenceId: String(data.id) });
+  await markPreferenceCreated(order.externalReference, { preferenceId: String(data.id) });
   await trackBusinessEvent("checkout.preference.created", {
-    externalReference,
+    externalReference: order.externalReference,
     preferenceId: String(data.id),
-    total,
+    total: order.total,
   });
 
   logEvent("info", "payments.preference_created", {
-    externalReference,
+    externalReference: order.externalReference,
     preferenceId: String(data.id),
   });
 
@@ -205,7 +182,7 @@ export async function POST(request: NextRequest) {
       id: data.id,
       initPoint: data.init_point,
       sandboxInitPoint: data.sandbox_init_point,
-      externalReference,
+      externalReference: order.externalReference,
     },
     { status: 200 }
   );

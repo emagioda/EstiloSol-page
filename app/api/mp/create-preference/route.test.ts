@@ -19,8 +19,9 @@ describe("create-preference local development flow", () => {
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
 
-      if (url.startsWith("https://sheets.example.test/catalog")) {
+      if (url.startsWith("https://sheets.example.test/catalog") && method === "GET") {
         return new Response(
           JSON.stringify([
             {
@@ -33,6 +34,13 @@ describe("create-preference local development flow", () => {
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
+      }
+
+      if (url.startsWith("https://sheets.example.test/catalog") && method === "POST") {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       if (url === "https://api.mercadopago.com/checkout/preferences") {

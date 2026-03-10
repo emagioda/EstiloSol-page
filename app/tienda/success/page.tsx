@@ -9,6 +9,7 @@ type PaymentData = {
   paymentId?: string | number;
   externalReference?: string;
   date?: string;
+  paymentMethodLabel?: string;
 };
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,24 +43,62 @@ const formatDateTime24h = (input?: string | number | Date) => {
   }).format(date);
 };
 
-const buildWhatsappOrderMessage = (externalReference?: string, date?: string) => {
+const buildWhatsappOrderMessage = ({
+  externalReference,
+  date,
+  paymentMethodLabel,
+  isPending,
+}: {
+  externalReference?: string;
+  date?: string;
+  paymentMethodLabel?: string;
+  isPending?: boolean;
+}) => {
   const referenceText = externalReference?.trim() || "N/A";
   const dateText = date?.trim() || formatDateTime24h();
   return [
-    "Hola Estilo Sol, quiero consultar por mi pedido.",
+    isPending
+      ? "Hola Estilo Sol, ya cargue mi pedido y quiero continuar por WhatsApp."
+      : "Hola Estilo Sol, quiero consultar por mi pedido.",
     `Numero de referencia: ${referenceText}`,
-    `Fecha del pago: ${dateText}`,
-  ].join("\n");
+    paymentMethodLabel ? `Forma de pago: ${paymentMethodLabel}` : "",
+    `${isPending ? "Fecha del pedido" : "Fecha del pago"}: ${dateText}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 };
 
-const buildWhatsappOrderUrl = (externalReference?: string, date?: string) =>
+const buildWhatsappOrderUrl = ({
+  externalReference,
+  date,
+  paymentMethodLabel,
+  isPending,
+}: {
+  externalReference?: string;
+  date?: string;
+  paymentMethodLabel?: string;
+  isPending?: boolean;
+}) =>
   `https://wa.me/${ESTILO_SOL_WHATSAPP_PHONE}?text=${encodeURIComponent(
-    buildWhatsappOrderMessage(externalReference, date)
+    buildWhatsappOrderMessage({
+      externalReference,
+      date,
+      paymentMethodLabel,
+      isPending,
+    })
   )}`;
+
+const parseManualPaymentMethodLabel = (value: string | null) => {
+  if (!value) return "";
+  const token = value.trim().toLowerCase();
+  if (token === "cash") return "Efectivo";
+  if (token === "transfer") return "Transferencia bancaria";
+  return "";
+};
 
 export default function SuccessPage() {
   const { clear } = useCart();
-  const [status, setStatus] = useState<"loading" | "approved" | "error">("loading");
+  const [status, setStatus] = useState<"loading" | "approved" | "pending" | "error">("loading");
   const [message, setMessage] = useState("Procesando tu pago...");
   const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
@@ -148,6 +187,8 @@ export default function SuccessPage() {
     const start = async () => {
       const params = new URLSearchParams(window.location.search);
       const ref = params.get("ref") || params.get("external_reference");
+      const isManualCheckout = params.get("manual") === "1";
+      const manualPaymentMethodLabel = parseManualPaymentMethodLabel(params.get("pm"));
       const paymentId = params.get("payment_id") || params.get("collection_id");
       const paymentStatus =
         (params.get("status") || params.get("collection_status") || "").toLowerCase();
@@ -156,6 +197,19 @@ export default function SuccessPage() {
       if (!ref) {
         setStatus("error");
         setMessage("No se encontro referencia de pago.");
+        return;
+      }
+
+      if (isManualCheckout) {
+        clearRef.current();
+        setStatus("pending");
+        setMessage("Pedido registrado. Tu pago quedo pendiente de confirmacion.");
+        setPaymentData({
+          approved: false,
+          externalReference: ref,
+          date: formatDateTime24h(),
+          paymentMethodLabel: manualPaymentMethodLabel,
+        });
         return;
       }
 
@@ -313,10 +367,12 @@ export default function SuccessPage() {
       doc.line(cardX + 16, rowTop, cardX + cardWidth - 16, rowTop);
 
       const footerTop = pageHeight - footerHeight;
-      const whatsappUrl = buildWhatsappOrderUrl(
-        paymentData.externalReference ? String(paymentData.externalReference) : undefined,
-        paymentData.date ? String(paymentData.date) : undefined
-      );
+      const whatsappUrl = buildWhatsappOrderUrl({
+        externalReference: paymentData.externalReference
+          ? String(paymentData.externalReference)
+          : undefined,
+        date: paymentData.date ? String(paymentData.date) : undefined,
+      });
       doc.setDrawColor(...accentColor);
       doc.setLineWidth(1.4);
       doc.line(marginX, footerTop, pageWidth - marginX, footerTop);
@@ -346,6 +402,13 @@ export default function SuccessPage() {
     }
   };
 
+  const whatsappOrderUrl = buildWhatsappOrderUrl({
+    externalReference: paymentData?.externalReference ? String(paymentData.externalReference) : undefined,
+    date: paymentData?.date ? String(paymentData.date) : undefined,
+    paymentMethodLabel: paymentData?.paymentMethodLabel,
+    isPending: status === "pending",
+  });
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-[var(--brand-violet-950)] text-[var(--brand-cream)] p-4">
       <div className="w-full max-w-2xl">
@@ -353,6 +416,7 @@ export default function SuccessPage() {
           <div className="text-center mb-8">
             <h1 className="text-4xl font-bold mb-2" aria-live="polite">
               {status === "approved" && "Pago confirmado"}
+              {status === "pending" && "Pago pendiente"}
               {status === "error" && "Error"}
               {status === "loading" && "Procesando"}
             </h1>
@@ -384,7 +448,34 @@ export default function SuccessPage() {
             </div>
           )}
 
-          <div className={`grid gap-3 ${status === "approved" ? "sm:grid-cols-2" : "sm:grid-cols-1"}`}>
+          {status === "pending" && paymentData && (
+            <div className="bg-[var(--brand-violet-950)] rounded border border-amber-300/35 p-6 mb-6 font-mono text-sm">
+              <div className="text-center mb-4">
+                <p className="font-bold text-amber-200" style={{ fontSize: "0.9rem" }}>
+                  PEDIDO REGISTRADO
+                </p>
+              </div>
+              <div className="space-y-2 text-[var(--brand-cream)]/90">
+                <div className="flex justify-between border-b border-[var(--brand-violet-800)] pb-2">
+                  <span>Referencia:</span>
+                  <span className="text-amber-200 text-xs break-all">{paymentData.externalReference || "-"}</span>
+                </div>
+                <div className="flex justify-between border-b border-[var(--brand-violet-800)] pb-2">
+                  <span>Forma de pago:</span>
+                  <span className="text-amber-200">{paymentData.paymentMethodLabel || "Pendiente"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Fecha:</span>
+                  <span className="text-amber-200">{paymentData.date}</span>
+                </div>
+              </div>
+              <p className="text-center text-xs text-[var(--brand-cream)]/70 mt-4">
+                Continua por WhatsApp para enviar comprobante o coordinar la entrega.
+              </p>
+            </div>
+          )}
+
+          <div className={`grid gap-3 ${status === "approved" || status === "pending" ? "sm:grid-cols-2" : "sm:grid-cols-1"}`}>
             {status === "approved" && (
               <button
                 onClick={downloadReceiptPdf}
@@ -392,6 +483,16 @@ export default function SuccessPage() {
               >
                 Descargar Comprobante
               </button>
+            )}
+            {status === "pending" && (
+              <a
+                href={whatsappOrderUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-xl border border-amber-200/70 bg-amber-100 px-5 py-3.5 text-center font-semibold tracking-wide text-[var(--brand-violet-950)] transition hover:-translate-y-0.5 hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
+              >
+                Continuar por WhatsApp
+              </a>
             )}
             <a
               href="/tienda"

@@ -6,8 +6,8 @@ import type { PaymentMethod } from "../../view-models/useCartStore";
 import { useCart } from "../../view-models/useCartStore";
 import { refreshProductsMemoryCacheFromSource } from "../../view-models/useProductsStore";
 import {
-  buildWhatsappMessage,
   deliveryMethodLabel,
+  formatMoney,
   isDiscountPaymentMethod,
   isValidEmail,
   isValidWhatsapp,
@@ -19,7 +19,6 @@ import {
 } from "./checkoutUtils";
 
 const DRAFT_STORAGE_KEY = "es_sol_checkout_draft";
-const DEFAULT_WHATSAPP_NUMBER = "5493416888926";
 const BANK_CBU = "0000000000000000000000";
 const BANK_ALIAS = "ESTILOSOL.OK";
 
@@ -51,21 +50,31 @@ const isDeliveryMethod = (value: unknown): value is DeliveryMethod =>
 
 const buildApiNotes = ({
   deliveryMethod,
+  paymentMethod,
   email,
   notes,
 }: {
   deliveryMethod: DeliveryMethod;
+  paymentMethod: PaymentMethod;
   email: string;
   notes: string;
 }) =>
   sanitizeText(
-    [`Entrega: ${deliveryMethodLabel(deliveryMethod)}`, email ? `Email: ${email}` : "", notes]
+    [
+      `Entrega: ${deliveryMethodLabel(deliveryMethod)}`,
+      `Pago: ${paymentMethodLabel(paymentMethod)}`,
+      email ? `Email: ${email}` : "",
+      notes,
+    ]
       .filter(Boolean)
       .join(" | "),
     250
   );
 
-export default function CheckoutSteps({ subtotal, discountedTotal }: CheckoutStepsProps) {
+export default function CheckoutSteps({
+  subtotal: _subtotal,
+  discountedTotal: _discountedTotal,
+}: CheckoutStepsProps) {
   const { items, paymentMethod, setPaymentMethod, removeItem } = useCart();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -92,7 +101,7 @@ export default function CheckoutSteps({ subtotal, discountedTotal }: CheckoutSte
     [items]
   );
   const isDiscountMethod = isDiscountPaymentMethod(paymentMethod);
-  const finalTotal = isDiscountMethod ? discountedTotal : subtotal;
+  const displayedTotal = isDiscountMethod ? _discountedTotal : _subtotal;
 
   const firstNameError = showValidation && !firstName.trim();
   const lastNameError = showValidation && !lastName.trim();
@@ -103,28 +112,6 @@ export default function CheckoutSteps({ subtotal, discountedTotal }: CheckoutSte
     lastName.trim().length > 0 &&
     isValidWhatsapp(whatsapp) &&
     isValidEmail(email);
-
-  const whatsappNumber = (process.env.NEXT_PUBLIC_WHATSAPP_NUMBER || DEFAULT_WHATSAPP_NUMBER).replace(/\D/g, "");
-
-  const checkoutMessage = useMemo(
-    () =>
-      buildWhatsappMessage({
-        items,
-        paymentMethod,
-        finalTotal,
-        fullName,
-        whatsapp: normalizePhoneDigits(whatsapp),
-        email: email.trim(),
-        deliveryMethod,
-        notes: notes.trim(),
-      }),
-    [deliveryMethod, email, finalTotal, fullName, items, notes, paymentMethod, whatsapp]
-  );
-
-  const checkoutWhatsappUrl = useMemo(
-    () => `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(checkoutMessage)}`,
-    [checkoutMessage, whatsappNumber]
-  );
 
   useEffect(() => {
     try {
@@ -385,6 +372,8 @@ export default function CheckoutSteps({ subtotal, discountedTotal }: CheckoutSte
             qty: item.qty,
             name: item.name,
           })),
+          paymentMethod,
+          deliveryMethod,
           payer: {
             name: fullName,
             phone: normalizePhoneDigits(whatsapp),
@@ -392,6 +381,7 @@ export default function CheckoutSteps({ subtotal, discountedTotal }: CheckoutSte
           },
           notes: buildApiNotes({
             deliveryMethod,
+            paymentMethod,
             email: email.trim(),
             notes: notes.trim(),
           }),
@@ -452,7 +442,80 @@ export default function CheckoutSteps({ subtotal, discountedTotal }: CheckoutSte
       setError({ message: "Tu carrito cambio. Revisa el Paso 1 y presiona Continuar al pago para validar nuevamente." });
       return;
     }
-    window.open(checkoutWhatsappUrl, "_blank", "noopener,noreferrer");
+
+    setCheckoutPhase("redirecting");
+
+    try {
+      const response = await fetch("/api/orders/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          items: items.map((item) => ({
+            productId: item.productId,
+            qty: item.qty,
+            name: item.name,
+          })),
+          paymentMethod,
+          deliveryMethod,
+          payer: {
+            name: fullName,
+            phone: normalizePhoneDigits(whatsapp),
+            email: email.trim(),
+          },
+          notes: buildApiNotes({
+            deliveryMethod,
+            paymentMethod,
+            email: email.trim(),
+            notes: notes.trim(),
+          }),
+        }),
+      });
+
+      const data = (await response.json().catch(() => null)) as
+        | {
+            externalReference?: string;
+            error?: string;
+            invalidProducts?: Array<{ productId?: string; name?: string }>;
+          }
+        | null;
+
+      if (!response.ok) {
+        setCheckoutPhase("idle");
+        setError({
+          message: data?.error || "No pudimos registrar tu pedido. Intenta nuevamente.",
+          invalidProducts:
+            Array.isArray(data?.invalidProducts) && data.invalidProducts.length > 0
+              ? data.invalidProducts
+                  .map((item) => ({
+                    productId: typeof item?.productId === "string" ? item.productId : "",
+                    name: typeof item?.name === "string" ? item.name : "Producto no disponible",
+                  }))
+                  .filter((item) => item.productId)
+              : undefined,
+        });
+        return;
+      }
+
+      const externalReference = typeof data?.externalReference === "string" ? data.externalReference : "";
+      if (!externalReference) {
+        setCheckoutPhase("idle");
+        setError({ message: "Pedido creado sin referencia. Intenta nuevamente." });
+        return;
+      }
+
+      const successParams = new URLSearchParams({
+        manual: "1",
+        pm: paymentMethod,
+        ref: externalReference,
+      });
+
+      window.location.assign(`/tienda/success?${successParams.toString()}`);
+    } catch {
+      setCheckoutPhase("idle");
+      setError({ message: "No pudimos registrar el pedido por un error de conexion. Intenta nuevamente." });
+    }
   };
 
   const removeInvalidProducts = () => {
@@ -855,7 +918,7 @@ export default function CheckoutSteps({ subtotal, discountedTotal }: CheckoutSte
         </button>
 
         <p className="mt-2 text-xs text-[var(--brand-cream)]/70">
-          Metodo seleccionado: {paymentMethodLabel(paymentMethod)}
+          Metodo seleccionado: {paymentMethodLabel(paymentMethod)}. Total estimado: {formatMoney(displayedTotal)}
         </p>
       </section>
     </div>
