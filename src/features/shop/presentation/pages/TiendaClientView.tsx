@@ -13,6 +13,7 @@ import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs
 import { showCartAddedToast } from "@/src/features/shop/presentation/lib/cartToast";
 import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
+import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 
 const QuickViewModal = dynamic(
   () => import("@/src/features/shop/presentation/components/QuickViewModal/QuickViewModal"),
@@ -104,6 +105,7 @@ export default function TiendaClientView({
   const skipNextUrlSyncRef = useRef(false);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
   const { setOpen } = useCartDrawer();
+  useBodyScrollLock(sortShouldRender);
 
   const availableCategories = categories;
   const selectedWorld = filters.departament ?? "PELUQUERIA";
@@ -203,19 +205,24 @@ export default function TiendaClientView({
         window.clearTimeout(filtersCloseTimerRef.current);
         filtersCloseTimerRef.current = null;
       }
-      setFiltersShouldRender(true);
-      setFiltersClosing(false);
-      return;
+      const openSyncTimer = window.setTimeout(() => {
+        setFiltersShouldRender(true);
+        setFiltersClosing(false);
+      }, 0);
+      return () => window.clearTimeout(openSyncTimer);
     }
 
     if (!filtersShouldRender || filtersClosing) return;
 
-    setFiltersClosing(true);
-    filtersCloseTimerRef.current = window.setTimeout(() => {
-      setFiltersClosing(false);
-      setFiltersShouldRender(false);
-      filtersCloseTimerRef.current = null;
-    }, 300);
+    const startCloseTimer = window.setTimeout(() => {
+      setFiltersClosing(true);
+      filtersCloseTimerRef.current = window.setTimeout(() => {
+        setFiltersClosing(false);
+        setFiltersShouldRender(false);
+        filtersCloseTimerRef.current = null;
+      }, 300);
+    }, 0);
+    return () => window.clearTimeout(startCloseTimer);
   }, [filtersOpen, filtersShouldRender, filtersClosing]);
 
   useEffect(() => {
@@ -228,19 +235,24 @@ export default function TiendaClientView({
         window.clearTimeout(sortCloseTimerRef.current);
         sortCloseTimerRef.current = null;
       }
-      setSortShouldRender(true);
-      setSortClosing(false);
-      return;
+      const openSyncTimer = window.setTimeout(() => {
+        setSortShouldRender(true);
+        setSortClosing(false);
+      }, 0);
+      return () => window.clearTimeout(openSyncTimer);
     }
 
     if (!sortShouldRender || sortClosing) return;
 
-    setSortClosing(true);
-    sortCloseTimerRef.current = window.setTimeout(() => {
-      setSortClosing(false);
-      setSortShouldRender(false);
-      sortCloseTimerRef.current = null;
-    }, 300);
+    const startCloseTimer = window.setTimeout(() => {
+      setSortClosing(true);
+      sortCloseTimerRef.current = window.setTimeout(() => {
+        setSortClosing(false);
+        setSortShouldRender(false);
+        sortCloseTimerRef.current = null;
+      }, 300);
+    }, 0);
+    return () => window.clearTimeout(startCloseTimer);
   }, [sortOpen, sortShouldRender, sortClosing]);
 
   useEffect(() => {

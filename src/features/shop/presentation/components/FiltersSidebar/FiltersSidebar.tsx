@@ -1,5 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
+import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 import type { FilterState } from "../../view-models/useProductsStore";
 
 interface FiltersSidebarProps {
@@ -101,6 +102,8 @@ export default function FiltersSidebar({
       : "animate-slideOutDrawerLeft"
     : "";
   const backdropAnimationClass = isOpen ? "animate-fadeInBackdrop" : "animate-fadeOutBackdrop";
+
+  useBodyScrollLock(isMobileDrawer);
 
   return (
     <>

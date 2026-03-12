@@ -75,16 +75,10 @@ export type TechnicalSignalName = (typeof TECHNICAL_SIGNAL_NAMES)[number];
 export async function incrementMetric(name: string, amount = 1): Promise<void> {
   const bucket = dayBucket();
   const key = metricKey(name, bucket);
-  const current = await kv.incr(key);
+  const current = await kv.incrby(key, amount);
 
-  if (current === 1) {
+  if (current === amount) {
     await kv.expire(key, METRICS_TTL_SECONDS);
-  }
-
-  if (amount > 1) {
-    for (let i = 1; i < amount; i += 1) {
-      await kv.incr(key);
-    }
   }
 }
 

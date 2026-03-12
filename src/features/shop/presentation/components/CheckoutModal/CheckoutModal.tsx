@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 import type { CartItem, PaymentMethod } from "../../view-models/useCartStore";
 import { useCart } from "../../view-models/useCartStore";
 import { refreshProductsMemoryCacheFromSource } from "../../view-models/useProductsStore";
@@ -46,6 +47,8 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
   const onCloseRef = useRef(onClose);
   const slowValidationTimerRef = useRef<number | null>(null);
   const prevalidationDebounceRef = useRef<number | null>(null);
+
+  useBodyScrollLock(open);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -124,13 +127,14 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
   useEffect(() => {
     if (!open) return;
 
-    setError(null);
-    setSelectedPaymentMethod(null);
-    setTransferInfoOpen(false);
-    setCheckoutPhase("idle");
-    setSlowValidationVisible(false);
-
-    closeButtonRef.current?.focus();
+    const resetOpenStateTimer = window.setTimeout(() => {
+      setError(null);
+      setSelectedPaymentMethod(null);
+      setTransferInfoOpen(false);
+      setCheckoutPhase("idle");
+      setSlowValidationVisible(false);
+      closeButtonRef.current?.focus();
+    }, 0);
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -140,6 +144,7 @@ export default function CheckoutModal({ open, onClose, items, subtotal }: Props)
 
     window.addEventListener("keydown", onKeyDown);
     return () => {
+      window.clearTimeout(resetOpenStateTimer);
       window.removeEventListener("keydown", onKeyDown);
       if (slowValidationTimerRef.current !== null) {
         window.clearTimeout(slowValidationTimerRef.current);

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 
 type QuickViewModalProps = {
   product: Product | null;
@@ -58,18 +59,7 @@ export default function QuickViewModal({
         }).format(product.price)
       : "Consultar";
 
-  // Lock body scroll when open
-  useEffect(() => {
-    if (!open) return;
-
-    const originalOverflow = document.body.style.overflow;
-    // Prevent background scrolling
-    document.body.style.overflow = "hidden";
-
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [open]);
+  useBodyScrollLock(open);
 
   useEffect(() => {
     if (!open) return;

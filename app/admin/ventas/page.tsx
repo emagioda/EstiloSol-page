@@ -7,8 +7,8 @@ export default async function AdminVentasPage() {
   const orders = await getOrdersForAdmin();
 
   return (
-    <section className="glass-panel rounded-3xl border border-[var(--brand-gold-300)]/25 p-5 shadow-[0_20px_42px_rgba(11,4,24,0.35)]">
-      <div className="mb-4 flex items-center justify-between gap-2">
+    <section className="pb-1">
+      <div className="mb-3 flex items-center justify-between gap-2">
         <h2 className="[font-family:var(--font-brand-display)] text-3xl text-[var(--brand-cream)]">Ventas</h2>
         <span className="rounded-full border border-[var(--brand-gold-300)]/45 bg-[rgba(248,227,176,0.15)] px-2.5 py-1 text-xs font-semibold text-[var(--brand-cream)]">
           {orders.length} registros

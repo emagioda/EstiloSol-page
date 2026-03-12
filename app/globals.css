@@ -47,6 +47,11 @@ body.shop-modal-open #main-navbar {
   pointer-events: none;
 }
 
+html.scroll-locked,
+body.scroll-locked {
+  overscroll-behavior-y: none;
+}
+
 @keyframes ticker-marquee {
   0% {
     transform: translate3d(0, 0, 0);

@@ -45,6 +45,7 @@ export default function RootLayout({
     --safe-area-bottom: env(safe-area-inset-bottom, 0px);
     --header-height-mobile-base: 56px;
     --header-height-desktop-base: 72px;
+    --admin-nav-height-mobile: 34px;
     --shop-ticker-height-mobile: 28px;
     --shop-ticker-height-desktop: 30px;
     --header-height-mobile: calc(var(--header-height-mobile-base) + var(--safe-area-top));

@@ -7,6 +7,7 @@ type KvClient = {
   set(key: string, value: KvValue, options?: { ex?: number }): Promise<"OK">;
   del(key: string): Promise<number>;
   incr(key: string): Promise<number>;
+  incrby(key: string, amount: number): Promise<number>;
   expire(key: string, seconds: number): Promise<number>;
 };
 
@@ -50,6 +51,19 @@ const memoryKv: KvClient = {
     const entry = getMemoryEntry(key);
     const current = Number(entry?.value ?? 0);
     const next = Number.isFinite(current) ? current + 1 : 1;
+
+    memoryStore.set(key, {
+      value: next,
+      expiresAt: entry?.expiresAt ?? null,
+    });
+
+    return next;
+  },
+  async incrby(key: string, amount: number): Promise<number> {
+    const entry = getMemoryEntry(key);
+    const current = Number(entry?.value ?? 0);
+    const safeAmount = Number.isFinite(amount) ? Math.trunc(amount) : 0;
+    const next = Number.isFinite(current) ? current + safeAmount : safeAmount;
 
     memoryStore.set(key, {
       value: next,

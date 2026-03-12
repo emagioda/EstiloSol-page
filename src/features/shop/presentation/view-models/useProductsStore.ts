@@ -140,6 +140,8 @@ const sortProducts = (
       sorted.sort((a, b) => (b.name || "").localeCompare(a.name || ""));
       break;
     case "newest":
+      sorted.sort((a, b) => Number(Boolean(b.is_new)) - Number(Boolean(a.is_new)));
+      break;
     default:
       break;
   }

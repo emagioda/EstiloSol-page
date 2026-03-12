@@ -18,10 +18,19 @@ export default function Navbar() {
   const { items } = useCart();
   const pathname = usePathname();
   const pathnameSegments = (pathname ?? "").split("/").filter(Boolean);
+  const isAdmin = pathnameSegments[0] === "admin";
   const isTienda = pathnameSegments.includes("tienda");
+  const isAdminVentas = pathname?.startsWith("/admin/ventas") || pathname === "/admin";
+  const isAdminProductos = pathname?.startsWith("/admin/productos");
+  const adminSections = [
+    { href: "/admin/ventas", label: "Ventas", active: isAdminVentas, disabled: false },
+    { href: "/admin/productos", label: "Productos", active: isAdminProductos, disabled: false },
+    { href: "#", label: "Servicios", active: false, disabled: true },
+  ];
   const tickerMessages = ["Agregar texto", "Agregar texto", "Agregar texto"];
   const [showTicker, setShowTicker] = useState(true);
   const [navMenuOpen, setNavMenuOpen] = useState(false);
+  const [pendingAdminHref, setPendingAdminHref] = useState<string | null>(null);
   const cartCount = items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
   const cartTotal = items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0);
   const formattedTotal = new Intl.NumberFormat("es-AR", {
@@ -39,6 +48,12 @@ export default function Navbar() {
       return;
     }
 
+    if (isAdmin) {
+      root.style.setProperty("--header-height-mobile", "calc(var(--header-height-mobile-base) + var(--safe-area-top) + var(--admin-nav-height-mobile))");
+      root.style.setProperty("--header-height-desktop", "var(--header-height-desktop-base)");
+      return;
+    }
+
     root.style.setProperty("--header-height-mobile", "calc(var(--header-height-mobile-base) + var(--safe-area-top))");
     root.style.setProperty("--header-height-desktop", "var(--header-height-desktop-base)");
 
@@ -46,12 +61,14 @@ export default function Navbar() {
       root.style.setProperty("--header-height-mobile", "calc(var(--header-height-mobile-base) + var(--safe-area-top))");
       root.style.setProperty("--header-height-desktop", "var(--header-height-desktop-base)");
     };
-  }, [isTienda, showTicker]);
+  }, [isAdmin, isTienda, showTicker]);
 
   useEffect(() => {
     if (!isTienda) {
-      setShowTicker(true);
-      return;
+      const resetTickerTimer = window.setTimeout(() => {
+        setShowTicker(true);
+      }, 0);
+      return () => window.clearTimeout(resetTickerTimer);
     }
 
     const handleTickerVisibility = (event: Event) => {
@@ -65,6 +82,24 @@ export default function Navbar() {
       window.removeEventListener("shop:ticker-visibility", handleTickerVisibility as EventListener);
     };
   }, [isTienda]);
+
+  const visiblePendingAdminHref =
+    pendingAdminHref && pendingAdminHref !== pathname ? pendingAdminHref : null;
+
+  const handleAdminLinkClick = (href: string) => {
+    if (!href || href === "#" || href === pathname || pendingAdminHref === href) {
+      return;
+    }
+    setPendingAdminHref(href);
+  };
+
+  const adminLinkClass = (active: boolean, href: string) => {
+    const isPending = visiblePendingAdminHref === href;
+    if (isPending) {
+      return "text-[var(--brand-gold-300)] opacity-75";
+    }
+    return active ? "text-[var(--brand-gold-300)]" : "text-[var(--brand-cream)]";
+  };
 
   const cartIcon = (
     <svg
@@ -98,7 +133,7 @@ export default function Navbar() {
         <nav className="h-[var(--header-height-mobile-base)] border-b border-[var(--brand-gold-400)] md:h-[var(--header-height-desktop-base)]">
           <div className="mx-auto flex h-full w-full items-center justify-between gap-6 px-4 md:px-8">
 
-            {/* Left: hamburger — all pages, all sizes */}
+            {/* Left: hamburger, all pages, all sizes */}
             <div className="flex items-center">
               <button
                 type="button"
@@ -142,9 +177,57 @@ export default function Navbar() {
               </div>
             </Link>
 
-            {/* Right: Cart (tienda only) */}
+            {/* Right: admin links or cart */}
             <div className="flex flex-1 items-center justify-end">
-              {isTienda && (
+              {isAdmin ? (
+                <div className="flex items-center gap-2">
+                  <div className="hidden items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)] md:flex">
+                    {adminSections.map((link, index) => (
+                      <span key={link.label} className="inline-flex items-center gap-2">
+                        {index > 0 ? <span aria-hidden className="text-[var(--brand-gold-300)]/80">|</span> : null}
+                        {link.disabled ? (
+                          <span className="cursor-not-allowed text-[var(--brand-cream)]/45">{link.label}</span>
+                        ) : link.active ? (
+                          <span className={`cursor-default ${adminLinkClass(link.active, link.href)}`}>
+                            {link.label}
+                          </span>
+                        ) : (
+                          <Link
+                            href={link.href}
+                            onClick={() => handleAdminLinkClick(link.href)}
+                            className={`transition hover:text-[var(--brand-gold-300)] ${adminLinkClass(
+                              link.active,
+                              link.href
+                            )}`}
+                          >
+                            {link.label}
+                          </Link>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                  <Link
+                    href="/api/auth/signout?callbackUrl=/"
+                    aria-label="Cerrar sesión"
+                    className="inline-flex h-8 w-8 items-center justify-center text-rose-200 transition hover:text-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-200/80"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      aria-hidden
+                      className="h-[18px] w-[18px]"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                      <path d="M16 7 21 12l-5 5" />
+                      <path d="M9 12h12" />
+                    </svg>
+                  </Link>
+                </div>
+              ) : isTienda ? (
                 <>
                   {/* Mobile cart */}
                   <button
@@ -185,14 +268,46 @@ export default function Navbar() {
                     </button>
                   </div>
                 </>
-              )}
+              ) : null}
             </div>
 
           </div>
         </nav>
+        {isAdmin ? (
+          <div className="h-[var(--admin-nav-height-mobile)] border-b border-[var(--brand-gold-400)]/70 md:hidden">
+            <div className="mx-auto flex h-full w-full max-w-[1320px] items-center justify-center px-2">
+              <div className="flex w-full items-center justify-center gap-1.5 whitespace-nowrap text-[9px] font-semibold uppercase tracking-[0.09em] text-[var(--brand-cream)]">
+                {adminSections.map((link, index) => (
+                  <span key={link.label} className="inline-flex items-center gap-2">
+                    {index > 0 ? <span aria-hidden className="text-[var(--brand-gold-300)]/80">|</span> : null}
+                    {link.disabled ? (
+                      <span className="cursor-not-allowed text-[var(--brand-cream)]/45">{link.label}</span>
+                    ) : link.active ? (
+                      <span className={`cursor-default ${adminLinkClass(link.active, link.href)}`}>
+                        {link.label}
+                      </span>
+                    ) : (
+                      <Link
+                        href={link.href}
+                        onClick={() => handleAdminLinkClick(link.href)}
+                        className={`transition hover:text-[var(--brand-gold-300)] ${adminLinkClass(
+                          link.active,
+                          link.href
+                        )}`}
+                      >
+                        {link.label}
+                      </Link>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </header>
 
       <NavDrawer open={navMenuOpen} onClose={() => setNavMenuOpen(false)} />
     </>
   );
 }
+

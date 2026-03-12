@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 export type CartItem = {
   productId: string;
@@ -78,7 +78,7 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
     } catch {}
   }, [items]);
 
-  const addItem = (item: CartItem) => {
+  const addItem = useCallback((item: CartItem) => {
     const safeQty = normalizeQty(item.qty);
     if (!item.productId || safeQty <= 0) return;
 
@@ -102,22 +102,28 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
         },
       ];
     });
-  };
+  }, []);
 
-  const removeItem = (productId: string) => setItems((prev) => prev.filter((p) => p.productId !== productId));
+  const removeItem = useCallback(
+    (productId: string) => setItems((prev) => prev.filter((p) => p.productId !== productId)),
+    []
+  );
 
-  const updateQty = (productId: string, qty: number) => {
+  const updateQty = useCallback((productId: string, qty: number) => {
     const safeQty = normalizeQty(qty);
     setItems((prev) =>
       safeQty <= 0
         ? prev.filter((p) => p.productId !== productId)
         : prev.map((p) => (p.productId === productId ? { ...p, qty: safeQty } : p))
     );
-  };
+  }, []);
 
-  const clear = () => setItems([]);
-  const getTotal = () => items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0);
-  const getDiscountedTotal = () => Math.round(getTotal() * 0.9);
+  const clear = useCallback(() => setItems([]), []);
+  const getTotal = useCallback(
+    () => items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0),
+    [items]
+  );
+  const getDiscountedTotal = useCallback(() => Math.round(getTotal() * 0.9), [getTotal]);
 
   const value = useMemo(
     () => ({
@@ -131,7 +137,16 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
       getTotal,
       getDiscountedTotal,
     }),
-    [items, paymentMethod]
+    [
+      items,
+      paymentMethod,
+      addItem,
+      removeItem,
+      updateQty,
+      clear,
+      getTotal,
+      getDiscountedTotal,
+    ]
   );
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

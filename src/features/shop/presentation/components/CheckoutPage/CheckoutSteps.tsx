@@ -48,28 +48,7 @@ const isPaymentMethod = (value: unknown): value is PaymentMethod =>
 const isDeliveryMethod = (value: unknown): value is DeliveryMethod =>
   value === "delivery" || value === "pickup";
 
-const buildApiNotes = ({
-  deliveryMethod,
-  paymentMethod,
-  email,
-  notes,
-}: {
-  deliveryMethod: DeliveryMethod;
-  paymentMethod: PaymentMethod;
-  email: string;
-  notes: string;
-}) =>
-  sanitizeText(
-    [
-      `Entrega: ${deliveryMethodLabel(deliveryMethod)}`,
-      `Pago: ${paymentMethodLabel(paymentMethod)}`,
-      email ? `Email: ${email}` : "",
-      notes,
-    ]
-      .filter(Boolean)
-      .join(" | "),
-    250
-  );
+const buildApiNotes = (notes: string) => sanitizeText(notes, 250);
 
 export default function CheckoutSteps({
   subtotal: _subtotal,
@@ -379,12 +358,7 @@ export default function CheckoutSteps({
             phone: normalizePhoneDigits(whatsapp),
             email: email.trim(),
           },
-          notes: buildApiNotes({
-            deliveryMethod,
-            paymentMethod,
-            email: email.trim(),
-            notes: notes.trim(),
-          }),
+          notes: buildApiNotes(notes.trim()),
         }),
       });
 
@@ -464,12 +438,7 @@ export default function CheckoutSteps({
             phone: normalizePhoneDigits(whatsapp),
             email: email.trim(),
           },
-          notes: buildApiNotes({
-            deliveryMethod,
-            paymentMethod,
-            email: email.trim(),
-            notes: notes.trim(),
-          }),
+          notes: buildApiNotes(notes.trim()),
         }),
       });
 

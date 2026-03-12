@@ -1,11 +1,18 @@
 import { env } from "@/src/config/env";
 
-const DEFAULT_ADMIN_EMAIL = "estilosol26@gmail.com";
-
 const normalizeEmail = (value: string | null | undefined) => value?.trim().toLowerCase() || "";
 
-export const getAdminEmail = () => normalizeEmail(env.getOptionalServer("ADMIN_EMAIL") || DEFAULT_ADMIN_EMAIL);
+export const getAdminEmail = (): string => {
+  const email = env.getOptionalServer("ADMIN_EMAIL");
+  if (!email) throw new Error("ADMIN_EMAIL env var is required but not set");
+  return normalizeEmail(email);
+};
 
-export const isAdminEmail = (value: string | null | undefined) =>
-  normalizeEmail(value) === getAdminEmail();
+export const isAdminEmail = (value: string | null | undefined): boolean => {
+  try {
+    return normalizeEmail(value) === getAdminEmail();
+  } catch {
+    return false;
+  }
+};
 

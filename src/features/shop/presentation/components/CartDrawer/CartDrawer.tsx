@@ -3,6 +3,7 @@
 import "@/src/core/presentation/styles/tokens.css";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 import { useCart } from "../../view-models/useCartStore";
 
 const formatMoney = (value: number) =>
@@ -21,6 +22,8 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const confirmCancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const closeAnimationTimerRef = useRef<number | null>(null);
+
+  useBodyScrollLock(open || shouldRender);
 
   const handleClose = useCallback(() => {
     if (isClosing) return;
@@ -69,21 +72,26 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
         window.clearTimeout(closeAnimationTimerRef.current);
         closeAnimationTimerRef.current = null;
       }
-      setShouldRender(true);
-      if (isClosing) {
-        setIsClosing(false);
-      }
-      return;
+      const openSyncTimer = window.setTimeout(() => {
+        setShouldRender(true);
+        if (isClosing) {
+          setIsClosing(false);
+        }
+      }, 0);
+      return () => window.clearTimeout(openSyncTimer);
     }
 
     if (!shouldRender || isClosing) return;
 
-    setIsClosing(true);
-    closeAnimationTimerRef.current = window.setTimeout(() => {
-      setIsClosing(false);
-      setShouldRender(false);
-      closeAnimationTimerRef.current = null;
-    }, 300);
+    const startCloseTimer = window.setTimeout(() => {
+      setIsClosing(true);
+      closeAnimationTimerRef.current = window.setTimeout(() => {
+        setIsClosing(false);
+        setShouldRender(false);
+        closeAnimationTimerRef.current = null;
+      }, 300);
+    }, 0);
+    return () => window.clearTimeout(startCloseTimer);
   }, [open, shouldRender, isClosing]);
 
   useEffect(() => {

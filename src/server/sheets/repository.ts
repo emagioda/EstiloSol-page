@@ -39,6 +39,7 @@ type SheetsMutationResponse = {
 };
 
 export type AdminDepartament = "PELUQUERIA" | "BIJOUTERIE";
+export type AdminProductType = "UNICO" | "KIT";
 
 export type AdminOrderItem = {
   productId: string;
@@ -63,6 +64,7 @@ export type AdminOrderSheetRow = {
   items: AdminOrderItem[];
   itemsSummary: string;
   notes: string;
+  receiptEmailSentAt: string;
   raw: SheetRow;
 };
 
@@ -72,6 +74,12 @@ export type AdminProductSheetRow = {
   price: number;
   currency: string;
   active: boolean;
+  shortDescription: string;
+  description: string;
+  includes: string[];
+  images: string[];
+  isNew: boolean;
+  productType: AdminProductType;
   departament?: AdminDepartament;
   updatedAt: string;
   raw: SheetRow;
@@ -123,6 +131,23 @@ const toNumberValue = (value: unknown): number => {
 const toIsoString = (timestamp: number | undefined): string => {
   if (!timestamp || !Number.isFinite(timestamp)) return "";
   return new Date(timestamp).toISOString();
+};
+
+const toStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => toStringValue(entry))
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(/\r?\n|,/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  return [];
 };
 
 const toDateMs = (value: unknown): number => {
@@ -221,6 +246,11 @@ const parseDepartament = (value: unknown): AdminDepartament | undefined => {
   if (token === "peluqueria") return "PELUQUERIA";
   if (token === "bijouterie") return "BIJOUTERIE";
   return undefined;
+};
+
+const parseProductType = (value: unknown): AdminProductType => {
+  const token = normalizeToken(value);
+  return token === "kit" ? "KIT" : "UNICO";
 };
 
 export const parsePaymentStatus = (value: unknown): OrderPaymentStatus => {
@@ -470,6 +500,11 @@ export async function updateProductRowInSheet(
     price: number;
     active: boolean;
     name: string;
+    shortDescription: string;
+    description: string;
+    includes: string[];
+    images: string[];
+    isNew: boolean;
   }>
 ): Promise<void> {
   const payload: Record<string, unknown> = {
@@ -481,6 +516,21 @@ export async function updateProductRowInSheet(
   }
   if (typeof updates.active === "boolean") payload.active = updates.active;
   if (typeof updates.name === "string") payload.name = updates.name.trim();
+  if (typeof updates.shortDescription === "string") {
+    payload.short_description = updates.shortDescription.trim();
+  }
+  if (typeof updates.description === "string") {
+    payload.description = updates.description.trim();
+  }
+  if (Array.isArray(updates.includes)) {
+    payload.includes = updates.includes.join(", ");
+  }
+  if (Array.isArray(updates.images)) {
+    payload.images = updates.images.join(", ");
+  }
+  if (typeof updates.isNew === "boolean") {
+    payload.is_new = updates.isNew;
+  }
 
   await postMutation({
     action: "updateRow",
@@ -568,6 +618,9 @@ const parseAdminOrderRow = (input: SheetRow): AdminOrderSheetRow | null => {
   const itemsFromJson = parseOrderItemsJson(pickValue(row, ["items_json"]));
   const items = itemsFromJson.length > 0 ? itemsFromJson : parseOrderItemsSummary(itemsSummary);
   const notes = toStringValue(pickValue(row, ["notas", "notes"]));
+  const receiptEmailSentAt = toStringValue(
+    pickValue(row, ["receipt_email_sent_at", "email_enviado_en", "email_sent_at"])
+  );
 
   return {
     orderId,
@@ -591,6 +644,7 @@ const parseAdminOrderRow = (input: SheetRow): AdminOrderSheetRow | null => {
     items,
     itemsSummary,
     notes,
+    receiptEmailSentAt,
     raw: input,
   };
 };
@@ -604,6 +658,12 @@ const parseAdminProductRow = (input: SheetRow): AdminProductSheetRow | null => {
   const priceRaw = pickValue(row, ["price", "precio"]);
   const priceParsed = toNumberValue(priceRaw);
   const activeRaw = pickValue(row, ["active", "activo"]);
+  const productType = parseProductType(pickValue(row, ["product_type", "tipo"]));
+  const includes =
+    productType === "KIT"
+      ? toStringArray(pickValue(row, ["includes", "include", "incluye"]))
+      : [];
+  const images = toStringArray(pickValue(row, ["images", "images_csv", "image_links", "imagenes"]));
 
   return {
     id,
@@ -611,6 +671,14 @@ const parseAdminProductRow = (input: SheetRow): AdminProductSheetRow | null => {
     price: Number.isFinite(priceParsed) ? priceParsed : 0,
     currency: toStringValue(pickValue(row, ["currency", "moneda"])) || "ARS",
     active: activeRaw === undefined ? true : toBoolean(activeRaw),
+    shortDescription: toStringValue(
+      pickValue(row, ["short_description", "shortdescription", "short_description_", "descripcion_corta"])
+    ),
+    description: toStringValue(pickValue(row, ["description", "descripcion", "descripcion_larga"])),
+    includes,
+    images,
+    isNew: toBoolean(pickValue(row, ["is_new", "nuevo"])),
+    productType,
     departament: parseDepartament(pickValue(row, ["departament", "departamento", "rubro"])),
     updatedAt: toStringValue(pickValue(row, ["updated_at", "actualizado_en", "fecha_actualizacion"])),
     raw: input,

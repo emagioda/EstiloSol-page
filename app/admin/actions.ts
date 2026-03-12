@@ -28,6 +28,18 @@ const parseShippingStatus = (value: FormDataEntryValue | null): OrderShippingSta
   return null;
 };
 
+const isPaymentStatus = (value: string): value is OrderPaymentStatus =>
+  value === "pending" || value === "confirmed" || value === "cancelled";
+
+const isShippingStatus = (value: string): value is OrderShippingStatus =>
+  value === "in_process" || value === "completed";
+
+const parseStringList = (value: FormDataEntryValue | null): string[] =>
+  String(value || "")
+    .split(/\r?\n|,/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
 const requireAdminSession = async () => {
   const session = await getServerSession(authOptions);
   if (!isAdminEmail(session?.user?.email)) {
@@ -37,10 +49,10 @@ const requireAdminSession = async () => {
 
 const resolveAdminRedirectPath = (
   value: FormDataEntryValue | null,
-  fallback: "/admin/ventas" | "/admin/catalogo"
+  fallback: "/admin/ventas" | "/admin/productos"
 ) => {
   const path = String(value || "").trim();
-  if (path === "/admin/ventas" || path === "/admin/catalogo") {
+  if (path === "/admin/ventas" || path === "/admin/productos") {
     return path;
   }
   return fallback;
@@ -130,18 +142,15 @@ const buildFallbackOrderFromSheet = async (
   };
 };
 
-export async function updateOrderStatusesAction(formData: FormData) {
-  await requireAdminSession();
-
-  const orderId = String(formData.get("orderId") || "").trim();
-  const paymentStatus = parsePaymentStatus(formData.get("paymentStatus"));
-  const shippingStatus = parseShippingStatus(formData.get("shippingStatus"));
-  const redirectTo = resolveAdminRedirectPath(formData.get("redirectTo"), "/admin/ventas");
-
-  if (!orderId || !paymentStatus || !shippingStatus) {
-    throw new Error("Invalid order update payload");
-  }
-
+const applyOrderStatusesUpdate = async ({
+  orderId,
+  paymentStatus,
+  shippingStatus,
+}: {
+  orderId: string;
+  paymentStatus: OrderPaymentStatus;
+  shippingStatus: OrderShippingStatus;
+}) => {
   const currentOrder = await getOrder(orderId);
 
   if (!currentOrder) {
@@ -167,10 +176,7 @@ export async function updateOrderStatusesAction(formData: FormData) {
         }
       }
     }
-
-    revalidatePath("/admin");
-    revalidatePath("/admin/ventas");
-    redirect(redirectTo);
+    return;
   }
 
   const wasConfirmed = currentOrder.paymentStatus === "confirmed";
@@ -206,10 +212,64 @@ export async function updateOrderStatusesAction(formData: FormData) {
       ...(paymentStatus === "pending" ? { mpStatus: "pending" } : {}),
     });
   }
+};
+
+export async function updateOrderStatusesAction(formData: FormData) {
+  await requireAdminSession();
+
+  const orderId = String(formData.get("orderId") || "").trim();
+  const paymentStatus = parsePaymentStatus(formData.get("paymentStatus"));
+  const shippingStatus = parseShippingStatus(formData.get("shippingStatus"));
+  const redirectTo = resolveAdminRedirectPath(formData.get("redirectTo"), "/admin/ventas");
+
+  if (!orderId || !paymentStatus || !shippingStatus) {
+    throw new Error("Invalid order update payload");
+  }
+
+  await applyOrderStatusesUpdate({
+    orderId,
+    paymentStatus,
+    shippingStatus,
+  });
 
   revalidatePath("/admin");
   revalidatePath("/admin/ventas");
   redirect(redirectTo);
+}
+
+export async function saveOrderStatusesBatchAction(
+  updates: Array<{
+    orderId: string;
+    paymentStatus: string;
+    shippingStatus: string;
+  }>
+) {
+  await requireAdminSession();
+
+  if (!Array.isArray(updates)) {
+    throw new Error("Invalid batch order update payload");
+  }
+
+  for (const update of updates) {
+    const orderId = String(update?.orderId || "").trim();
+    const paymentStatusRaw = String(update?.paymentStatus || "");
+    const shippingStatusRaw = String(update?.shippingStatus || "");
+
+    if (!orderId || !isPaymentStatus(paymentStatusRaw) || !isShippingStatus(shippingStatusRaw)) {
+      throw new Error("Invalid batch order update payload");
+    }
+
+    await applyOrderStatusesUpdate({
+      orderId,
+      paymentStatus: paymentStatusRaw,
+      shippingStatus: shippingStatusRaw,
+    });
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/ventas");
+
+  return { ok: true };
 }
 
 export async function updateCatalogProductAction(formData: FormData) {
@@ -219,7 +279,14 @@ export async function updateCatalogProductAction(formData: FormData) {
   const name = String(formData.get("name") || "").trim();
   const priceRaw = String(formData.get("price") || "").trim();
   const active = formData.get("active") === "on";
-  const redirectTo = resolveAdminRedirectPath(formData.get("redirectTo"), "/admin/catalogo");
+  const shortDescription = String(formData.get("shortDescription") || "").trim();
+  const description = String(formData.get("description") || "").trim();
+  const productType = String(formData.get("productType") || "UNICO").trim().toUpperCase();
+  const isKit = productType === "KIT";
+  const includes = isKit ? parseStringList(formData.get("includes")) : [];
+  const images = parseStringList(formData.get("images"));
+  const isNew = String(formData.get("isNew") || "").toLowerCase() === "true";
+  const redirectTo = resolveAdminRedirectPath(formData.get("redirectTo"), "/admin/productos");
 
   const price = Number(priceRaw.replace(",", "."));
 
@@ -231,11 +298,16 @@ export async function updateCatalogProductAction(formData: FormData) {
     name,
     price,
     active,
+    shortDescription,
+    description,
+    includes,
+    images,
+    isNew,
   });
 
   revalidateTag("catalog", "max");
   revalidatePath("/admin");
-  revalidatePath("/admin/catalogo");
+  revalidatePath("/admin/productos");
   revalidatePath("/tienda");
   redirect(redirectTo);
 }

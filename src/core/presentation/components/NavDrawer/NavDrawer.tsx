@@ -4,6 +4,7 @@ import "@/src/core/presentation/styles/tokens.css";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 
 interface NavDrawerProps {
   open: boolean;
@@ -18,6 +19,8 @@ export default function NavDrawer({ open, onClose }: NavDrawerProps) {
   const pathname = usePathname();
   const closeTimerRef = useRef<number | null>(null);
 
+  useBodyScrollLock(shouldRender);
+
   const handleClose = useCallback(() => {
     if (isClosing) return;
     onClose();
@@ -29,19 +32,24 @@ export default function NavDrawer({ open, onClose }: NavDrawerProps) {
         window.clearTimeout(closeTimerRef.current);
         closeTimerRef.current = null;
       }
-      setShouldRender(true);
-      setIsClosing(false);
-      return;
+      const openSyncTimer = window.setTimeout(() => {
+        setShouldRender(true);
+        setIsClosing(false);
+      }, 0);
+      return () => window.clearTimeout(openSyncTimer);
     }
 
     if (!shouldRender || isClosing) return;
 
-    setIsClosing(true);
-    closeTimerRef.current = window.setTimeout(() => {
-      setIsClosing(false);
-      setShouldRender(false);
-      closeTimerRef.current = null;
-    }, 300);
+    const startCloseTimer = window.setTimeout(() => {
+      setIsClosing(true);
+      closeTimerRef.current = window.setTimeout(() => {
+        setIsClosing(false);
+        setShouldRender(false);
+        closeTimerRef.current = null;
+      }, 300);
+    }, 0);
+    return () => window.clearTimeout(startCloseTimer);
   }, [open, shouldRender, isClosing]);
 
   useEffect(() => {
