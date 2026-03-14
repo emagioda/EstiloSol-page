@@ -3,11 +3,31 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 
 type ProviderPayload = Record<string, { id?: string }>;
 
 export default function AdminSignInPage() {
+  return (
+    <Suspense fallback={<SignInFallback />}>
+      <AdminSignInContent />
+    </Suspense>
+  );
+}
+
+function SignInFallback() {
+  return (
+    <main className="relative min-h-screen overflow-hidden bg-[radial-gradient(115%_90%_at_10%_10%,rgba(216,191,255,0.26)_0%,transparent_55%),radial-gradient(90%_70%_at_90%_20%,rgba(246,215,150,0.12)_0%,transparent_58%),linear-gradient(180deg,#4d3180_0%,#6f4ea6_58%,#8a6abb_100%)] px-4 py-8 text-[var(--brand-cream)] sm:py-12">
+      <section className="relative mx-auto w-full max-w-5xl">
+        <article className="rounded-3xl border border-[var(--brand-gold-300)]/34 bg-[rgba(26,13,48,0.92)] p-6 text-sm text-[var(--brand-cream)]/78 shadow-[0_24px_58px_rgba(7,4,18,0.5)] sm:p-8">
+          Cargando acceso de administrador...
+        </article>
+      </section>
+    </main>
+  );
+}
+
+function AdminSignInContent() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/admin";
   const [isGoogleAvailable, setIsGoogleAvailable] = useState<boolean | null>(null);
