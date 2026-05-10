@@ -56,6 +56,7 @@ export default function QuickViewModal({
   const shortDescription = (product?.short_description ?? "").trim();
   const stockLabel = product ? getStockLabel(product) : "";
   const canBuy = product ? isProductPurchasable(product) : false;
+  const isLastUnit = canBuy && product?.stock_qty === 1;
   const cartQty = product
     ? items.find((item) => item.productId === product.id)?.qty ?? 0
     : 0;
@@ -166,6 +167,22 @@ export default function QuickViewModal({
               <p className="mt-4 border-b border-[var(--brand-violet-700)]/25 pb-4 text-3xl font-extrabold text-[var(--brand-violet-950)] sm:text-[3rem]">
                 {formattedPrice}
               </p>
+              <div
+                className={`mt-4 inline-flex w-fit items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-bold leading-none shadow-sm ${
+                  !canBuy
+                    ? "border-rose-300 bg-rose-100 text-rose-700"
+                    : isLastUnit
+                    ? "border-amber-300 bg-gradient-to-r from-amber-100 to-rose-100 text-[var(--brand-violet-950)] shadow-[0_8px_18px_rgba(180,83,9,0.16)]"
+                    : product.stock_status === "preorder"
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                }`}
+              >
+                {isLastUnit && (
+                  <span className="h-2 w-2 rounded-full bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.85)]" />
+                )}
+                {stockLabel}
+              </div>
             </div>
 
             {shortDescription.length > 0 && (
@@ -241,10 +258,6 @@ export default function QuickViewModal({
 
               <div className="mt-5 rounded-2xl bg-[var(--brand-violet-950)]/5 border border-[var(--brand-violet-950)]/15 p-4 text-[var(--brand-violet-950)]/95">
                 <ul className="space-y-2 text-sm">
-                  <li className="flex items-center gap-2">
-                    <span className="text-lg">✔</span>
-                    <span>{stockLabel}</span>
-                  </li>
                   <li className="flex items-center gap-2">
                     <span className="text-lg">🚚</span>
                     <span>Entrega en Rosario</span>

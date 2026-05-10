@@ -110,6 +110,7 @@ export default function ProductDetail({ product, slug }: Props) {
   const displayPrice = isValidPrice(currentProduct.price) ? formatMoney(currentProduct.price) : "Consultar";
   const stockLabel = getStockLabel(currentProduct);
   const canBuy = isProductPurchasable(currentProduct);
+  const isLastUnit = canBuy && currentProduct.stock_qty === 1;
   const cartQty = items.find((item) => item.productId === currentProduct.id)?.qty ?? 0;
   const maxQty = typeof currentProduct.stock_qty === "number" ? currentProduct.stock_qty : null;
   const remainingQty = maxQty === null ? null : Math.max(0, maxQty - cartQty);
@@ -188,6 +189,22 @@ export default function ProductDetail({ product, slug }: Props) {
           <p className="text-3xl font-extrabold text-yellow-100">
             {displayPrice}
           </p>
+          <div
+            className={`inline-flex w-fit items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-bold leading-none shadow-sm ${
+              !canBuy
+                ? "border-rose-300/80 bg-rose-400/18 text-rose-50"
+                : isLastUnit
+                ? "border-amber-200/80 bg-gradient-to-r from-amber-200/30 to-rose-200/24 text-amber-50 shadow-[0_8px_18px_rgba(180,83,9,0.18)]"
+                : currentProduct.stock_status === "preorder"
+                ? "border-amber-200/60 bg-amber-400/16 text-amber-100"
+                : "border-emerald-200/50 bg-emerald-400/14 text-emerald-100"
+            }`}
+          >
+            {isLastUnit && (
+              <span className="h-2 w-2 rounded-full bg-amber-200 shadow-[0_0_10px_rgba(254,243,199,0.85)]" />
+            )}
+            {stockLabel}
+          </div>
           {discountedPrice && (
             <div className="mt-2 w-fit rounded-md border border-green-200 bg-green-50 px-3 py-2 text-green-700">
               <span className="font-bold">10% OFF</span> en Efectivo/Transferencia: {discountedPrice}
@@ -248,10 +265,6 @@ export default function ProductDetail({ product, slug }: Props) {
           {/* info panel below buy button */}
           <div className="mt-5 rounded-2xl bg-white/10 border border-white/15 p-4 text-white/90">
             <ul className="space-y-2 text-sm">
-              <li className="flex items-center gap-2">
-                <span className="text-lg">✔</span>
-                <span>{stockLabel}</span>
-              </li>
               <li className="flex items-center gap-2">
                 <span className="text-lg">🚚</span>
                 <span>Entrega en Rosario</span>

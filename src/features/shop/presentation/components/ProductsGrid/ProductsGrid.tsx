@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import ProductCard from "../ProductCard/ProductCard";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
-const PRODUCTS_PER_BATCH = 12;
+const PRODUCTS_PER_BATCH = 20;
 const initialPagination = {
   productSignature: "",
   visibleCount: PRODUCTS_PER_BATCH,

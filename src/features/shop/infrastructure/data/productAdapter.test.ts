@@ -53,6 +53,7 @@ describe("productAdapter", () => {
 
   it("exposes stock helpers for controlled and uncontrolled stock", () => {
     expect(getStockLabel({ stock_status: "in_stock", stock_qty: 2 })).toBe("2 disponibles");
+    expect(getStockLabel({ stock_status: "in_stock", stock_qty: 1 })).toBe("Última unidad");
     expect(getStockLabel({ stock_status: "preorder", stock_qty: 5 })).toBe("5 disponibles");
     expect(getStockLabel({ stock_status: "preorder", stock_qty: null })).toBe("Preventa");
     expect(getStockLabel({ stock_status: "in_stock", stock_qty: null })).toBe("Disponible");

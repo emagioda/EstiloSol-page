@@ -39,13 +39,16 @@ function ProductCard({
   const thumb = product.images && product.images.length > 0 ? product.images[0] : undefined;
   const stockLabel = getStockLabel(product);
   const canBuy = isProductPurchasable(product);
+  const isLastUnit = canBuy && product.stock_qty === 1;
   const stockLabelClass = !canBuy
-    ? "text-red-100"
+    ? "border-red-200/45 bg-red-500/20 text-red-50"
+    : isLastUnit
+    ? "border-amber-200/80 bg-amber-200/24 text-amber-50"
     : typeof product.stock_qty === "number"
-    ? "text-emerald-100"
+    ? "border-emerald-200/45 bg-emerald-500/12 text-emerald-100"
     : product.stock_status === "preorder"
-    ? "text-amber-100"
-    : "text-[var(--brand-cream)]/72";
+    ? "border-amber-200/45 bg-amber-500/14 text-amber-100"
+    : "border-white/16 bg-white/8 text-[var(--brand-cream)]/78";
 
   const badges: Array<{ key: string; label: string; className: string }> = [];
   if (!canBuy) {
@@ -53,6 +56,13 @@ function ProductCard({
       key: "stock",
       label: "SIN STOCK",
       className: "bg-slate-800 text-white",
+    });
+  }
+  if (isLastUnit) {
+    badges.push({
+      key: "last-unit",
+      label: "ÚLTIMA",
+      className: "bg-gradient-to-r from-amber-200 to-rose-200 text-[var(--brand-violet-950)]",
     });
   }
   if (product.is_new) {
@@ -116,7 +126,10 @@ function ProductCard({
           >
             {formattedPrice}
           </span>
-          <span className={`text-xs font-semibold leading-tight ${stockLabelClass}`}>
+          <span className={`mt-1 inline-flex w-fit items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-bold leading-none ${stockLabelClass}`}>
+            {isLastUnit && (
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-100 shadow-[0_0_8px_rgba(254,243,199,0.9)]" />
+            )}
             {stockLabel}
           </span>
         </div>

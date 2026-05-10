@@ -212,7 +212,9 @@ export function adaptSheetRowsToProducts(rows: RawProductRow[], options?: { incl
 
 export function getStockLabel(product: Pick<Product, "stock_status" | "stock_qty">): string {
   if (product.stock_status === "out_of_stock") return "Sin stock";
-  if (typeof product.stock_qty === "number") return `${product.stock_qty} disponibles`;
+  if (typeof product.stock_qty === "number") {
+    return product.stock_qty === 1 ? "Última unidad" : `${product.stock_qty} disponibles`;
+  }
   if (product.stock_status === "preorder") return "Preventa";
   return "Disponible";
 }

@@ -160,7 +160,9 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
               maxQty === 0
                 ? "Sin stock"
                 : typeof maxQty === "number"
-                ? `${maxQty} disponibles`
+                ? maxQty === 1
+                  ? "Última unidad"
+                  : `${maxQty} disponibles`
                 : null;
 
             return (
@@ -178,7 +180,7 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
                   <div className="font-medium">{it.name}</div>
                   <div className="text-[var(--brand-gold-300)]">{formatMoney(it.unitPrice)}</div>
                   {stockText && (
-                    <div className={`mt-0.5 text-[11px] ${maxQty === 0 ? "text-red-100" : "text-[var(--brand-cream)]/65"}`}>
+                    <div className={`mt-0.5 text-[11px] ${maxQty === 0 ? "text-red-100" : maxQty === 1 ? "font-semibold text-amber-100" : "text-[var(--brand-cream)]/65"}`}>
                       Stock: {stockText}
                     </div>
                   )}

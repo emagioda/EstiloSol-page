@@ -37,6 +37,8 @@ export const BUSINESS_METRIC_NAMES = [
   "checkout.order_create.catalog_unavailable",
   "checkout.order_create.invalid_product",
   "checkout.order_create.created",
+  "checkout.order_received_email.sent",
+  "checkout.order_received_email.failed",
   "payment.verify.rate_limited",
   "payment.verify.invalid_ref",
   "payment.verify.not_found",
