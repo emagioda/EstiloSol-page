@@ -11,6 +11,7 @@ type ServerEnvKey =
 	| "CONTACT_TO_EMAIL"
 	| "CONTACT_FROM_EMAIL"
 	| "SHEETS_ENDPOINT"
+	| "SHEETS_API_TOKEN"
 	| "AUTH_SECRET"
 	| "GOOGLE_CLIENT_ID"
 	| "GOOGLE_CLIENT_SECRET"
@@ -20,7 +21,6 @@ type ServerEnvKey =
 
 type PublicEnvKey =
 	| "NEXT_PUBLIC_MP_PUBLIC_KEY"
-	| "NEXT_PUBLIC_SHEETS_ENDPOINT"
 	| "NEXT_PUBLIC_BASE_PATH"
 	| "NEXT_PUBLIC_MP_CHECKOUT_MODE"
 	| "NEXT_PUBLIC_WHATSAPP_NUMBER";
@@ -35,10 +35,11 @@ const REQUIRED_SERVER_ENV: readonly ServerEnvKey[] = [
 	"APP_BASE_URL",
 	"RESEND_API_KEY",
 	"CONTACT_TO_EMAIL",
+	"SHEETS_ENDPOINT",
+	"SHEETS_API_TOKEN",
 ];
 const REQUIRED_PUBLIC_ENV: readonly PublicEnvKey[] = [
 	"NEXT_PUBLIC_MP_PUBLIC_KEY",
-	"NEXT_PUBLIC_SHEETS_ENDPOINT",
 ];
 
 const readEnv = (key: string): string | undefined => {

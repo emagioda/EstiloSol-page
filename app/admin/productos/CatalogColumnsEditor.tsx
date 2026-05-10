@@ -12,6 +12,12 @@ type CatalogColumnsEditorProps = {
 
 const listToMultiline = (items: string[]) => items.join("\n");
 
+const stockStatusLabels = {
+  in_stock: "Con stock",
+  out_of_stock: "Sin stock",
+  preorder: "Preventa",
+} as const;
+
 function CatalogColumn({
   title,
   products,
@@ -81,17 +87,18 @@ function CatalogColumn({
         </p>
       ) : (
         <div className="overflow-hidden rounded-2xl border border-[var(--brand-gold-300)]/25 bg-white shadow-[0_16px_30px_rgba(12,6,24,0.25)]">
-          <div className="grid grid-cols-[22px_24px_minmax(0,1fr)_66px] items-center gap-1 bg-[var(--brand-violet-900)] px-2.5 py-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--brand-cream)]">
+          <div className="grid grid-cols-[22px_24px_minmax(0,1fr)_72px_66px] items-center gap-1 bg-[var(--brand-violet-900)] px-2.5 py-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--brand-cream)]">
             <span aria-hidden />
             <span className="text-center">ID</span>
             <span>Nombre</span>
+            <span className="text-center">Stock</span>
             <span className="text-center">Acción</span>
           </div>
           <ul className="divide-y divide-[var(--brand-violet-700)]/12">
             {filteredProducts.map((product) => (
               <li
                 key={product.id}
-                className="group grid grid-cols-[22px_24px_minmax(0,1fr)_66px] items-center gap-1 px-2.5 py-2.5 text-slate-900 transition-colors duration-150 hover:bg-[rgba(92,54,150,0.08)]"
+                className="group grid grid-cols-[22px_24px_minmax(0,1fr)_72px_66px] items-center gap-1 px-2.5 py-2.5 text-slate-900 transition-colors duration-150 hover:bg-[rgba(92,54,150,0.08)]"
               >
                 <div className="flex justify-center">
                   <input
@@ -107,7 +114,13 @@ function CatalogColumn({
                   <p className="truncate text-sm font-medium transition-colors group-hover:text-[var(--brand-violet-950)]">
                     {product.name}
                   </p>
+                  {product.isFeatured ? (
+                    <p className="text-[11px] font-semibold text-[var(--brand-violet-700)]">Destacado</p>
+                  ) : null}
                 </div>
+                <p className="text-center text-[11px] font-semibold text-slate-700">
+                  {product.stockQty === null ? stockStatusLabels[product.stockStatus] : product.stockQty}
+                </p>
                 <button
                   type="button"
                   onClick={() => onEdit(product)}
@@ -198,7 +211,6 @@ export default function CatalogColumnsEditor({
             }`}
           >
             <input type="hidden" name="productId" value={editingProduct.id} />
-            <input type="hidden" name="productType" value={editingProduct.productType} />
             <input type="hidden" name="redirectTo" value="/admin/productos" />
 
             <div className="mb-4 flex items-start justify-between gap-3 border-b border-[var(--brand-gold-300)]/20 pb-4">
@@ -243,6 +255,18 @@ export default function CatalogColumnsEditor({
                 </select>
               </label>
 
+              <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
+                Destacado
+                <select
+                  name="isFeatured"
+                  defaultValue={editingProduct.isFeatured ? "true" : "false"}
+                  className="rounded-lg border border-[var(--brand-gold-300)]/30 bg-white px-2.5 py-2 text-sm font-normal text-slate-900"
+                >
+                  <option value="false">No</option>
+                  <option value="true">Sí</option>
+                </select>
+              </label>
+
               <label className="md:col-span-2 flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
                 Nombre
                 <input
@@ -267,6 +291,44 @@ export default function CatalogColumnsEditor({
                 />
               </label>
 
+              <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
+                Tipo
+                <select
+                  name="productType"
+                  defaultValue={editingProduct.productType}
+                  className="rounded-lg border border-[var(--brand-gold-300)]/30 bg-white px-2.5 py-2 text-sm font-normal text-slate-900"
+                >
+                  <option value="UNICO">Único</option>
+                  <option value="KIT">Kit</option>
+                </select>
+              </label>
+
+              <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
+                Estado de stock
+                <select
+                  name="stockStatus"
+                  defaultValue={editingProduct.stockStatus}
+                  className="rounded-lg border border-[var(--brand-gold-300)]/30 bg-white px-2.5 py-2 text-sm font-normal text-slate-900"
+                >
+                  <option value="in_stock">Con stock</option>
+                  <option value="out_of_stock">Sin stock</option>
+                  <option value="preorder">Preventa</option>
+                </select>
+              </label>
+
+              <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
+                Cantidad
+                <input
+                  name="stockQty"
+                  type="number"
+                  min={0}
+                  step="1"
+                  defaultValue={editingProduct.stockQty ?? ""}
+                  placeholder="Sin control"
+                  className="rounded-lg border border-[var(--brand-gold-300)]/30 bg-white px-2.5 py-2 text-sm font-normal text-slate-900"
+                />
+              </label>
+
               <label className="md:col-span-2 flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
                 Descripción corta
                 <textarea
@@ -287,19 +349,15 @@ export default function CatalogColumnsEditor({
                 />
               </label>
 
-              {editingProduct.productType === "KIT" ? (
-                <label className="md:col-span-2 flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
-                  Incluye (uno por línea)
-                  <textarea
-                    name="includes"
-                    rows={4}
-                    defaultValue={includesValue}
-                    className="rounded-lg border border-[var(--brand-gold-300)]/30 bg-white px-2.5 py-2 text-sm font-normal text-slate-900"
-                  />
-                </label>
-              ) : (
-                <input type="hidden" name="includes" value="" />
-              )}
+              <label className="md:col-span-2 flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
+                Incluye (kits, uno por línea)
+                <textarea
+                  name="includes"
+                  rows={4}
+                  defaultValue={includesValue}
+                  className="rounded-lg border border-[var(--brand-gold-300)]/30 bg-white px-2.5 py-2 text-sm font-normal text-slate-900"
+                />
+              </label>
 
               <label className="md:col-span-2 flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
                 Enlaces de imágenes (uno por línea)

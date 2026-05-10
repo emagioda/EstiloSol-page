@@ -40,6 +40,27 @@ const parseStringList = (value: FormDataEntryValue | null): string[] =>
     .map((entry) => entry.trim())
     .filter(Boolean);
 
+const parseCatalogProductType = (value: FormDataEntryValue | null) => {
+  const normalized = String(value || "UNICO").trim().toUpperCase();
+  return normalized === "KIT" ? "KIT" : "UNICO";
+};
+
+const parseCatalogStockStatus = (value: FormDataEntryValue | null) => {
+  const normalized = String(value || "in_stock").trim();
+  if (normalized === "out_of_stock" || normalized === "preorder") return normalized;
+  return "in_stock";
+};
+
+const parseOptionalStockQty = (value: FormDataEntryValue | null) => {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const parsed = Number(raw.replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error("Invalid stock quantity");
+  }
+  return Math.trunc(parsed);
+};
+
 const requireAdminSession = async () => {
   const session = await getServerSession(authOptions);
   if (!isAdminEmail(session?.user?.email)) {
@@ -281,11 +302,14 @@ export async function updateCatalogProductAction(formData: FormData) {
   const active = formData.get("active") === "on";
   const shortDescription = String(formData.get("shortDescription") || "").trim();
   const description = String(formData.get("description") || "").trim();
-  const productType = String(formData.get("productType") || "UNICO").trim().toUpperCase();
+  const productType = parseCatalogProductType(formData.get("productType"));
   const isKit = productType === "KIT";
   const includes = isKit ? parseStringList(formData.get("includes")) : [];
   const images = parseStringList(formData.get("images"));
   const isNew = String(formData.get("isNew") || "").toLowerCase() === "true";
+  const isFeatured = String(formData.get("isFeatured") || "").toLowerCase() === "true";
+  const stockStatus = parseCatalogStockStatus(formData.get("stockStatus"));
+  const stockQty = parseOptionalStockQty(formData.get("stockQty"));
   const redirectTo = resolveAdminRedirectPath(formData.get("redirectTo"), "/admin/productos");
 
   const price = Number(priceRaw.replace(",", "."));
@@ -303,6 +327,10 @@ export async function updateCatalogProductAction(formData: FormData) {
     includes,
     images,
     isNew,
+    isFeatured,
+    productType,
+    stockStatus,
+    stockQty,
   });
 
   revalidateTag("catalog", "max");

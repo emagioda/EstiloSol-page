@@ -43,13 +43,13 @@ app/              # Next.js App Router: pages, layouts, API routes
 ### Data Storage (no traditional DB)
 
 - **Vercel KV (Redis)**: Transient order state, catalog cache, rate limiting. Falls back to in-memory `Map` if `KV_*` env vars are absent (fine for local dev).
-- **Google Sheets via Apps Script** (`SHEETS_ENDPOINT`): Persistent orders + product catalog. Falls back to `products.mock.json` if endpoint is missing.
+- **Google Sheets via Apps Script** (`SHEETS_ENDPOINT` + `SHEETS_API_TOKEN`): Persistent orders + product catalog. Public clients must use `/api/catalog`, never Apps Script directly. Falls back to `products.mock.json` if endpoint is missing.
 
 ### Key Data Flows
 
 **Checkout flow**: Cart (localStorage via `useCartStore`) → `POST /api/mp/create-preference` → Mercado Pago redirect → webhook at `POST /api/mp/webhook` → order status updated in KV + synced to Sheets → receipt email via Resend.
 
-**Product catalog**: Google Sheets endpoint → `src/server/catalog/getProducts.ts` (fetches + caches in KV, TTL-based) → `ProductDTO` → `ProductsGrid`.
+**Product catalog**: Google Sheets endpoint → `/api/catalog` / `src/server/catalog/source.ts` → shared product adapter → `ProductsGrid`. Checkout uses `src/server/catalog/getProducts.ts` for KV-cached price/stock validation.
 
 **Admin panel**: Google OAuth (`/auth/signin`) via NextAuth — only the email in `ADMIN_EMAIL` env var is granted access.
 
@@ -66,7 +66,7 @@ app/              # Next.js App Router: pages, layouts, API routes
 | Service | Env Vars | Purpose |
 |---|---|---|
 | Mercado Pago | `MP_ACCESS_TOKEN`, `NEXT_PUBLIC_MP_PUBLIC_KEY`, `MP_WEBHOOK_SECRET` | Payments |
-| Google Sheets (Apps Script) | `SHEETS_ENDPOINT`, `NEXT_PUBLIC_SHEETS_ENDPOINT` | Product catalog + orders |
+| Google Sheets (Apps Script) | `SHEETS_ENDPOINT`, `SHEETS_API_TOKEN` | Product catalog + orders |
 | NextAuth + Google OAuth | `AUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ADMIN_EMAIL` | Admin auth |
 | Vercel KV | `KV_REST_API_URL`, `KV_REST_API_TOKEN` | Cache + order state |
 | Resend | `RESEND_API_KEY`, `CONTACT_TO_EMAIL`, `CONTACT_FROM_EMAIL` | Transactional email |

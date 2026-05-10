@@ -8,6 +8,7 @@ import { createOrder, markPreferenceCreated } from "@/src/server/orders/store";
 import { createPreferenceOnMp } from "@/src/server/payments/mpClient";
 import { buildPreferencePayload, buildPreferenceUrls } from "@/src/server/payments/preferencePayload";
 import type { MpPreferenceResponse } from "@/src/server/payments/shared";
+import { invalidProductsMessage } from "@/src/server/catalog/stock";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { parseCheckoutBody } from "@/src/server/validation/payments";
 
@@ -91,7 +92,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       {
-        error: "Estos productos ya no estan disponibles. Quitalos del carrito para continuar.",
+        error: invalidProductsMessage(invalidProducts),
         invalidProducts,
       },
       { status: 400 }

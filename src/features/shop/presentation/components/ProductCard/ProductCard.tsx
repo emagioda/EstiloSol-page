@@ -3,6 +3,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { memo } from "react";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import {
+  getStockLabel,
+  isProductPurchasable,
+} from "@/src/features/shop/infrastructure/data/productAdapter";
 
 const ARS_FORMATTER = new Intl.NumberFormat("es-AR", {
   style: "currency",
@@ -15,11 +19,11 @@ const isValidNumber = (value: unknown): value is number =>
 function ProductCard({
   product,
   onQuickView,
-  staticDetailHandleSet,
+  priority = false,
 }: {
   product: Product;
   onQuickView?: (product: Product) => void;
-  staticDetailHandleSet?: Set<string>;
+  priority?: boolean;
 }) {
   const hasCurrentPrice = isValidNumber(product.price);
   const formattedPrice = hasCurrentPrice ? ARS_FORMATTER.format(product.price) : "Consultar";
@@ -30,18 +34,27 @@ function ProductCard({
     ? Math.round(((oldPrice - product.price) / oldPrice) * 100)
     : null;
 
-  const hasSheetsEndpoint = Boolean(process.env.NEXT_PUBLIC_SHEETS_ENDPOINT?.trim());
   const detailHref = `/tienda/producto/${product.slug || product.id}`;
-  const detailHandle = String(product.slug || product.id);
-  const canOpenStaticDetail =
-    hasSheetsEndpoint ||
-    !staticDetailHandleSet ||
-    staticDetailHandleSet.size === 0 ||
-    staticDetailHandleSet.has(detailHandle);
 
   const thumb = product.images && product.images.length > 0 ? product.images[0] : undefined;
+  const stockLabel = getStockLabel(product);
+  const canBuy = isProductPurchasable(product);
+  const stockLabelClass = !canBuy
+    ? "text-red-100"
+    : typeof product.stock_qty === "number"
+    ? "text-emerald-100"
+    : product.stock_status === "preorder"
+    ? "text-amber-100"
+    : "text-[var(--brand-cream)]/72";
 
   const badges: Array<{ key: string; label: string; className: string }> = [];
+  if (!canBuy) {
+    badges.push({
+      key: "stock",
+      label: "SIN STOCK",
+      className: "bg-slate-800 text-white",
+    });
+  }
   if (product.is_new) {
     badges.push({
       key: "new",
@@ -80,6 +93,7 @@ function ProductCard({
             fill
             className="object-cover transition-transform duration-300 group-hover:scale-105"
             sizes="(max-width:640px) 50vw, (max-width:1024px) 33vw, 25vw"
+            priority={priority}
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[var(--brand-gold-300)]">
@@ -102,6 +116,9 @@ function ProductCard({
           >
             {formattedPrice}
           </span>
+          <span className={`text-xs font-semibold leading-tight ${stockLabelClass}`}>
+            {stockLabel}
+          </span>
         </div>
         <h3 className="line-clamp-2 text-sm font-normal leading-relaxed text-[var(--brand-cream)]/95">
           {product.name}
@@ -112,18 +129,9 @@ function ProductCard({
 
   return (
     <article className="animate-fade-up flex h-full flex-col overflow-hidden rounded-2xl border border-[var(--brand-gold-300)]/22 bg-white/[0.14] text-[var(--brand-cream)] shadow-lg shadow-black/22 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/60 hover:bg-white/[0.18] hover:shadow-2xl hover:shadow-black/30">
-      {canOpenStaticDetail ? (
-        <Link href={detailHref} className="group flex h-full flex-col" aria-label={`Ver detalle de ${product.name}`}>
-          {mediaAndBody}
-        </Link>
-      ) : (
-        <div className="group flex h-full flex-col" aria-label={`${product.name} requiere actualizacion del sitio`}>
-          {mediaAndBody}
-          <span className="px-4 pb-2 text-xs text-[var(--brand-cream)]/65">
-            Detalle disponible en la proxima actualizacion
-          </span>
-        </div>
-      )}
+      <Link href={detailHref} className="group flex h-full flex-col" aria-label={`Ver detalle de ${product.name}`}>
+        {mediaAndBody}
+      </Link>
 
       <div className="mt-auto flex w-full justify-center px-4 pb-4 pt-3 md:px-4 md:pb-4 md:pt-3">
         <button
@@ -131,12 +139,14 @@ function ProductCard({
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
+            if (!canBuy) return;
             onQuickView?.(product);
           }}
-          className="h-11 w-full rounded-xl bg-gradient-to-r from-[var(--brand-gold-300)] to-[var(--brand-gold-400)] font-semibold text-[var(--brand-violet-950)] shadow-md shadow-black/20 ring-1 ring-white/30 transition duration-200 hover:brightness-105 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
-          aria-label={`Comprar ${product.name}`}
+          disabled={!canBuy}
+          className="h-11 w-full rounded-xl bg-gradient-to-r from-[var(--brand-gold-300)] to-[var(--brand-gold-400)] font-semibold text-[var(--brand-violet-950)] shadow-md shadow-black/20 ring-1 ring-white/30 transition duration-200 hover:brightness-105 active:scale-[0.99] disabled:cursor-not-allowed disabled:from-slate-300 disabled:to-slate-400 disabled:text-slate-700 disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
+          aria-label={canBuy ? `Lo quiero ${product.name}` : `${product.name} sin stock`}
         >
-          Comprar ahora
+          {canBuy ? "Lo quiero" : "Sin stock"}
         </button>
       </div>
     </article>

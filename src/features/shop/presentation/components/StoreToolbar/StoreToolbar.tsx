@@ -50,10 +50,23 @@ export default function StoreToolbar({
           {onFiltersClick && (
             <button
               onClick={onFiltersClick}
-              className="inline-flex items-center justify-center gap-1.5 border-r border-[var(--brand-violet-800)]/65 px-2 py-2 text-[11px] text-[var(--brand-cream)] transition duration-200 hover:bg-[var(--brand-violet-900)]/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
+              className="inline-flex items-center justify-center gap-2 border-r border-[var(--brand-violet-800)]/65 px-2 py-2 text-[11px] text-[var(--brand-cream)] transition duration-200 hover:bg-[var(--brand-violet-900)]/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
               aria-label="Abrir filtros"
             >
-              <span aria-hidden>⚙️</span>
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              >
+                <path d="M4 7h16" />
+                <path d="M4 17h16" />
+                <circle cx="9" cy="7" r="2" />
+                <circle cx="15" cy="17" r="2" />
+              </svg>
               Filtrar
             </button>
           )}

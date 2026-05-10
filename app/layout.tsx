@@ -28,9 +28,31 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Estilo Sol | Estilo y Cuidado",
+  metadataBase: new URL(process.env.APP_BASE_URL?.trim() || "https://estilosol.ar"),
+  title: {
+    default: "Estilo Sol | Estilo y Cuidado",
+    template: "%s | Estilo Sol",
+  },
   description:
-    "Tienda híbrida con Productos Profesionales de peluquería y Diseños Únicos de bijouterie.",
+    "Tienda online de productos profesionales de peluqueria y bijouterie en Rosario.",
+  alternates: {
+    canonical: "/",
+  },
+  openGraph: {
+    title: "Estilo Sol | Estilo y Cuidado",
+    description: "Productos profesionales de peluqueria y bijouterie seleccionados en Rosario.",
+    url: "/",
+    siteName: "Estilo Sol",
+    locale: "es_AR",
+    type: "website",
+    images: ["/home/tienda-placeholder.webp"],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Estilo Sol | Estilo y Cuidado",
+    description: "Productos profesionales de peluqueria y bijouterie seleccionados en Rosario.",
+    images: ["/home/tienda-placeholder.webp"],
+  },
 };
 
 export default function RootLayout({

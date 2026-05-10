@@ -28,13 +28,34 @@ const applyExternalReference = (url: string, externalReference: string) => {
   }
 };
 
-export const buildPreferenceUrls = (input: BuildUrlsInput) => {
-  const rawSuccess = input.successUrl || `${input.appBaseUrl}/tienda/success`;
-  const success = applyExternalReference(rawSuccess, input.externalReference);
+const normalizeLocalhostUrl = (url: string) => {
+  try {
+    const parsed = new URL(url);
+    const isLocalhost =
+      parsed.hostname === "localhost" ||
+      parsed.hostname === "127.0.0.1" ||
+      parsed.hostname === "[::1]" ||
+      parsed.hostname === "::1";
 
-  const failure = input.failureUrl || `${input.appBaseUrl}/tienda`;
-  const pending = input.pendingUrl || `${input.appBaseUrl}/tienda`;
-  const webhook = input.webhookUrl || `${input.appBaseUrl}/api/mp/webhook`;
+    if (isLocalhost && parsed.protocol === "https:") {
+      parsed.protocol = "http:";
+      return parsed.toString();
+    }
+
+    return url;
+  } catch {
+    return url;
+  }
+};
+
+export const buildPreferenceUrls = (input: BuildUrlsInput) => {
+  const appBaseUrl = normalizeLocalhostUrl(input.appBaseUrl).replace(/\/$/, "");
+  const rawSuccess = input.successUrl || `${appBaseUrl}/tienda/success`;
+  const success = normalizeLocalhostUrl(applyExternalReference(rawSuccess, input.externalReference));
+
+  const failure = normalizeLocalhostUrl(input.failureUrl || `${appBaseUrl}/tienda`);
+  const pending = normalizeLocalhostUrl(input.pendingUrl || `${appBaseUrl}/tienda`);
+  const webhook = normalizeLocalhostUrl(input.webhookUrl || `${appBaseUrl}/api/mp/webhook`);
 
   const isHttpsSuccessUrl = success.startsWith("https://");
   const shouldUseAutoReturn = isHttpsSuccessUrl;

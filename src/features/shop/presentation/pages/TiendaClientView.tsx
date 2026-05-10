@@ -10,6 +10,7 @@ import FiltersSidebar from "@/src/features/shop/presentation/components/FiltersS
 import StoreToolbar from "@/src/features/shop/presentation/components/StoreToolbar/StoreToolbar";
 import LoadingGrid from "@/src/features/shop/presentation/components/LoadingGrid/LoadingGrid";
 import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs";
+import BackToTopButton from "@/src/features/shop/presentation/components/BackToTopButton/BackToTopButton";
 import { showCartAddedToast } from "@/src/features/shop/presentation/lib/cartToast";
 import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
@@ -22,7 +23,6 @@ const QuickViewModal = dynamic(
 
 type TiendaClientViewProps = {
   initialProducts: Product[];
-  staticDetailHandles?: string[];
 };
 
 const sortOptions = [
@@ -60,7 +60,6 @@ const normalizeDepartamentParam = (value: string | null): string | null => {
 
 export default function TiendaClientView({
   initialProducts,
-  staticDetailHandles = [],
 }: TiendaClientViewProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -101,8 +100,8 @@ export default function TiendaClientView({
   const filtersShouldRenderRef = useRef(false);
   const sortOpenRef = useRef(false);
   const introBlockRef = useRef<HTMLDivElement | null>(null);
-  const hasInitializedFromQueryRef = useRef(false);
   const skipNextUrlSyncRef = useRef(false);
+  const previousRubroFromQueryRef = useRef<string | null | undefined>(undefined);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
   const { setOpen } = useCartDrawer();
   useBodyScrollLock(sortShouldRender);
@@ -393,11 +392,12 @@ export default function TiendaClientView({
   }, []);
 
   useEffect(() => {
-    if (hasInitializedFromQueryRef.current) return;
+    const previousRubroFromQuery = previousRubroFromQueryRef.current;
+    previousRubroFromQueryRef.current = rubroFromQuery;
 
-    hasInitializedFromQueryRef.current = true;
-
-    if (!rubroFromQuery || rubroFromQuery === selectedWorld) return;
+    if (!rubroFromQuery) return;
+    if (previousRubroFromQuery !== undefined && previousRubroFromQuery === rubroFromQuery) return;
+    if (rubroFromQuery === selectedWorld) return;
 
     skipNextUrlSyncRef.current = true;
     setCategory(null);
@@ -447,14 +447,14 @@ export default function TiendaClientView({
         <section className="mt-6">
           <div ref={introBlockRef}>
           {/* Rubro toggle — full width, desktop only */}
-          <div className="glass-panel mb-6 hidden md:block w-full rounded-2xl border border-white/10 p-2.5 md:p-3">
-            <p className="mb-2 text-center text-xs uppercase tracking-[0.18em] text-[var(--brand-gold-300)] sm:text-sm">
+          <div className="mb-5 hidden w-full md:block">
+            <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand-gold-300)]/90">
               Tu estilo ideal empieza acá
             </p>
-            <div className="relative grid w-full grid-cols-2 items-center rounded-full border border-white/15 bg-[var(--brand-violet-950)]/35 p-1.5">
+            <div className="relative mx-auto grid min-h-12 w-full max-w-5xl grid-cols-2 items-center rounded-full border border-white/20 bg-white/[0.10] p-1 shadow-[0_10px_26px_rgba(34,14,66,0.18)] backdrop-blur-sm">
               <span
                 aria-hidden="true"
-                className="pointer-events-none absolute left-1.5 top-1.5 h-[calc(100%-0.75rem)] w-[calc(50%-0.375rem)] rounded-full border border-[var(--brand-gold-400)] bg-white/12 shadow-[0_6px_14px_rgba(0,0,0,0.18)] transition-transform duration-300 ease-out"
+                className="pointer-events-none absolute left-1 top-1 h-[calc(100%-0.5rem)] w-[calc(50%-0.25rem)] rounded-full border border-white/65 bg-[var(--brand-gold-300)] shadow-[0_8px_20px_rgba(45,22,75,0.22)] transition-transform duration-300 ease-out"
                 style={{ transform: `translateX(${selectedWorldIndex * 100}%)` }}
               />
               {departamentOptions.map((opt) => {
@@ -464,11 +464,11 @@ export default function TiendaClientView({
                     key={opt.value}
                     type="button"
                     onClick={() => { setCategory(null); setDepartament(opt.value); }}
-                    className="relative z-10 rounded-full border border-transparent px-4 py-2 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
+                    className="relative z-10 flex h-10 items-center justify-center rounded-full border border-transparent px-4 text-center transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                     aria-pressed={active}
                     aria-label={`Filtrar por ${opt.label}`}
                   >
-                    <span className={`block text-[11px] font-semibold uppercase tracking-[0.16em] sm:text-sm ${active ? "text-[var(--brand-cream)]" : "text-[var(--brand-cream)]/80"}`}>
+                    <span className={`block text-[11px] font-bold uppercase tracking-[0.17em] sm:text-sm ${active ? "text-[var(--brand-violet-950)]" : "text-[var(--brand-cream)]/76"}`}>
                       {opt.label}
                     </span>
                   </button>
@@ -478,14 +478,14 @@ export default function TiendaClientView({
           </div>
 
           {/* Rubro toggle — mobile only */}
-          <div className="glass-panel mb-4 w-full rounded-2xl border border-white/10 p-2.5 md:hidden">
-            <p className="mb-2 text-center text-xs uppercase tracking-[0.18em] text-[var(--brand-gold-300)] sm:text-sm">
+          <div className="mb-4 w-full md:hidden">
+            <p className="mb-2 text-center text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--brand-gold-300)]/90">
               Tu estilo ideal empieza acá
             </p>
-            <div className="relative grid w-full grid-cols-2 items-center rounded-full border border-white/15 bg-[var(--brand-violet-950)]/35 p-1.5">
+            <div className="relative grid min-h-11 w-full grid-cols-2 items-center rounded-full border border-white/20 bg-white/[0.10] p-1 shadow-[0_8px_20px_rgba(34,14,66,0.16)] backdrop-blur-sm">
               <span
                 aria-hidden="true"
-                className="pointer-events-none absolute left-1.5 top-1.5 h-[calc(100%-0.75rem)] w-[calc(50%-0.375rem)] rounded-full border border-[var(--brand-gold-400)] bg-white/12 shadow-[0_6px_14px_rgba(0,0,0,0.18)] transition-transform duration-300 ease-out"
+                className="pointer-events-none absolute left-1 top-1 h-[calc(100%-0.5rem)] w-[calc(50%-0.25rem)] rounded-full border border-white/65 bg-[var(--brand-gold-300)] shadow-[0_7px_18px_rgba(45,22,75,0.2)] transition-transform duration-300 ease-out"
                 style={{ transform: `translateX(${selectedWorldIndex * 100}%)` }}
               />
               {departamentOptions.map((opt) => {
@@ -495,11 +495,11 @@ export default function TiendaClientView({
                     key={opt.value}
                     type="button"
                     onClick={() => { setCategory(null); setDepartament(opt.value); }}
-                    className="relative z-10 rounded-full border border-transparent px-4 py-2 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
+                    className="relative z-10 flex h-9 items-center justify-center rounded-full border border-transparent px-3 text-center transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                     aria-pressed={active}
                     aria-label={`Filtrar por ${opt.label}`}
                   >
-                    <span className={`block text-[11px] font-semibold uppercase tracking-[0.16em] sm:text-sm ${active ? "text-[var(--brand-cream)]" : "text-[var(--brand-cream)]/80"}`}>
+                    <span className={`block text-[10px] font-bold uppercase tracking-[0.14em] sm:text-[11px] ${active ? "text-[var(--brand-violet-950)]" : "text-[var(--brand-cream)]/76"}`}>
                       {opt.label}
                     </span>
                   </button>
@@ -628,7 +628,6 @@ export default function TiendaClientView({
                 <ProductsGrid
                   products={departamentFilteredProducts}
                   onQuickView={openQuickView}
-                  staticDetailHandles={staticDetailHandles}
                 />
               )}
             </div>
@@ -732,6 +731,10 @@ export default function TiendaClientView({
           product={selectedProduct}
           onClose={closeQuickView}
           onAddFeedback={handleAddFeedback}
+        />
+
+        <BackToTopButton
+          hidden={filtersShouldRender || sortShouldRender || isQuickViewOpen}
         />
       </div>
     </main>

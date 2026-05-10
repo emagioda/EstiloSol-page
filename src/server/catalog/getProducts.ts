@@ -1,5 +1,6 @@
 import { getJson, setJson } from "@/src/server/kv";
-import { env } from "@/src/config/env";
+import type { StockStatus } from "@/src/features/shop/domain/entities/Product";
+import { fetchProductsFromCatalogSource } from "./source";
 
 export type CatalogProduct = {
   id: string;
@@ -7,9 +8,9 @@ export type CatalogProduct = {
   price: number;
   currency: "ARS";
   active: boolean;
+  stock_status: StockStatus;
+  stock_qty: number | null;
 };
-
-type RawProductRow = Record<string, unknown>;
 
 const CATALOG_CACHE_KEY = "es:catalog:products";
 const CATALOG_CACHE_TTL = 120;
@@ -18,68 +19,8 @@ type GetProductsCatalogOptions = {
   forceFresh?: boolean;
 };
 
-const toBoolean = (value: unknown): boolean => {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    return ["true", "1", "si", "sí", "yes", "y"].includes(normalized);
-  }
-  return false;
-};
-
-const getStringField = (row: RawProductRow, keys: string[]): string => {
-  for (const key of keys) {
-    const value = row[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-    if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  }
-  return "";
-};
-
-const getPrice = (row: RawProductRow): number => {
-  const value = row.price ?? row.Precio;
-  const num = typeof value === "number" ? value : Number(String(value ?? "").replace(/[^0-9.-]+/g, ""));
-  if (!Number.isFinite(num) || num < 0) return Number.NaN;
-  return Number(num.toFixed(2));
-};
-
-const rowToCatalogProduct = (row: RawProductRow): CatalogProduct | null => {
-  const id = getStringField(row, ["id", "ID", "Id"]);
-  const name = getStringField(row, ["name", "Nombre"]);
-  const price = getPrice(row);
-
-  if (!id || !name || !Number.isFinite(price) || price < 0) return null;
-
-  const activeField = row.active ?? row.Activo;
-  const active = activeField === undefined ? true : toBoolean(activeField);
-  if (!active) return null;
-
-  const currencyRaw = getStringField(row, ["currency", "Moneda"]).toUpperCase() || "ARS";
-  const currency = "ARS" as const;
-
-  if (currencyRaw !== "ARS") return null;
-
-  return {
-    id,
-    name,
-    price,
-    currency,
-    active,
-  };
-};
-
-const withForceFreshParam = (endpoint: string, forceFresh: boolean) => {
-  if (!forceFresh) return endpoint;
-
-  const url = new URL(endpoint);
-  url.searchParams.set("force", "1");
-  url.searchParams.set("_ts", String(Date.now()));
-  return url.toString();
-};
-
 export async function getProductsCatalog(
-  options: GetProductsCatalogOptions = {}
+  options: GetProductsCatalogOptions = {},
 ): Promise<Map<string, CatalogProduct>> {
   const forceFresh = options.forceFresh === true;
 
@@ -90,27 +31,24 @@ export async function getProductsCatalog(
     }
   }
 
-  const endpoint = env.getPublic("NEXT_PUBLIC_SHEETS_ENDPOINT");
-  if (!endpoint) {
-    throw new Error("NEXT_PUBLIC_SHEETS_ENDPOINT missing");
-  }
+  const products = await fetchProductsFromCatalogSource({
+    forceFresh,
+    allowMockFallback: false,
+  });
+  const catalogProducts = products
+    .filter((product) => product.active !== false)
+    .filter((product) => product.currency === undefined || product.currency === "ARS")
+    .map<CatalogProduct>((product) => ({
+      id: product.id,
+      name: product.name,
+      price: Number(product.price.toFixed(2)),
+      currency: "ARS",
+      active: product.active !== false,
+      stock_status: product.stock_status || "in_stock",
+      stock_qty: typeof product.stock_qty === "number" ? product.stock_qty : null,
+    }));
 
-  const requestUrl = withForceFreshParam(endpoint, forceFresh);
-  const response = await fetch(requestUrl, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch products catalog: ${response.status}`);
-  }
+  await setJson(CATALOG_CACHE_KEY, catalogProducts, CATALOG_CACHE_TTL);
 
-  const payload = (await response.json().catch(() => null)) as unknown;
-  if (!Array.isArray(payload)) {
-    throw new Error("Invalid sheets payload format");
-  }
-
-  const products = payload
-    .map((row) => (row && typeof row === "object" ? rowToCatalogProduct(row as RawProductRow) : null))
-    .filter((product): product is CatalogProduct => product !== null);
-
-  await setJson(CATALOG_CACHE_KEY, products, CATALOG_CACHE_TTL);
-
-  return new Map(products.map((item) => [item.id, item]));
+  return new Map(catalogProducts.map((item) => [item.id, item]));
 }

@@ -1,4 +1,8 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+
+import { env } from "@/src/config/env";
+import { logEvent } from "@/src/server/observability/log";
+import { checkRateLimit } from "@/src/server/security/rateLimit";
 
 export const runtime = "nodejs";
 
@@ -10,14 +14,20 @@ type ContactPayload = {
   website?: string;
 };
 
-const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 5;
-const requestBuckets = new Map<string, number[]>();
 
 const normalize = (value: unknown): string => {
   if (typeof value !== "string") return "";
   return value.trim();
 };
+
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 const isValidEmail = (value: string): boolean => {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -29,7 +39,7 @@ const isValidPhone = (value: string): boolean => {
   return digits.length >= 8 && digits.length <= 15;
 };
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as ContactPayload;
 
   const nombre = normalize(body.nombre);
@@ -42,85 +52,82 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, message: "Mensaje recibido." });
   }
 
-  const ip =
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    request.headers.get("x-real-ip")?.trim() ||
-    "unknown";
+  const allowed = await checkRateLimit(request, {
+    keyPrefix: "es:rl:contact",
+    max: RATE_LIMIT_MAX_REQUESTS,
+    windowSeconds: 10 * 60,
+  });
 
-  const now = Date.now();
-  const recentRequests = (requestBuckets.get(ip) ?? []).filter(
-    (timestamp) => now - timestamp < RATE_LIMIT_WINDOW_MS
-  );
-
-  if (recentRequests.length >= RATE_LIMIT_MAX_REQUESTS) {
-    requestBuckets.set(ip, recentRequests);
+  if (!allowed) {
     return NextResponse.json(
       {
         ok: false,
-        error: "Realizaste demasiados envíos. Intentá nuevamente en unos minutos.",
+        error: "Realizaste demasiados envios. Intenta nuevamente en unos minutos.",
       },
-      { status: 429 }
+      { status: 429 },
     );
   }
 
-  recentRequests.push(now);
-  requestBuckets.set(ip, recentRequests);
-
   if (!nombre || !telefono || !email || !mensaje) {
     return NextResponse.json(
-      { ok: false, error: "Completá todos los campos del formulario." },
-      { status: 400 }
+      { ok: false, error: "Completa todos los campos del formulario." },
+      { status: 400 },
     );
   }
 
   if (!isValidEmail(email)) {
     return NextResponse.json(
-      { ok: false, error: "El email no tiene un formato válido." },
-      { status: 400 }
+      { ok: false, error: "El email no tiene un formato valido." },
+      { status: 400 },
     );
   }
 
   if (!isValidPhone(telefono)) {
     return NextResponse.json(
-      { ok: false, error: "El teléfono no tiene un formato válido." },
-      { status: 400 }
+      { ok: false, error: "El telefono no tiene un formato valido." },
+      { status: 400 },
     );
   }
 
   if (mensaje.length < 10) {
     return NextResponse.json(
       { ok: false, error: "El mensaje es muy corto." },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
-  const resendApiKey = process.env.RESEND_API_KEY?.trim();
-  const contactToEmail = process.env.CONTACT_TO_EMAIL?.trim();
+  const resendApiKey = env.getOptionalServer("RESEND_API_KEY");
+  const contactToEmail = env.getOptionalServer("CONTACT_TO_EMAIL");
   const contactFromEmail =
-    process.env.CONTACT_FROM_EMAIL?.trim() || "Estilo Sol <onboarding@resend.dev>";
+    env.getOptionalServer("CONTACT_FROM_EMAIL") || "Estilo Sol <onboarding@resend.dev>";
 
   if (!resendApiKey || !contactToEmail) {
-    const missing = [
-      !resendApiKey ? "RESEND_API_KEY" : null,
-      !contactToEmail ? "CONTACT_TO_EMAIL" : null,
-    ].filter(Boolean);
+    logEvent("error", "contact.email_env_missing", {
+      missing: [
+        !resendApiKey ? "RESEND_API_KEY" : null,
+        !contactToEmail ? "CONTACT_TO_EMAIL" : null,
+      ].filter(Boolean),
+    });
 
     return NextResponse.json(
       {
         ok: false,
-        error:
-          "Falta configurar el envío de emails en el servidor (RESEND_API_KEY y CONTACT_TO_EMAIL).",
-        missing,
+        error: "No se pudo enviar el mensaje en este momento.",
       },
-      { status: 503 }
+      { status: 503 },
     );
   }
+
+  const safeNombre = escapeHtml(nombre);
+  const safeTelefono = escapeHtml(telefono);
+  const safeEmail = escapeHtml(email);
+  const safeMensaje = escapeHtml(mensaje).replace(/\n/g, "<br />");
 
   const subject = `Nuevo contacto web - ${nombre}`;
   const text = [
     "Nuevo mensaje desde el formulario de contacto:",
     `Nombre: ${nombre}`,
-    `Teléfono: ${telefono}`,
+    `Telefono: ${telefono}`,
     `Email: ${email}`,
     "",
     "Mensaje:",
@@ -129,11 +136,11 @@ export async function POST(request: Request) {
 
   const html = `
     <h2>Nuevo mensaje desde el formulario web</h2>
-    <p><strong>Nombre:</strong> ${nombre}</p>
-    <p><strong>Teléfono:</strong> ${telefono}</p>
-    <p><strong>Email:</strong> ${email}</p>
+    <p><strong>Nombre:</strong> ${safeNombre}</p>
+    <p><strong>Telefono:</strong> ${safeTelefono}</p>
+    <p><strong>Email:</strong> ${safeEmail}</p>
     <p><strong>Mensaje:</strong></p>
-    <p>${mensaje.replace(/\n/g, "<br />")}</p>
+    <p>${safeMensaje}</p>
   `;
 
   const resendResponse = await fetch("https://api.resend.com/emails", {
@@ -153,14 +160,16 @@ export async function POST(request: Request) {
   });
 
   if (!resendResponse.ok) {
-    const errorDetail = await resendResponse.text();
+    logEvent("error", "contact.resend_failed", {
+      status: resendResponse.status,
+    });
+
     return NextResponse.json(
       {
         ok: false,
         error: "No se pudo enviar el mensaje en este momento.",
-        detail: errorDetail,
       },
-      { status: 502 }
+      { status: 502 },
     );
   }
 

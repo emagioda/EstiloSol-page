@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+
 import { getProductsCatalog } from "@/src/server/catalog/getProducts";
+import {
+  dedupeInvalidProducts,
+  type InvalidCheckoutProduct,
+  invalidProductsMessage,
+  validateCatalogItem,
+} from "@/src/server/catalog/stock";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
@@ -20,7 +27,7 @@ export async function POST(request: NextRequest) {
 
   if (!allowed) {
     await trackBusinessEvent("checkout.validation.rate_limited", { route: "validate-cart" });
-    return NextResponse.json({ error: "Demasiadas solicitudes. Intentá nuevamente en un minuto." }, { status: 429 });
+    return NextResponse.json({ error: "Demasiadas solicitudes. Intenta nuevamente en un minuto." }, { status: 429 });
   }
 
   const rawBody = await request.json().catch(() => null);
@@ -41,38 +48,29 @@ export async function POST(request: NextRequest) {
 
   if (!catalog) {
     await trackBusinessEvent("checkout.validation.catalog_unavailable", { route: "validate-cart" });
-    return NextResponse.json({ error: "No se pudo validar el catálogo de productos" }, { status: 503 });
+    return NextResponse.json({ error: "No se pudo validar el catalogo de productos" }, { status: 503 });
   }
 
-  const invalidProducts: Array<{ productId: string; name: string }> = [];
-  for (const requestedItem of parsedBody.value.items) {
-    const product = catalog.get(requestedItem.productId);
-    if (!product) {
-      invalidProducts.push({
-        productId: requestedItem.productId,
-        name: requestedItem.name || requestedItem.productId,
-      });
-    }
-  }
+  const invalidProducts = dedupeInvalidProducts(
+    parsedBody.value.items
+      .map((requestedItem) => validateCatalogItem(catalog, requestedItem))
+      .filter((item): item is InvalidCheckoutProduct => Boolean(item)),
+  );
 
   if (invalidProducts.length > 0) {
-    const uniqueInvalidProducts = Array.from(
-      new Map(invalidProducts.map((item) => [item.productId, item])).values()
-    );
-
     await trackBusinessEvent("checkout.validation.invalid_product", {
       route: "validate-cart",
-      invalidCount: uniqueInvalidProducts.length,
-      invalidProducts: uniqueInvalidProducts.map((item) => item.name),
+      invalidCount: invalidProducts.length,
+      invalidProducts: invalidProducts.map((item) => item.name),
     });
 
     return NextResponse.json(
       {
         valid: false,
-        error: "Estos productos ya no están disponibles. Quitalos del carrito para continuar.",
-        invalidProducts: uniqueInvalidProducts,
+        error: invalidProductsMessage(invalidProducts),
+        invalidProducts,
       },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -86,6 +84,6 @@ export async function POST(request: NextRequest) {
       valid: true,
       checkedItems: parsedBody.value.items.length,
     },
-    { status: 200 }
+    { status: 200 },
   );
 }

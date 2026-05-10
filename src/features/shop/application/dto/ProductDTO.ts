@@ -1,4 +1,4 @@
-import type { Departament, ProductType } from "../../domain/entities/Product";
+import type { Departament, ProductType, StockStatus } from "../../domain/entities/Product";
 
 export interface ProductDTO {
   id: string;
@@ -17,9 +17,10 @@ export interface ProductDTO {
   product_type?: ProductType;
   includes?: string[];
   is_new?: boolean;
+  is_featured?: boolean;
   is_sale?: boolean;
   active?: boolean;
-  stock_status?: string;
+  stock_status?: StockStatus;
   stock_qty?: number | null;
   created_at?: string;
   updated_at?: string;

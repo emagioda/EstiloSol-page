@@ -3,9 +3,9 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { type MouseEvent, useMemo, useRef, useState } from "react";
-import Lightbox from "yet-another-react-lightbox";
-import Zoom from "yet-another-react-lightbox/plugins/zoom";
-import "yet-another-react-lightbox/styles.css";
+import dynamic from "next/dynamic";
+
+const ProductLightbox = dynamic(() => import("./ProductLightbox"), { ssr: false });
 
 type Theme = "quickview" | "pdp";
 
@@ -316,24 +316,16 @@ export default function ProductImageGalleryZoom({
       )}
       </div>
 
-      <Lightbox
-        open={isLightboxOpen && images.length > 0}
-        close={() => setIsLightboxOpen(false)}
-        slides={slides}
-        plugins={[Zoom]}
-        index={safeIndex}
-        on={{
-          view: ({ index }) => {
-            if (typeof index !== "number") return;
-            changeImageIndex(index);
-          },
-        }}
-        controller={{ closeOnBackdropClick: false }}
-        render={{
-          buttonPrev: hasMultipleImages ? undefined : () => null,
-          buttonNext: hasMultipleImages ? undefined : () => null,
-        }}
-      />
+      {isLightboxOpen && images.length > 0 ? (
+        <ProductLightbox
+          open={isLightboxOpen}
+          onClose={() => setIsLightboxOpen(false)}
+          slides={slides}
+          index={safeIndex}
+          hasMultipleImages={hasMultipleImages}
+          onViewIndex={changeImageIndex}
+        />
+      ) : null}
     </>
   );
 }

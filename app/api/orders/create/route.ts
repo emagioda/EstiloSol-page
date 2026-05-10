@@ -4,6 +4,7 @@ import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { buildOrderFromCheckout } from "@/src/server/orders/createFromCheckout";
 import { createOrder } from "@/src/server/orders/store";
+import { invalidProductsMessage } from "@/src/server/catalog/stock";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { parseCheckoutBody } from "@/src/server/validation/payments";
 
@@ -82,7 +83,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       {
-        error: "Estos productos ya no estan disponibles. Quitalos del carrito para continuar.",
+        error: invalidProductsMessage(invalidProducts),
         invalidProducts,
       },
       { status: 400 }

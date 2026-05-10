@@ -49,7 +49,9 @@ export default function TopInfoTicker({
     };
   }, []);
 
-  const safeMessages = messages.length > 0 ? messages : ["Agregar texto informativo"];
+  const safeMessages = messages.map((message) => message.trim()).filter(Boolean);
+  if (safeMessages.length === 0) return null;
+
   const baseMessage = safeMessages.join("      ✦      ");
   const content = `${Array.from({ length: 10 }, () => baseMessage).join("      ✦      ")}      ✦      `;
 

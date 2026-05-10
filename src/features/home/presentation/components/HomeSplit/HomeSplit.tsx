@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import brandConfig from "@/src/config/brand";
 
 const heroSections = [brandConfig.heroLeft, brandConfig.heroRight];
@@ -33,7 +34,7 @@ export default function HomeSplit() {
               isBookingSection
                 ? "md:z-20 md:origin-left md:transform-gpu md:will-change-transform md:hover:z-30 md:hover:-translate-x-1"
                 : "md:z-20 md:origin-right md:transform-gpu md:will-change-transform md:hover:z-30 md:hover:translate-x-1";
-            const imagePositionClassName = section.imagePositionClassName ?? "bg-center";
+            const imageObjectPosition = isBookingSection ? "center 28%" : "center 42%";
 
             return (
               <article
@@ -45,11 +46,15 @@ export default function HomeSplit() {
                 }}
               >
                 {section.image.isAvailable && (
-                  <div
-                    aria-hidden="true"
-                    className={`absolute inset-0 z-0 bg-black bg-cover bg-no-repeat ${imagePositionClassName}`}
+                  <Image
+                    src={section.image.src}
+                    alt={section.image.alt}
+                    fill
+                    priority
+                    sizes="(max-width: 768px) 100vw, 50vw"
+                    className="absolute inset-0 z-0 object-cover"
                     style={{
-                      backgroundImage: `url(${section.image.src})`,
+                      objectPosition: imageObjectPosition,
                       filter: isBookingSection ? "brightness(0.55)" : "brightness(0.72)",
                     }}
                   />

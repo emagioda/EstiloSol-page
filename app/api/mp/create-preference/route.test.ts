@@ -6,7 +6,9 @@ describe("create-preference local development flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     process.env.MP_ACCESS_TOKEN = "test-token";
-    process.env.NEXT_PUBLIC_SHEETS_ENDPOINT = "https://sheets.example.test/catalog";
+    process.env.SHEETS_ENDPOINT = "https://sheets.example.test/catalog";
+    process.env.SHEETS_API_TOKEN = "test-sheets-token";
+    delete process.env.NEXT_PUBLIC_SHEETS_ENDPOINT;
     delete process.env.APP_BASE_URL;
     delete process.env.MP_SUCCESS_URL;
     delete process.env.MP_FAILURE_URL;

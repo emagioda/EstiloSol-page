@@ -27,7 +27,11 @@ export default function Navbar() {
     { href: "/admin/productos", label: "Productos", active: isAdminProductos, disabled: false },
     { href: "#", label: "Servicios", active: false, disabled: true },
   ];
-  const tickerMessages = ["Agregar texto", "Agregar texto", "Agregar texto"];
+  const tickerMessages = [
+    "Envios en Rosario",
+    "10% OFF en efectivo o transferencia",
+    "Productos profesionales y bijouterie",
+  ];
   const [showTicker, setShowTicker] = useState(true);
   const [navMenuOpen, setNavMenuOpen] = useState(false);
   const [pendingAdminHref, setPendingAdminHref] = useState<string | null>(null);
@@ -129,7 +133,7 @@ export default function Navbar() {
   return (
     <>
       <header id="main-navbar" className="fixed inset-x-0 top-0 z-[200] w-full bg-[var(--brand-violet-500)] pt-[var(--safe-area-top)]">
-        {isTienda && <TopInfoTicker messages={tickerMessages} durationSeconds={72} hidden={!showTicker} />}
+        {isTienda && <TopInfoTicker messages={tickerMessages} durationSeconds={150} hidden={!showTicker} />}
         <nav className="h-[var(--header-height-mobile-base)] border-b border-[var(--brand-gold-400)] md:h-[var(--header-height-desktop-base)]">
           <div className="mx-auto flex h-full w-full items-center justify-between gap-6 px-4 md:px-8">
 

@@ -8,6 +8,11 @@ import type {
   OrderStatus,
 } from "@/src/server/orders/types";
 import type { ParsedCheckoutItem } from "@/src/server/validation/payments";
+import {
+  dedupeInvalidProducts,
+  type InvalidCheckoutProduct,
+  validateCatalogItem,
+} from "@/src/server/catalog/stock";
 
 type BuildOrderInput = {
   items: ParsedCheckoutItem[];
@@ -23,7 +28,7 @@ type BuildOrderInput = {
 
 type BuildOrderResult = {
   order: Order | null;
-  invalidProducts: Array<{ productId: string; name: string }>;
+  invalidProducts: InvalidCheckoutProduct[];
 };
 
 const buildExternalReference = () => {
@@ -40,15 +45,14 @@ const buildExternalReference = () => {
 
 export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult => {
   const orderItems: OrderItem[] = [];
-  const invalidProducts: Array<{ productId: string; name: string }> = [];
+  const invalidProducts: InvalidCheckoutProduct[] = [];
 
   for (const requestedItem of input.items) {
     const product = input.catalog.get(requestedItem.productId);
-    if (!product) {
-      invalidProducts.push({
-        productId: requestedItem.productId,
-        name: requestedItem.name || requestedItem.productId,
-      });
+    const invalidProduct = validateCatalogItem(input.catalog, requestedItem);
+
+    if (!product || invalidProduct) {
+      if (invalidProduct) invalidProducts.push(invalidProduct);
       continue;
     }
 
@@ -64,7 +68,7 @@ export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult
   if (invalidProducts.length > 0) {
     return {
       order: null,
-      invalidProducts: Array.from(new Map(invalidProducts.map((item) => [item.productId, item])).values()),
+      invalidProducts: dedupeInvalidProducts(invalidProducts),
     };
   }
 

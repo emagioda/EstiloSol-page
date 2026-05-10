@@ -11,10 +11,10 @@
 
 ## Cambios de Phase 2
 
-1. **Endpoint por variable pública**
-   - Se eliminó hardcode de Apps Script.
-   - Ahora se usa únicamente `NEXT_PUBLIC_SHEETS_ENDPOINT`.
-   - Si falta, se lanza error explícito para manejo controlado en UI.
+1. **Endpoint server-only**
+   - Apps Script queda detras de `/api/catalog`.
+   - Ahora se usa `SHEETS_ENDPOINT` + `SHEETS_API_TOKEN` solamente en servidor.
+   - El cliente ya no necesita ni debe usar `NEXT_PUBLIC_SHEETS_ENDPOINT`.
 
 2. **Carga en tiempo real en cliente (`/tienda`)**
    - El catálogo se carga con `loadProducts()` desde cliente al montar la vista.

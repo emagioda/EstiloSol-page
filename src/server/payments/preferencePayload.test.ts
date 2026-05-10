@@ -43,6 +43,23 @@ describe("preferencePayload", () => {
     expect(customNonHttps.shouldUseAutoReturn).toBe(false);
   });
 
+  it("normalizes https localhost back urls to http for local development", () => {
+    const urls = buildPreferenceUrls({
+      appBaseUrl: "https://localhost:3000",
+      externalReference: "es-local",
+      successUrl: "https://localhost:3000/tienda/success?ref={EXTERNAL_REFERENCE}",
+      failureUrl: "https://localhost:3000/tienda",
+      pendingUrl: "https://localhost:3000/tienda",
+      webhookUrl: "https://localhost:3000/api/mp/webhook",
+    });
+
+    expect(urls.success).toBe("http://localhost:3000/tienda/success?ref=es-local");
+    expect(urls.failure).toBe("http://localhost:3000/tienda");
+    expect(urls.pending).toBe("http://localhost:3000/tienda");
+    expect(urls.webhook).toBe("http://localhost:3000/api/mp/webhook");
+    expect(urls.shouldUseAutoReturn).toBe(false);
+  });
+
   it("injects ref when success url does not include placeholder", () => {
     const urls = buildPreferenceUrls({
       appBaseUrl: "https://example.com",

@@ -12,6 +12,10 @@ import { showCartAddedToast } from "@/src/features/shop/presentation/lib/cartToa
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import {
+  getStockLabel,
+  isProductPurchasable,
+} from "@/src/features/shop/infrastructure/data/productAdapter";
 
 type Props = {
   product: Product;
@@ -99,11 +103,19 @@ export default function ProductDetail({ product, slug }: Props) {
   );
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [qty, setQty] = useState(1);
-  const { addItem } = useCart();
+  const { addItem, items } = useCart();
   const { setOpen } = useCartDrawer();
 
   const safeUnitPrice = isValidPrice(currentProduct.price) ? currentProduct.price : 0;
   const displayPrice = isValidPrice(currentProduct.price) ? formatMoney(currentProduct.price) : "Consultar";
+  const stockLabel = getStockLabel(currentProduct);
+  const canBuy = isProductPurchasable(currentProduct);
+  const cartQty = items.find((item) => item.productId === currentProduct.id)?.qty ?? 0;
+  const maxQty = typeof currentProduct.stock_qty === "number" ? currentProduct.stock_qty : null;
+  const remainingQty = maxQty === null ? null : Math.max(0, maxQty - cartQty);
+  const canAddToCart = canBuy && (remainingQty === null || remainingQty > 0);
+  const effectiveQty =
+    remainingQty === null ? qty : Math.max(1, Math.min(qty, Math.max(remainingQty, 1)));
   const discountedPrice = isValidPrice(currentProduct.price)
     ? formatMoney(Math.round(currentProduct.price * 0.9))
     : null;
@@ -116,15 +128,27 @@ export default function ProductDetail({ product, slug }: Props) {
       ? currentProduct.description
       : LONG_DESCRIPTION_PLACEHOLDER;
 
-    const handleAddToCart = () => {
+  const handleAddToCart = () => {
+    if (!canAddToCart) return;
+
     try {
-      addItem({
+      const result = addItem({
         productId: currentProduct.id,
         name: currentProduct.name,
         unitPrice: safeUnitPrice,
-        qty,
+        qty: effectiveQty,
         image: images[0] ?? "",
+        stockStatus: currentProduct.stock_status,
+        stockQty: currentProduct.stock_qty ?? null,
       });
+      if (!result.ok) {
+        toast.error(
+          result.reason === "max_stock_reached"
+            ? `Ya tenés el máximo disponible de ${currentProduct.name} en el carrito.`
+            : `${currentProduct.name} no tiene stock disponible.`
+        );
+        return;
+      }
       setQty(1);
       showCartAddedToast({
         productName: currentProduct.name,
@@ -177,7 +201,7 @@ export default function ProductDetail({ product, slug }: Props) {
               <button
                 type="button"
                 onClick={() => setQty((prev) => Math.max(1, prev - 1))}
-                disabled={qty <= 1}
+                disabled={effectiveQty <= 1 || !canAddToCart}
                 className="h-11 w-11 grid place-items-center rounded-xl bg-white/85 text-violet-900 shadow-sm border border-white/60 hover:bg-white active:scale-[0.98] transition disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                 aria-label="Reducir cantidad"
               >
@@ -186,14 +210,19 @@ export default function ProductDetail({ product, slug }: Props) {
               <div
                 className="text-white font-semibold text-center min-w-[3rem]"
                 aria-live="polite"
-                aria-label={`Cantidad seleccionada: ${qty}`}
+                aria-label={`Cantidad seleccionada: ${effectiveQty}`}
               >
-                {qty}
+                {effectiveQty}
               </div>
               <button
                 type="button"
-                onClick={() => setQty((prev) => prev + 1)}
-                className="h-11 w-11 grid place-items-center rounded-xl bg-white/85 text-violet-900 shadow-sm border border-white/60 hover:bg-white active:scale-[0.98] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
+                onClick={() =>
+                  setQty((prev) =>
+                    remainingQty === null ? prev + 1 : Math.min(remainingQty, prev + 1)
+                  )
+                }
+                disabled={!canAddToCart || (remainingQty !== null && effectiveQty >= remainingQty)}
+                className="h-11 w-11 grid place-items-center rounded-xl bg-white/85 text-violet-900 shadow-sm border border-white/60 hover:bg-white active:scale-[0.98] transition disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                 aria-label="Aumentar cantidad"
               >
                 +
@@ -202,10 +231,17 @@ export default function ProductDetail({ product, slug }: Props) {
             <button
               type="button"
               onClick={handleAddToCart}
-              className="h-12 flex-1 rounded-2xl bg-gradient-to-r from-yellow-200 to-amber-100 text-violet-950 font-semibold shadow-lg shadow-black/20 ring-1 ring-white/30 hover:brightness-105 active:scale-[0.99] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
-              aria-label={`Comprar ahora ${currentProduct.name}`}
+              disabled={!canAddToCart}
+              className="h-12 flex-1 rounded-2xl bg-gradient-to-r from-yellow-200 to-amber-100 text-violet-950 font-semibold shadow-lg shadow-black/20 ring-1 ring-white/30 hover:brightness-105 active:scale-[0.99] transition disabled:cursor-not-allowed disabled:from-slate-300 disabled:to-slate-400 disabled:text-slate-700 disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
+              aria-label={
+                canAddToCart
+                  ? `Comprar ahora ${currentProduct.name}`
+                  : canBuy
+                  ? `${currentProduct.name} ya está al máximo disponible en el carrito`
+                  : `${currentProduct.name} sin stock`
+              }
             >
-              Comprar ahora
+              {canAddToCart ? "Comprar ahora" : canBuy ? "Máximo en carrito" : "Sin stock"}
             </button>
           </div>
 
@@ -214,7 +250,7 @@ export default function ProductDetail({ product, slug }: Props) {
             <ul className="space-y-2 text-sm">
               <li className="flex items-center gap-2">
                 <span className="text-lg">✔</span>
-                <span>Stock disponible</span>
+                <span>{stockLabel}</span>
               </li>
               <li className="flex items-center gap-2">
                 <span className="text-lg">🚚</span>

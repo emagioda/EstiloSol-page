@@ -7,6 +7,7 @@ import type {
   OrderPaymentStatus,
   OrderShippingStatus,
 } from "@/src/server/orders/types";
+import type { StockStatus } from "@/src/features/shop/domain/entities/Product";
 
 const SALES_SHEET_NAME = "ventas";
 const PRODUCTS_SHEET_NAME = "products";
@@ -79,7 +80,10 @@ export type AdminProductSheetRow = {
   includes: string[];
   images: string[];
   isNew: boolean;
+  isFeatured: boolean;
   productType: AdminProductType;
+  stockStatus: StockStatus;
+  stockQty: number | null;
   departament?: AdminDepartament;
   updatedAt: string;
   raw: SheetRow;
@@ -163,17 +167,24 @@ const toDateMs = (value: unknown): number => {
 };
 
 const getSheetsEndpoint = () => {
-  const serverEndpoint = env.getOptionalServer("SHEETS_ENDPOINT");
-  const publicEndpoint = env.getPublic("NEXT_PUBLIC_SHEETS_ENDPOINT");
-  const endpoint = serverEndpoint || publicEndpoint;
+  const endpoint = env.getOptionalServer("SHEETS_ENDPOINT");
   if (!endpoint) {
-    throw new Error("SHEETS_ENDPOINT or NEXT_PUBLIC_SHEETS_ENDPOINT is missing");
+    throw new Error("SHEETS_ENDPOINT is missing");
   }
   return endpoint;
 };
 
+const getSheetsApiToken = () => {
+  const token = env.getOptionalServer("SHEETS_API_TOKEN");
+  if (!token) {
+    throw new Error("SHEETS_API_TOKEN is missing");
+  }
+  return token;
+};
+
 const buildUrlWithParams = (params: Record<string, string | number | undefined>) => {
   const url = new URL(getSheetsEndpoint());
+  url.searchParams.set("token", getSheetsApiToken());
   for (const [key, rawValue] of Object.entries(params)) {
     if (rawValue === undefined) continue;
     const value = String(rawValue).trim();
@@ -253,6 +264,14 @@ const parseProductType = (value: unknown): AdminProductType => {
   return token === "kit" ? "KIT" : "UNICO";
 };
 
+const parseStockStatus = (value: unknown, stockQty: number | null): StockStatus => {
+  const token = normalizeKey(String(value ?? "")).replace(/_/g, "");
+  if (["outofstock", "sinstock", "agotado"].includes(token)) return "out_of_stock";
+  if (["preorder", "preventa", "preventas", "reserva"].includes(token)) return "preorder";
+  if (typeof stockQty === "number" && stockQty <= 0) return "out_of_stock";
+  return "in_stock";
+};
+
 export const parsePaymentStatus = (value: unknown): OrderPaymentStatus => {
   const token = normalizeToken(value);
   if (token.includes("confirm") || token.includes("aprobad")) return "confirmed";
@@ -323,7 +342,10 @@ async function postMutation(payload: Record<string, unknown>) {
         "Content-Type": "application/json",
       },
       cache: "no-store",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ...payload,
+        token: getSheetsApiToken(),
+      }),
     },
     DEFAULT_MUTATION_POLICY
   );
@@ -505,6 +527,10 @@ export async function updateProductRowInSheet(
     includes: string[];
     images: string[];
     isNew: boolean;
+    isFeatured: boolean;
+    productType: AdminProductType;
+    stockStatus: StockStatus;
+    stockQty: number | null;
   }>
 ): Promise<void> {
   const payload: Record<string, unknown> = {
@@ -530,6 +556,24 @@ export async function updateProductRowInSheet(
   }
   if (typeof updates.isNew === "boolean") {
     payload.is_new = updates.isNew;
+  }
+  if (typeof updates.isFeatured === "boolean") {
+    payload.is_featured = updates.isFeatured;
+  }
+  if (updates.productType === "UNICO" || updates.productType === "KIT") {
+    payload.product_type = updates.productType;
+  }
+  if (
+    updates.stockStatus === "in_stock" ||
+    updates.stockStatus === "out_of_stock" ||
+    updates.stockStatus === "preorder"
+  ) {
+    payload.stock_status = updates.stockStatus;
+  }
+  if (typeof updates.stockQty === "number" && Number.isFinite(updates.stockQty)) {
+    payload.stock_qty = Math.max(0, Math.trunc(updates.stockQty));
+  } else if (updates.stockQty === null) {
+    payload.stock_qty = "";
   }
 
   await postMutation({
@@ -664,6 +708,9 @@ const parseAdminProductRow = (input: SheetRow): AdminProductSheetRow | null => {
       ? toStringArray(pickValue(row, ["includes", "include", "incluye"]))
       : [];
   const images = toStringArray(pickValue(row, ["images", "images_csv", "image_links", "imagenes"]));
+  const stockQtyRaw = pickValue(row, ["stock_qty", "stock", "cantidad_stock"]);
+  const stockQtyParsed = toNumberValue(stockQtyRaw);
+  const stockQty = Number.isFinite(stockQtyParsed) ? Math.max(0, Math.trunc(stockQtyParsed)) : null;
 
   return {
     id,
@@ -678,7 +725,10 @@ const parseAdminProductRow = (input: SheetRow): AdminProductSheetRow | null => {
     includes,
     images,
     isNew: toBoolean(pickValue(row, ["is_new", "nuevo"])),
+    isFeatured: toBoolean(pickValue(row, ["is_featured", "destacado"])),
     productType,
+    stockStatus: parseStockStatus(pickValue(row, ["stock_status", "estado_stock"]), stockQty),
+    stockQty,
     departament: parseDepartament(pickValue(row, ["departament", "departamento", "rubro"])),
     updatedAt: toStringValue(pickValue(row, ["updated_at", "actualizado_en", "fecha_actualizacion"])),
     raw: input,
