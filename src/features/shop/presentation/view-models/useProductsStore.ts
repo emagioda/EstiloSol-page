@@ -73,6 +73,19 @@ export const hasSessionCatalogCache = () => {
   }
 };
 
+export const clearProductsCatalogSessionCache = () => {
+  cachedProducts = null;
+  cachedProductsSignature = null;
+
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.removeItem(SESSION_CATALOG_CACHE_KEY);
+  } catch {
+    return;
+  }
+};
+
 const writeSessionCachedProducts = (products: Product[]) => {
   if (typeof window === "undefined") return;
 
@@ -121,6 +134,11 @@ const updateMemoryCatalogCache = (products: Product[]) => {
 const updateCatalogCache = (products: Product[]) => {
   updateMemoryCatalogCache(products);
   writeSessionCachedProducts(products);
+};
+
+export const primeProductsCatalogCache = (products: Product[]) => {
+  if (products.length === 0) return;
+  updateCatalogCache(products);
 };
 
 const sortProducts = (
@@ -261,6 +279,12 @@ export const useProductsStore = ({
     showOnlyKits: false,
     selectedSpecs: {},
   });
+
+  useEffect(() => {
+    if (initialProducts && initialProducts.length > 0) {
+      primeProductsCatalogCache(initialProducts);
+    }
+  }, [initialProducts]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

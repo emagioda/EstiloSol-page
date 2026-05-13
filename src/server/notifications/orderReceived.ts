@@ -50,6 +50,9 @@ const paymentMethodLabel = (method?: OrderPaymentMethod) => {
 const deliveryMethodLabel = (method: Order["deliveryMethod"]) =>
   method === "pickup" ? "Punto de retiro" : "Envio a domicilio";
 
+const shortOrderCode = (externalReference: string) =>
+  externalReference.split("-").filter(Boolean).at(-1) || externalReference;
+
 export const sendOrderReceivedEmail = async (
   input: SendOrderReceivedEmailInput
 ): Promise<SendOrderReceivedEmailResult> => {
@@ -71,6 +74,7 @@ export const sendOrderReceivedEmail = async (
   const customerName = input.order.customer?.name?.trim() || "cliente";
   const brandName = brandConfig.brandName;
   const supportEmail = brandConfig.contactInfo.email;
+  const orderCode = shortOrderCode(input.order.externalReference);
   const supportWhatsappLabel =
     brandConfig.contactInfo.socialNetworks.find((network) => network.icon === "whatsapp")?.label || "";
   const orderDateText = RECEIVED_DATE_TIME_FORMATTER.format(new Date(input.order.createdAt));
@@ -87,12 +91,13 @@ export const sendOrderReceivedEmail = async (
     .map((item) => `- ${item.qty} x ${item.title} (${formatMoney(item.unitPrice)} c/u)`)
     .join("\n");
 
-  const subject = `Pedido recibido ${brandName} - ${input.order.externalReference}`;
+  const subject = `Pedido recibido ${brandName} #${orderCode}`;
   const text = [
     `Hola ${customerName},`,
     "",
     `Recibimos tu pedido en ${brandName}. Queda pendiente de confirmacion de pago.`,
     "",
+    `Pedido: #${orderCode}`,
     `Referencia: ${input.order.externalReference}`,
     `Fecha: ${orderDateText}`,
     `Forma de pago: ${paymentText}`,
@@ -178,8 +183,12 @@ export const sendOrderReceivedEmail = async (
               <td style="padding: 12px 30px 0;">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background: ${emailTheme.bgSoft}; border: 1px solid ${emailTheme.borderSoft}; border-radius: 12px;">
                   <tr>
-                    <td style="padding: 14px 16px; color: ${emailTheme.textSecondary}; font-size: 12px; width: 42%;">Referencia</td>
-                    <td style="padding: 14px 16px; color: ${emailTheme.textPrimary}; font-size: 13px; font-weight: 700;">${escapeHtml(input.order.externalReference)}</td>
+                    <td style="padding: 14px 16px; color: ${emailTheme.textSecondary}; font-size: 12px; width: 42%;">Pedido</td>
+                    <td style="padding: 14px 16px; color: ${emailTheme.textPrimary}; font-size: 13px; font-weight: 700;">#${escapeHtml(orderCode)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 14px 16px; color: ${emailTheme.textSecondary}; font-size: 12px; border-top: 1px solid ${emailTheme.borderSoft};">Referencia</td>
+                    <td style="padding: 14px 16px; color: ${emailTheme.textPrimary}; font-size: 12px; border-top: 1px solid ${emailTheme.borderSoft};">${escapeHtml(input.order.externalReference)}</td>
                   </tr>
                   <tr>
                     <td style="padding: 14px 16px; color: ${emailTheme.textSecondary}; font-size: 12px; border-top: 1px solid ${emailTheme.borderSoft};">Forma de pago</td>

@@ -9,14 +9,15 @@
  * - doGet/doPost exigen token.
  * - Solo se permiten las hojas "products" y "ventas".
  * - El cliente web ya no debe llamar Apps Script directo: usa /api/catalog.
- * - Productos activos usan CacheService por 60 segundos.
+ * - Productos activos usan CacheService por 180 segundos.
  */
 
 const SHEET_PRODUCTS = "products";
 const SHEET_SALES = "ventas";
 const CACHE_PRODUCTS_KEY = "catalog:products:active:v4";
-const CACHE_PRODUCTS_TTL_SECONDS = 60;
+const CACHE_PRODUCTS_TTL_SECONDS = 180;
 const ALLOWED_SHEETS = [SHEET_PRODUCTS, SHEET_SALES];
+const ORDER_ID_KEYS = ["nro_de_compra", "order_id", "id_pedido", "orderid", "external_reference", "id"];
 
 const HEADER_ALIASES = {
   id_pedido: ["order_id", "orderid", "id", "nro_de_compra"],
@@ -41,6 +42,13 @@ const HEADER_ALIASES = {
   price: ["precio"],
   stock_qty: ["stock", "cantidad_stock"],
   stock_status: ["estado_stock"],
+  stock_deducted_at: ["stock_descontado_en", "fecha_descuento_stock"],
+  stock_descontado_en: ["stock_deducted_at", "fecha_descuento_stock"],
+  fecha_descuento_stock: ["stock_deducted_at", "stock_descontado_en"],
+  mp_payment_id: ["id_pago_mp", "mercadopago_payment_id"],
+  id_pago_mp: ["mp_payment_id", "mercadopago_payment_id"],
+  mp_status: ["estado_mp", "mercadopago_status"],
+  estado_mp: ["mp_status", "mercadopago_status"],
   is_featured: ["destacado"]
 };
 
@@ -266,6 +274,46 @@ function clearCatalogCache_() {
   CacheService.getScriptCache().remove(CACHE_PRODUCTS_KEY);
 }
 
+function isNonEmptyCell_(value) {
+  return value !== "" && value !== null && value !== undefined;
+}
+
+function resolveFirstValue_(valueMap, candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    const value = resolveValueByHeader(normalizeKey(candidates[i]), valueMap);
+    if (isNonEmptyCell_(value)) return value;
+  }
+  return "";
+}
+
+function extractOrderIdFromInput_(rowInput) {
+  if (!rowInput || typeof rowInput !== "object" || Array.isArray(rowInput)) return "";
+  const value = resolveFirstValue_(buildValueMap(rowInput), ORDER_ID_KEYS);
+  return String(value || "").trim();
+}
+
+function findRowNumberByValue_(sheet, headers, candidates, value) {
+  const needle = normalizeCompareValue(value);
+  if (!needle) return -1;
+
+  const colIndex = findColumnIndex(headers, candidates);
+  if (colIndex === -1) return -1;
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return -1;
+
+  const values = sheet.getRange(2, colIndex + 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < values.length; i++) {
+    if (normalizeCompareValue(values[i][0]) === needle) return i + 2;
+  }
+
+  return -1;
+}
+
+function findOrderRowNumber_(sheet, headers, orderId) {
+  return findRowNumberByValue_(sheet, headers, ORDER_ID_KEYS, orderId);
+}
+
 function buildProductsPayloadObject(options) {
   const includeInactive = Boolean(options && options.includeInactive);
   const force = Boolean(options && options.force);
@@ -285,7 +333,16 @@ function buildProductsPayloadObject(options) {
   if (!values || values.length === 0) return { ok: true, items: [], meta: { count: 0 } };
 
   const headers = values.shift().map((h) => String(h).trim());
-  const rows = values.filter((r) => r.some((cell) => cell !== "" && cell != null));
+  const idCol = findColumnIndex(headers, ["id", "product_id", "id_producto"]);
+  const nameCol = findColumnIndex(headers, ["name", "nombre", "product_name", "nombre_producto"]);
+  const priceCol = findColumnIndex(headers, ["price", "precio"]);
+  const hasRequiredProductCols = idCol !== -1 && nameCol !== -1 && priceCol !== -1;
+  const rows = values.filter((r) => {
+    if (hasRequiredProductCols) {
+      return isNonEmptyCell_(r[idCol]) && isNonEmptyCell_(r[nameCol]) && isNonEmptyCell_(r[priceCol]);
+    }
+    return r.some(isNonEmptyCell_);
+  });
   const items = rows
     .map((r) => rowToObject(headers, r))
     .map(normalizeProduct)
@@ -325,6 +382,30 @@ function handleAppendRow(payload) {
 
   const sheet = getSheetOrThrow(sheetName);
   const headers = getHeaders(sheet);
+  const rowValues = buildAppendRowValues_(sheet, rowInput);
+
+  if (normalizeKey(sheetName) === normalizeKey(SHEET_SALES)) {
+    const orderId = extractOrderIdFromInput_(rowInput);
+    const existingRowNumber = findOrderRowNumber_(sheet, headers, orderId);
+    if (existingRowNumber !== -1) {
+      return {
+        ok: true,
+        action: "appendRow",
+        sheet: sheetName,
+        rowNumber: existingRowNumber,
+        deduped: true
+      };
+    }
+  }
+
+  sheet.appendRow(rowValues);
+
+  if (normalizeKey(sheetName) === normalizeKey(SHEET_PRODUCTS)) clearCatalogCache_();
+  return { ok: true, action: "appendRow", sheet: sheetName, rowNumber: sheet.getLastRow() };
+}
+
+function buildAppendRowValues_(sheet, rowInput) {
+  const headers = getHeaders(sheet);
   if (headers.length === 0) throw new Error("Sheet has no header row");
 
   const rowValues = Array.isArray(rowInput)
@@ -332,10 +413,7 @@ function handleAppendRow(payload) {
     : headers.map((header) => toCellValue(resolveValueByHeader(normalizeKey(header), buildValueMap(rowInput))));
 
   if (rowValues.every((v) => v === "")) throw new Error("No values matched headers");
-  sheet.appendRow(rowValues);
-
-  if (normalizeKey(sheetName) === normalizeKey(SHEET_PRODUCTS)) clearCatalogCache_();
-  return { ok: true, action: "appendRow", sheet: sheetName, rowNumber: sheet.getLastRow() };
+  return rowValues;
 }
 
 function buildMatchSpec(payload) {
@@ -406,6 +484,238 @@ function handleUpdateRow(payload) {
   return { ok: true, action: "updateRow", sheet: sheetName, updatedRows: matchedRows.length, rowNumbers: matchedRows };
 }
 
+function normalizeStockItems_(items) {
+  if (!Array.isArray(items)) throw new Error("decrementStock requires items array");
+  return items.map(function(item) {
+    const productId = String(item && (item.productId || item.product_id || item.id) || "").trim();
+    const qty = Math.trunc(Number(item && item.qty));
+    const title = String(item && (item.title || item.name) || "").trim();
+    if (!productId || !isFinite(qty) || qty <= 0) return null;
+    return { productId: productId, qty: qty, title: title };
+  }).filter(Boolean);
+}
+
+function stockDeductionPropertyKey_(orderId) {
+  return "stock_deducted:" + String(orderId || "").trim();
+}
+
+function handleDecrementStock(payload) {
+  const sheetName = payload.sheet || payload.sheetName || SHEET_PRODUCTS;
+  assertAllowedSheet_(sheetName);
+  if (normalizeKey(sheetName) !== normalizeKey(SHEET_PRODUCTS)) {
+    throw new Error("decrementStock only supports products sheet");
+  }
+
+  const orderId = String(payload.orderId || payload.order_id || payload.externalReference || "").trim();
+  if (!orderId) throw new Error("decrementStock requires orderId");
+
+  const items = normalizeStockItems_(payload.items);
+  if (items.length === 0) throw new Error("decrementStock requires at least one valid item");
+
+  const props = PropertiesService.getScriptProperties();
+  const deductionKey = stockDeductionPropertyKey_(orderId);
+  if (props.getProperty(deductionKey)) {
+    return { ok: true, action: "decrementStock", deduped: true, orderId: orderId };
+  }
+
+  const sheet = getSheetOrThrow(SHEET_PRODUCTS);
+  const headers = getHeaders(sheet);
+  const lastRow = sheet.getLastRow();
+  if (headers.length === 0 || lastRow < 2) throw new Error("Products sheet has no data rows");
+
+  const idCol = findColumnIndex(headers, ["id", "product_id", "id_producto"]);
+  const stockQtyCol = findColumnIndex(headers, ["stock_qty", "stock", "cantidad_stock"]);
+  const stockStatusCol = findColumnIndex(headers, ["stock_status", "estado_stock"]);
+  const updatedAtCol = findColumnIndex(headers, ["updated_at", "actualizado_en", "fecha_actualizacion"]);
+
+  if (idCol === -1) throw new Error("Products sheet is missing product id column");
+  if (stockQtyCol === -1) throw new Error("Products sheet is missing stock_qty column");
+
+  const data = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+  const rowsByProductId = {};
+  for (let i = 0; i < data.length; i++) {
+    rowsByProductId[normalizeCompareValue(data[i][idCol])] = {
+      rowNumber: i + 2,
+      row: data[i]
+    };
+  }
+
+  const updates = [];
+  const skipped = [];
+  items.forEach(function(item) {
+    const found = rowsByProductId[normalizeCompareValue(item.productId)];
+    if (!found) throw new Error("Product not found for stock decrement: " + item.productId);
+
+    const currentStock = toNumberOrNull_(found.row[stockQtyCol]);
+    if (currentStock === null) {
+      skipped.push({ productId: item.productId, reason: "stock_untracked" });
+      return;
+    }
+
+    const currentQty = Math.max(0, Math.trunc(currentStock));
+    if (currentQty < item.qty) {
+      throw new Error("Insufficient stock for " + (item.title || item.productId) + ". Available: " + currentQty + ", requested: " + item.qty);
+    }
+
+    const nextQty = currentQty - item.qty;
+    updates.push({
+      productId: item.productId,
+      rowNumber: found.rowNumber,
+      row: found.row.slice(),
+      previousQty: currentQty,
+      nextQty: nextQty
+    });
+  });
+
+  const now = new Date().toISOString();
+  updates.forEach(function(update) {
+    update.row[stockQtyCol] = update.nextQty;
+    if (stockStatusCol !== -1) update.row[stockStatusCol] = update.nextQty <= 0 ? "out_of_stock" : "in_stock";
+    if (updatedAtCol !== -1) update.row[updatedAtCol] = now;
+    sheet.getRange(update.rowNumber, 1, 1, headers.length).setValues([update.row]);
+  });
+
+  props.setProperty(deductionKey, now);
+  clearCatalogCache_();
+
+  return {
+    ok: true,
+    action: "decrementStock",
+    orderId: orderId,
+    updated: updates.map(function(update) {
+      return {
+        productId: update.productId,
+        previousQty: update.previousQty,
+        nextQty: update.nextQty
+      };
+    }),
+    skipped: skipped
+  };
+}
+
+function planStockDecrement_(items) {
+  const sheet = getSheetOrThrow(SHEET_PRODUCTS);
+  const headers = getHeaders(sheet);
+  const lastRow = sheet.getLastRow();
+  if (headers.length === 0 || lastRow < 2) throw new Error("Products sheet has no data rows");
+
+  const idCol = findColumnIndex(headers, ["id", "product_id", "id_producto"]);
+  const stockQtyCol = findColumnIndex(headers, ["stock_qty", "stock", "cantidad_stock"]);
+  const stockStatusCol = findColumnIndex(headers, ["stock_status", "estado_stock"]);
+  const updatedAtCol = findColumnIndex(headers, ["updated_at", "actualizado_en", "fecha_actualizacion"]);
+
+  if (idCol === -1) throw new Error("Products sheet is missing product id column");
+  if (stockQtyCol === -1) throw new Error("Products sheet is missing stock_qty column");
+
+  const data = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+  const rowsByProductId = {};
+  for (let i = 0; i < data.length; i++) {
+    rowsByProductId[normalizeCompareValue(data[i][idCol])] = {
+      rowNumber: i + 2,
+      row: data[i]
+    };
+  }
+
+  const updates = [];
+  const skipped = [];
+  items.forEach(function(item) {
+    const found = rowsByProductId[normalizeCompareValue(item.productId)];
+    if (!found) throw new Error("Product not found for stock decrement: " + item.productId);
+
+    const currentStock = toNumberOrNull_(found.row[stockQtyCol]);
+    if (currentStock === null) {
+      skipped.push({ productId: item.productId, reason: "stock_untracked" });
+      return;
+    }
+
+    const currentQty = Math.max(0, Math.trunc(currentStock));
+    if (currentQty < item.qty) {
+      throw new Error("Insufficient stock for " + (item.title || item.productId) + ". Available: " + currentQty + ", requested: " + item.qty);
+    }
+
+    const nextQty = currentQty - item.qty;
+    updates.push({
+      productId: item.productId,
+      rowNumber: found.rowNumber,
+      row: found.row.slice(),
+      previousQty: currentQty,
+      nextQty: nextQty
+    });
+  });
+
+  return {
+    sheet: sheet,
+    headers: headers,
+    stockQtyCol: stockQtyCol,
+    stockStatusCol: stockStatusCol,
+    updatedAtCol: updatedAtCol,
+    updates: updates,
+    skipped: skipped
+  };
+}
+
+function applyStockPlan_(plan, now) {
+  plan.updates.forEach(function(update) {
+    update.row[plan.stockQtyCol] = update.nextQty;
+    if (plan.stockStatusCol !== -1) update.row[plan.stockStatusCol] = update.nextQty <= 0 ? "out_of_stock" : "in_stock";
+    if (plan.updatedAtCol !== -1) update.row[plan.updatedAtCol] = now;
+    plan.sheet.getRange(update.rowNumber, 1, 1, plan.headers.length).setValues([update.row]);
+  });
+}
+
+function handleAppendOrderAndDecrementStock(payload) {
+  const orderId = String(payload.orderId || payload.order_id || payload.externalReference || "").trim();
+  if (!orderId) throw new Error("appendOrderAndDecrementStock requires orderId");
+
+  const props = PropertiesService.getScriptProperties();
+  const deductionKey = stockDeductionPropertyKey_(orderId);
+  if (props.getProperty(deductionKey)) {
+    return { ok: true, action: "appendOrderAndDecrementStock", deduped: true, orderId: orderId };
+  }
+
+  const salesSheetName = payload.sheet || payload.sheetName || SHEET_SALES;
+  assertAllowedSheet_(salesSheetName);
+  if (normalizeKey(salesSheetName) !== normalizeKey(SHEET_SALES)) {
+    throw new Error("appendOrderAndDecrementStock only supports ventas sheet");
+  }
+
+  const rowInput = payload.row || payload.data || payload.values || payload.order;
+  if (rowInput === undefined || rowInput === null) throw new Error("appendOrderAndDecrementStock requires row");
+
+  const items = normalizeStockItems_(payload.items);
+  if (items.length === 0) throw new Error("appendOrderAndDecrementStock requires at least one valid item");
+
+  const salesSheet = getSheetOrThrow(SHEET_SALES);
+  const salesHeaders = getHeaders(salesSheet);
+  const rowValues = buildAppendRowValues_(salesSheet, rowInput);
+  const existingSalesRow = findOrderRowNumber_(salesSheet, salesHeaders, orderId);
+  const stockPlan = planStockDecrement_(items);
+  const now = new Date().toISOString();
+
+  if (existingSalesRow === -1) {
+    salesSheet.appendRow(rowValues);
+  }
+  applyStockPlan_(stockPlan, now);
+  props.setProperty(deductionKey, now);
+  clearCatalogCache_();
+
+  return {
+    ok: true,
+    action: "appendOrderAndDecrementStock",
+    orderId: orderId,
+    salesRowNumber: existingSalesRow === -1 ? salesSheet.getLastRow() : existingSalesRow,
+    dedupedSalesRow: existingSalesRow !== -1,
+    updated: stockPlan.updates.map(function(update) {
+      return {
+        productId: update.productId,
+        previousQty: update.previousQty,
+        nextQty: update.nextQty
+      };
+    }),
+    skipped: stockPlan.skipped
+  };
+}
+
 function doGet(e) {
   try {
     const params = (e && e.parameter) ? e.parameter : {};
@@ -446,6 +756,8 @@ function doPost(e) {
     const action = normalizeKey(payload.action || payload.type || payload.op || "");
     if (action === "append_row" || action === "append") return jsonOutput(handleAppendRow(payload));
     if (action === "update_row" || action === "update") return jsonOutput(handleUpdateRow(payload));
+    if (action === "decrement_stock" || action === "decrementstock") return jsonOutput(handleDecrementStock(payload));
+    if (action === "append_order_and_decrement_stock" || action === "appendorderanddecrementstock") return jsonOutput(handleAppendOrderAndDecrementStock(payload));
     throw new Error("Unsupported action");
   } catch (err) {
     return jsonOutput({ ok: false, error: String(err && err.message ? err.message : err) });

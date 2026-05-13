@@ -11,6 +11,7 @@ type FetchCatalogSourceOptions = {
 };
 
 const PRODUCTS_SHEET = "products";
+const CATALOG_DISPLAY_REVALIDATE_SECONDS = 180;
 
 const loadMockProducts = async (includeInactive = false): Promise<Product[]> => {
   const mock: unknown = (await import("@/src/features/shop/infrastructure/data/products.mock.json")).default;
@@ -74,7 +75,7 @@ export async function fetchProductsFromCatalogSource(
     next: forceFresh
       ? undefined
       : {
-          revalidate: 60,
+          revalidate: CATALOG_DISPLAY_REVALIDATE_SECONDS,
           tags: ["catalog"],
         },
   });

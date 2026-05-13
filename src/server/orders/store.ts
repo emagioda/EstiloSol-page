@@ -1,8 +1,11 @@
 import { getJson, setJson } from "@/src/server/kv";
+import { invalidateProductsCatalogCache } from "@/src/server/catalog/getProducts";
 import { logEvent } from "@/src/server/observability/log";
 import { privacyPolicy } from "@/src/server/privacy/policy";
 import {
+  appendOrderAndDecrementStockInSheet,
   appendOrderToSalesSheet,
+  decrementProductsStockInSheet,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
 import type { Order, OrderPaymentStatus, OrderStatus } from "./types";
@@ -33,6 +36,26 @@ const ensureOrderDefaults = (order: StoredOrder): Order => ({
   shippingStatus: order.shippingStatus ?? "in_process",
 });
 
+const shouldDeductStockOnCreate = (order: Order) =>
+  order.paymentMethod === "cash" || order.paymentMethod === "transfer";
+
+async function deductStockForOrder(order: Order): Promise<number | null> {
+  if (order.stockDeductedAt) return order.stockDeductedAt;
+
+  const deductedAt = Date.now();
+  await decrementProductsStockInSheet(
+    order.externalReference,
+    order.items.map((item) => ({
+      productId: item.productId,
+      qty: item.qty,
+      title: item.title,
+    }))
+  );
+  await invalidateProductsCatalogCache();
+
+  return deductedAt;
+}
+
 export async function createOrder(order: Order): Promise<void> {
   const normalizedOrder = ensureOrderDefaults(order);
   const key = orderKey(normalizedOrder.externalReference);
@@ -42,21 +65,34 @@ export async function createOrder(order: Order): Promise<void> {
     throw new Error(`Order with external reference ${normalizedOrder.externalReference} already exists`);
   }
 
-  await setJson(
-    key,
-    normalizedOrder,
-    privacyPolicy.ttlSecondsForStatus(normalizedOrder.status)
-  );
+  const stockDeductedAt = shouldDeductStockOnCreate(normalizedOrder) ? Date.now() : null;
+  const orderToPersist: Order = stockDeductedAt
+    ? {
+        ...normalizedOrder,
+        stockDeductedAt,
+      }
+    : normalizedOrder;
 
   try {
-    await appendOrderToSalesSheet(normalizedOrder);
+    if (stockDeductedAt) {
+      await appendOrderAndDecrementStockInSheet(orderToPersist, stockDeductedAt);
+      await invalidateProductsCatalogCache();
+    } else {
+      await appendOrderToSalesSheet(orderToPersist);
+    }
   } catch (error) {
     logEvent("error", "orders.sync_sheet_create_failed", {
-      externalReference: normalizedOrder.externalReference,
+      externalReference: orderToPersist.externalReference,
       error,
     });
     throw error;
   }
+
+  await setJson(
+    key,
+    orderToPersist,
+    privacyPolicy.ttlSecondsForStatus(orderToPersist.status)
+  );
 }
 
 export async function getOrder(externalReference: string): Promise<Order | null> {
@@ -99,6 +135,7 @@ export async function updateOrder(
         mpPaymentId: updated.mpPaymentId,
         mpPreferenceId: updated.mpPreferenceId,
         receiptEmailSentAt: updated.receiptEmailSentAt,
+        stockDeductedAt: updated.stockDeductedAt,
         updatedAt: updated.updatedAt,
       });
     } catch (error) {
@@ -116,12 +153,16 @@ export async function markApproved(
   externalReference: string,
   input: { paymentId: string; mpStatus: string; approvedAt?: number }
 ): Promise<Order | null> {
+  const current = await getOrder(externalReference);
+  const stockDeductedAt = current ? await deductStockForOrder(current) : null;
+
   const updated = await updateOrder(externalReference, {
     status: "approved",
     paymentStatus: "confirmed",
     mpPaymentId: input.paymentId,
     mpStatus: input.mpStatus,
     approvedAt: input.approvedAt ?? Date.now(),
+    ...(stockDeductedAt ? { stockDeductedAt } : {}),
   });
 
   if (!updated || !privacyPolicy.minimizeApprovedOrderPII) {
@@ -149,10 +190,11 @@ export async function markRejected(
 
 export async function markPreferenceCreated(
   externalReference: string,
-  input: { preferenceId: string; status?: OrderStatus }
+  input: { preferenceId: string; status?: OrderStatus },
+  options: UpdateOrderOptions = {}
 ): Promise<Order | null> {
   return updateOrder(externalReference, {
     status: input.status ?? "preference_created",
     mpPreferenceId: input.preferenceId,
-  });
+  }, options);
 }

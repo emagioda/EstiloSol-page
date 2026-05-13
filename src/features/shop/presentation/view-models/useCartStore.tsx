@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Product, StockStatus } from "@/src/features/shop/domain/entities/Product";
 
 export type CartItem = {
@@ -119,9 +119,30 @@ const readItemsFromStorage = (): CartItem[] => {
   }
 };
 
+const cartItemsSignature = (items: CartItem[]) =>
+  items
+    .map((item) =>
+      [
+        item.productId,
+        item.name,
+        item.unitPrice,
+        item.qty,
+        item.image || "",
+        item.stockStatus || "",
+        item.stockQty ?? "",
+      ].join("|")
+    )
+    .sort()
+    .join("~");
+
 export const CartProvider = ({ children }: { children: React.ReactNode }) => {
   const [items, setItems] = useState<CartItem[]>(() => readItemsFromStorage());
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("mercadopago");
+  const itemsSignatureRef = useRef(cartItemsSignature(items));
+
+  useEffect(() => {
+    itemsSignatureRef.current = cartItemsSignature(items);
+  }, [items]);
 
   useEffect(() => {
     try {
@@ -130,6 +151,35 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(toPersist));
     } catch {}
   }, [items]);
+
+  const refreshItemsFromStorage = useCallback(() => {
+    const storedItems = readItemsFromStorage();
+    const storedSignature = cartItemsSignature(storedItems);
+    if (storedSignature === itemsSignatureRef.current) return;
+    setItems(storedItems);
+  }, []);
+
+  useEffect(() => {
+    const handlePageShow = () => {
+      refreshItemsFromStorage();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshItemsFromStorage();
+      }
+    };
+
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("focus", handlePageShow);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("focus", handlePageShow);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [refreshItemsFromStorage]);
 
   const addItem = useCallback((item: CartItem): AddItemResult => {
     const safeQty = normalizeQty(item.qty);

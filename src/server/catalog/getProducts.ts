@@ -1,4 +1,5 @@
-import { getJson, setJson } from "@/src/server/kv";
+import { revalidatePath, revalidateTag } from "next/cache";
+import { del, getJson, setJson } from "@/src/server/kv";
 import type { StockStatus } from "@/src/features/shop/domain/entities/Product";
 import { fetchProductsFromCatalogSource } from "./source";
 
@@ -51,4 +52,14 @@ export async function getProductsCatalog(
   await setJson(CATALOG_CACHE_KEY, catalogProducts, CATALOG_CACHE_TTL);
 
   return new Map(catalogProducts.map((item) => [item.id, item]));
+}
+
+export async function invalidateProductsCatalogCache(): Promise<void> {
+  await del(CATALOG_CACHE_KEY);
+  try {
+    revalidateTag("catalog", "max");
+    revalidatePath("/tienda");
+  } catch {
+    // Revalidation is best-effort outside a Next request/build context.
+  }
 }

@@ -92,7 +92,7 @@ export const brandConfig = {
     body: "var(--font-brand-body)",
   },
   contactInfo: {
-    email: "contacto@estilosol.com",
+    email: "estilosol26@gmail.com",
     whatsappPhone: DEFAULT_WHATSAPP_PHONE,
     initialContactMessage: DEFAULT_WHATSAPP_MESSAGE,
     socialNetworks: [

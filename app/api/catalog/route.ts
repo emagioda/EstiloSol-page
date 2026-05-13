@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { fetchProductsFromCatalogSource } from "@/src/server/catalog/source";
 
 export const runtime = "nodejs";
-export const revalidate = 60;
+export const revalidate = 180;
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -20,7 +20,7 @@ export async function GET(request: Request) {
       headers: {
         "Cache-Control": forceFresh
           ? "no-store"
-          : "public, s-maxage=60, stale-while-revalidate=300",
+          : "public, s-maxage=180, stale-while-revalidate=600",
       },
     });
   } catch (error) {

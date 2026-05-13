@@ -37,6 +37,7 @@ type ParsedRowsPayload = {
 type SheetsMutationResponse = {
   ok?: boolean;
   error?: string;
+  [key: string]: unknown;
 };
 
 export type AdminDepartament = "PELUQUERIA" | "BIJOUTERIE";
@@ -333,7 +334,7 @@ const buildOrderItemsSummary = (order: Order) =>
     .map((item) => `${item.qty}x ${item.title}`)
     .join(" | ");
 
-async function postMutation(payload: Record<string, unknown>) {
+async function postMutation(payload: Record<string, unknown>): Promise<SheetsMutationResponse> {
   const response = await fetchWithPolicy(
     getSheetsEndpoint(),
     {
@@ -358,6 +359,8 @@ async function postMutation(payload: Record<string, unknown>) {
   if (!data || data.ok === false) {
     throw new Error(data?.error || "Sheets mutation failed");
   }
+
+  return data;
 }
 
 async function fetchRows(sheetName: string, options: GetSheetRowsOptions = {}): Promise<SheetRow[]> {
@@ -441,6 +444,7 @@ export const buildSalesSheetRow = (order: Order): Record<string, unknown> => {
     mp_status: order.mpStatus || "",
     approved_at: approvedAtIso,
     fecha_pago: approvedAtIso,
+    stock_deducted_at: toIsoString(order.stockDeductedAt),
     receipt_email_sent_at: toIsoString(order.receiptEmailSentAt),
   };
 };
@@ -450,6 +454,27 @@ export async function appendOrderToSalesSheet(order: Order): Promise<void> {
     action: "appendRow",
     sheet: SALES_SHEET_NAME,
     row: buildSalesSheetRow(order),
+  });
+}
+
+export async function appendOrderAndDecrementStockInSheet(
+  order: Order,
+  stockDeductedAt: number
+): Promise<void> {
+  await postMutation({
+    action: "appendOrderAndDecrementStock",
+    sheet: SALES_SHEET_NAME,
+    productsSheet: PRODUCTS_SHEET_NAME,
+    orderId: order.externalReference,
+    row: buildSalesSheetRow({
+      ...order,
+      stockDeductedAt,
+    }),
+    items: order.items.map((item) => ({
+      productId: item.productId,
+      qty: item.qty,
+      title: item.title,
+    })),
   });
 }
 
@@ -463,6 +488,7 @@ export async function updateOrderRowInSalesSheet(
     mpPaymentId: string;
     mpPreferenceId: string;
     receiptEmailSentAt: number;
+    stockDeductedAt: number;
     updatedAt: number;
   }>
 ): Promise<void> {
@@ -494,6 +520,9 @@ export async function updateOrderRowInSalesSheet(
   if (updates.mpPreferenceId) payload.mp_preference_id = updates.mpPreferenceId;
   if (updates.receiptEmailSentAt) {
     payload.receipt_email_sent_at = toIsoString(updates.receiptEmailSentAt);
+  }
+  if (updates.stockDeductedAt) {
+    payload.stock_deducted_at = toIsoString(updates.stockDeductedAt);
   }
 
   try {
@@ -581,6 +610,32 @@ export async function updateProductRowInSheet(
     sheet: PRODUCTS_SHEET_NAME,
     productId,
     updates: payload,
+  });
+}
+
+export async function decrementProductsStockInSheet(
+  orderId: string,
+  items: Array<{ productId: string; qty: number; title?: string }>
+): Promise<void> {
+  if (!orderId.trim()) {
+    throw new Error("decrementProductsStockInSheet requires orderId");
+  }
+
+  const normalizedItems = items
+    .map((item) => ({
+      productId: String(item.productId || "").trim(),
+      qty: Math.max(0, Math.trunc(Number(item.qty))),
+      title: String(item.title || "").trim(),
+    }))
+    .filter((item) => item.productId && item.qty > 0);
+
+  if (normalizedItems.length === 0) return;
+
+  await postMutation({
+    action: "decrementStock",
+    sheet: PRODUCTS_SHEET_NAME,
+    orderId,
+    items: normalizedItems,
   });
 }
 

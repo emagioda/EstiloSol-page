@@ -3,7 +3,11 @@ import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { hasSessionCatalogCache, useProductsStore } from "../view-models/useProductsStore";
+import {
+  clearProductsCatalogSessionCache,
+  hasSessionCatalogCache,
+  useProductsStore,
+} from "../view-models/useProductsStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
 import FiltersSidebar from "@/src/features/shop/presentation/components/FiltersSidebar/FiltersSidebar";
@@ -109,6 +113,8 @@ export default function TiendaClientView({
   const availableCategories = categories;
   const selectedWorld = filters.departament ?? "PELUQUERIA";
   const rubroFromQuery = normalizeDepartamentParam(searchParams.get("rubro"));
+  const shouldRefreshCatalog = searchParams.get("refresh") === "1";
+  const hasInitialCatalog = initialProducts.length > 0;
   const selectedWorldIndex = Math.max(
     departamentOptions.findIndex((option) => option.value === selectedWorld),
     0
@@ -173,19 +179,32 @@ export default function TiendaClientView({
   }, [router, searchParams]);
 
   useEffect(() => {
+    if (shouldRefreshCatalog) {
+      hasCheckedFirstVisitRef.current = true;
+      clearProductsCatalogSessionCache();
+      void loadProducts(true).finally(() => {
+        const params = new URLSearchParams(searchParams.toString());
+        params.delete("refresh");
+        const query = params.toString();
+        router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+      });
+      return;
+    }
+
     if (hasCheckedFirstVisitRef.current) return;
 
     hasCheckedFirstVisitRef.current = true;
 
     if (!hasSessionCatalogCache()) {
-      void loadProducts(true);
+      if (hasInitialCatalog) return;
+      void loadProducts();
       return;
     }
 
     if (status === "idle") {
       void loadProducts();
     }
-  }, [loadProducts, status]);
+  }, [hasInitialCatalog, loadProducts, pathname, router, searchParams, shouldRefreshCatalog, status]);
 
   useEffect(() => {
     setSuppressBadge(isQuickViewOpen);

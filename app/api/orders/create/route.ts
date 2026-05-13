@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProductsCatalog } from "@/src/server/catalog/getProducts";
+import { scheduleAfterResponse } from "@/src/server/http/afterResponse";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { sendOrderReceivedEmail } from "@/src/server/notifications/orderReceived";
@@ -112,25 +113,27 @@ export async function POST(request: NextRequest) {
     total: order.total,
   });
 
-  const emailResult = await sendOrderReceivedEmail({ order });
-  if (emailResult.sent) {
-    await trackBusinessEvent("checkout.order_received_email.sent", {
-      externalReference: order.externalReference,
-      paymentMethod: order.paymentMethod,
-    });
-  } else if (emailResult.reason !== "missing_customer_email") {
-    logEvent("warn", "orders.received_email_failed", {
-      externalReference: order.externalReference,
-      paymentMethod: order.paymentMethod,
-      reason: emailResult.reason,
-      detail: emailResult.detail,
-    });
-    await trackBusinessEvent("checkout.order_received_email.failed", {
-      externalReference: order.externalReference,
-      paymentMethod: order.paymentMethod,
-      reason: emailResult.reason,
-    });
-  }
+  scheduleAfterResponse(async () => {
+    const emailResult = await sendOrderReceivedEmail({ order });
+    if (emailResult.sent) {
+      await trackBusinessEvent("checkout.order_received_email.sent", {
+        externalReference: order.externalReference,
+        paymentMethod: order.paymentMethod,
+      });
+    } else if (emailResult.reason !== "missing_customer_email") {
+      logEvent("warn", "orders.received_email_failed", {
+        externalReference: order.externalReference,
+        paymentMethod: order.paymentMethod,
+        reason: emailResult.reason,
+        detail: emailResult.detail,
+      });
+      await trackBusinessEvent("checkout.order_received_email.failed", {
+        externalReference: order.externalReference,
+        paymentMethod: order.paymentMethod,
+        reason: emailResult.reason,
+      });
+    }
+  });
 
   return NextResponse.json(
     {

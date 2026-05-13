@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { PaymentMethod } from "../../view-models/useCartStore";
 import { useCart } from "../../view-models/useCartStore";
-import { refreshProductsMemoryCacheFromSource } from "../../view-models/useProductsStore";
 import {
   deliveryMethodLabel,
   formatMoney,
@@ -21,8 +21,10 @@ import {
 const DRAFT_STORAGE_KEY = "es_sol_checkout_draft";
 const BANK_CBU = "0000000000000000000000";
 const BANK_ALIAS = "ESTILOSOL.OK";
+const PROGRESS_STEP_DELAY_MS = 850;
+const REDIRECT_FEEDBACK_DELAY_MS = 350;
 
-type CheckoutPhase = "idle" | "redirecting";
+type CheckoutPhase = "idle" | "validating" | "creating" | "redirecting";
 
 type CheckoutErrorState = {
   message: string;
@@ -49,6 +51,107 @@ const isDeliveryMethod = (value: unknown): value is DeliveryMethod =>
   value === "delivery" || value === "pickup";
 
 const buildApiNotes = (notes: string) => sanitizeText(notes, 250);
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const LoadingIndicator = () => (
+  <span
+    aria-hidden="true"
+    className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center"
+  >
+    <span className="absolute h-full w-full rounded-full border-2 border-black/20" />
+    <span className="absolute h-full w-full animate-spin rounded-full border-2 border-transparent border-t-black border-r-black/70" />
+  </span>
+);
+
+const ButtonContent = ({ loading, children }: { loading: boolean; children: ReactNode }) => (
+  <span className="inline-flex items-center justify-center gap-2">
+    {loading ? <LoadingIndicator /> : null}
+    <span>{children}</span>
+  </span>
+);
+
+const ProgressIcon = ({ status }: { status: "active" | "done" | "pending" }) => {
+  if (status === "done") {
+    return (
+      <span className="grid h-7 w-7 place-items-center rounded-full bg-emerald-300 text-emerald-950 shadow-[0_0_18px_rgba(110,231,183,0.42)]">
+        <svg viewBox="0 0 20 20" aria-hidden className="h-4 w-4" fill="none">
+          <path
+            d="M5 10.4 8.2 13.5 15 6.5"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+    );
+  }
+
+  if (status === "active") {
+    return (
+      <span className="grid h-7 w-7 place-items-center rounded-full border border-[var(--brand-gold-300)]/65 bg-[rgba(242,199,119,0.18)]">
+        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--brand-gold-300)]/30 border-t-[var(--brand-gold-300)]" />
+      </span>
+    );
+  }
+
+  return (
+    <span className="grid h-7 w-7 place-items-center rounded-full border border-[var(--brand-cream)]/24 bg-white/5">
+      <span className="h-2 w-2 rounded-full bg-[var(--brand-cream)]/35" />
+    </span>
+  );
+};
+
+const CheckoutProgress = ({
+  phase,
+  paymentMethod,
+}: {
+  phase: CheckoutPhase;
+  paymentMethod: PaymentMethod;
+}) => {
+  if (phase === "idle") return null;
+
+  const secondStepLabel =
+    paymentMethod === "mercadopago" ? "Preparando pago seguro" : "Generando pedido";
+  const secondStepDetail =
+    paymentMethod === "mercadopago"
+      ? "Estamos creando el enlace de Mercado Pago."
+      : "Estamos registrando tu compra en Estilo Sol.";
+  const firstStatus = phase === "validating" ? "active" : "done";
+  const secondStatus =
+    phase === "validating" ? "pending" : phase === "creating" ? "active" : "done";
+
+  return (
+    <div
+      className="mt-4 overflow-hidden rounded-2xl border border-[rgba(242,199,119,0.34)] bg-[rgba(52,28,84,0.34)] p-3 text-sm text-[var(--brand-cream)] shadow-[0_16px_32px_rgba(18,8,35,0.18)]"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="space-y-3">
+        <div className="flex items-center gap-3">
+          <ProgressIcon status={firstStatus} />
+          <div>
+            <p className="font-semibold">Validando carrito</p>
+            <p className="text-xs text-[var(--brand-cream)]/68">Revisando productos, precios y stock.</p>
+          </div>
+        </div>
+        <div className="ml-3 h-4 w-px bg-[var(--brand-gold-300)]/28" aria-hidden />
+        <div className="flex items-center gap-3">
+          <ProgressIcon status={secondStatus} />
+          <div>
+            <p className="font-semibold">{secondStepLabel}</p>
+            <p className="text-xs text-[var(--brand-cream)]/68">{secondStepDetail}</p>
+          </div>
+        </div>
+      </div>
+      {phase === "redirecting" ? (
+        <p className="mt-3 rounded-xl bg-emerald-300/14 px-3 py-2 text-xs font-medium text-emerald-100">
+          Todo listo. Te llevamos al siguiente paso...
+        </p>
+      ) : null}
+    </div>
+  );
+};
 
 export default function CheckoutSteps({
   subtotal: _subtotal,
@@ -65,20 +168,14 @@ export default function CheckoutSteps({
   const [showValidation, setShowValidation] = useState(false);
   const [transferInfoOpen, setTransferInfoOpen] = useState(false);
   const [checkoutPhase, setCheckoutPhase] = useState<CheckoutPhase>("idle");
-  const [isStep1CheckingCart, setIsStep1CheckingCart] = useState(false);
   const [error, setError] = useState<CheckoutErrorState | null>(null);
   const [copiedField, setCopiedField] = useState<BankField | null>(null);
-  const [lastValidatedCartHash, setLastValidatedCartHash] = useState<string | null>(null);
   const [isDraftHydrated, setIsDraftHydrated] = useState(false);
-  const catalogWarmupPromiseRef = useRef<Promise<boolean> | null>(null);
-  const lastCatalogWarmupAtRef = useRef(0);
+  const prevItemsCountRef = useRef(items.length);
+  const checkoutPhaseTimerRef = useRef<number | null>(null);
   const isTestPublicKey = (process.env.NEXT_PUBLIC_MP_PUBLIC_KEY || "").toUpperCase().startsWith("TEST-");
 
   const fullName = useMemo(() => `${firstName} ${lastName}`.replace(/\s+/g, " ").trim(), [firstName, lastName]);
-  const cartHash = useMemo(
-    () => items.map((item) => `${item.productId}:${item.qty}`).sort().join("|"),
-    [items]
-  );
   const isDiscountMethod = isDiscountPaymentMethod(paymentMethod);
   const displayedTotal = isDiscountMethod ? _discountedTotal : _subtotal;
 
@@ -138,6 +235,28 @@ export default function CheckoutSteps({
     }
   }, [setPaymentMethod]);
 
+  // Detect new purchase session: reset Step 1 when cart transitions from empty to filled
+  useEffect(() => {
+    if (!isDraftHydrated) return;
+
+    const wasPreviouslyEmpty = prevItemsCountRef.current === 0;
+    const isNowFilled = items.length > 0;
+
+    if (wasPreviouslyEmpty && isNowFilled && isContactStepComplete) {
+      // Reset Step 1 to show customer data form on fresh purchase
+      setIsContactStepComplete(false);
+      setError(null);
+      // Clear form fields for fresh start
+      setFirstName("");
+      setLastName("");
+      setWhatsapp("");
+      setEmail("");
+      setNotes("");
+    }
+
+    prevItemsCountRef.current = items.length;
+  }, [items.length, isDraftHydrated, isContactStepComplete]);
+
   useEffect(() => {
     if (!isDraftHydrated) return;
 
@@ -170,6 +289,40 @@ export default function CheckoutSteps({
   ]);
 
   useEffect(() => {
+    return () => {
+      if (checkoutPhaseTimerRef.current !== null) {
+        window.clearTimeout(checkoutPhaseTimerRef.current);
+      }
+    };
+  }, []);
+
+  const clearCheckoutPhaseTimer = () => {
+    if (checkoutPhaseTimerRef.current === null) return;
+    window.clearTimeout(checkoutPhaseTimerRef.current);
+    checkoutPhaseTimerRef.current = null;
+  };
+
+  const startCheckoutProgress = () => {
+    clearCheckoutPhaseTimer();
+    setCheckoutPhase("validating");
+    checkoutPhaseTimerRef.current = window.setTimeout(() => {
+      setCheckoutPhase("creating");
+      checkoutPhaseTimerRef.current = null;
+    }, PROGRESS_STEP_DELAY_MS);
+  };
+
+  const resetCheckoutProgress = () => {
+    clearCheckoutPhaseTimer();
+    setCheckoutPhase("idle");
+  };
+
+  const finishCheckoutProgress = async () => {
+    clearCheckoutPhaseTimer();
+    setCheckoutPhase("redirecting");
+    await wait(REDIRECT_FEEDBACK_DELAY_MS);
+  };
+
+  useEffect(() => {
     if (!error?.invalidProducts || error.invalidProducts.length === 0) return;
 
     const itemIds = new Set(items.map((item) => item.productId));
@@ -193,119 +346,17 @@ export default function CheckoutSteps({
     }
   }, [items, error]);
 
-  useEffect(() => {
-    return () => {
-      // noop
-    };
-  }, []);
-
-  useEffect(() => {
-    setLastValidatedCartHash(null);
-  }, [cartHash]);
-
-  const normalizeInvalidProducts = (
-    invalidProducts: Array<{ productId?: string; name?: string }> | undefined
-  ) =>
-    (invalidProducts ?? [])
-      .map((item) => ({
-        productId: typeof item?.productId === "string" ? item.productId : "",
-        name: typeof item?.name === "string" ? item.name : "Producto no disponible",
-      }))
-      .filter((item) => item.productId);
-
-  const warmCatalogCache = () => {
-    if (catalogWarmupPromiseRef.current) return catalogWarmupPromiseRef.current;
-
-    const now = Date.now();
-    if (now - lastCatalogWarmupAtRef.current < 30_000) {
-      return Promise.resolve(true);
-    }
-
-    const warmupPromise = refreshProductsMemoryCacheFromSource()
-      .then(() => true)
-      .catch(() => false)
-      .finally(() => {
-        lastCatalogWarmupAtRef.current = Date.now();
-        if (catalogWarmupPromiseRef.current === warmupPromise) {
-          catalogWarmupPromiseRef.current = null;
-        }
-      });
-
-    catalogWarmupPromiseRef.current = warmupPromise;
-    return warmupPromise;
-  };
-
-  const validateCartBeforePayment = async (): Promise<boolean> => {
-    const response = await fetch("/api/mp/validate-cart", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        items: items.map((item) => ({
-          productId: item.productId,
-          qty: item.qty,
-          name: item.name,
-        })),
-      }),
-    }).catch(() => null);
-
-    if (!response) {
-      setError({ message: "No pudimos validar el carrito. Revisa tu conexion e intenta nuevamente." });
-      return false;
-    }
-
-    if (response.ok) {
-      setLastValidatedCartHash(cartHash);
-      return true;
-    }
-
-    const data = (await response.json().catch(() => null)) as
-      | {
-          error?: string;
-          invalidProducts?: Array<{ productId?: string; name?: string }>;
-        }
-      | null;
-
-    const invalidProducts = normalizeInvalidProducts(data?.invalidProducts);
-    if (invalidProducts.length > 0) {
-      await refreshProductsMemoryCacheFromSource();
-    }
-
-    setError({
-      message:
-        data?.error ||
-        (response.status === 429
-          ? "Demasiadas solicitudes. Espera unos segundos e intenta nuevamente."
-          : "No pudimos validar los productos del carrito."),
-      invalidProducts: invalidProducts.length > 0 ? invalidProducts : undefined,
-    });
-
-    return false;
-  };
-
-  const handleContinueToPayment = async () => {
-    if (isStep1CheckingCart) return;
+  const handleContinueToPayment = () => {
     setShowValidation(true);
     if (!isContactFormValid) return;
 
-    setIsStep1CheckingCart(true);
     setError(null);
-
-    try {
-      const isCartValid = await validateCartBeforePayment();
-      if (!isCartValid) return;
-
-      setIsContactStepComplete(true);
-      void warmCatalogCache();
-    } finally {
-      setIsStep1CheckingCart(false);
-    }
+    setIsContactStepComplete(true);
   };
 
   const handleEditContact = () => {
     setIsContactStepComplete(false);
-    setCheckoutPhase("idle");
+    resetCheckoutProgress();
     setError(null);
   };
 
@@ -329,15 +380,8 @@ export default function CheckoutSteps({
       return;
     }
 
+    startCheckoutProgress();
     setError(null);
-    if (lastValidatedCartHash !== cartHash) {
-      setIsContactStepComplete(false);
-      setCheckoutPhase("idle");
-      setError({ message: "Tu carrito cambio. Revisa el Paso 1 y presiona Continuar al pago para validar nuevamente." });
-      return;
-    }
-
-    setCheckoutPhase("redirecting");
 
     try {
       const response = await fetch("/api/mp/create-preference", {
@@ -376,7 +420,7 @@ export default function CheckoutSteps({
         : data?.initPoint || data?.sandboxInitPoint;
 
       if (!response.ok || !checkoutUrl) {
-        setCheckoutPhase("idle");
+        resetCheckoutProgress();
         setError({
           message: data?.error || "No pudimos iniciar el pago. Intenta nuevamente.",
           invalidProducts:
@@ -392,9 +436,10 @@ export default function CheckoutSteps({
         return;
       }
 
+      await finishCheckoutProgress();
       window.location.assign(checkoutUrl);
     } catch {
-      setCheckoutPhase("idle");
+      resetCheckoutProgress();
       setError({ message: "Ocurrio un error de conexion. Intenta nuevamente." });
     }
   };
@@ -410,14 +455,8 @@ export default function CheckoutSteps({
       return;
     }
 
+    startCheckoutProgress();
     setError(null);
-    if (lastValidatedCartHash !== cartHash) {
-      setIsContactStepComplete(false);
-      setError({ message: "Tu carrito cambio. Revisa el Paso 1 y presiona Continuar al pago para validar nuevamente." });
-      return;
-    }
-
-    setCheckoutPhase("redirecting");
 
     try {
       const response = await fetch("/api/orders/create", {
@@ -451,7 +490,7 @@ export default function CheckoutSteps({
         | null;
 
       if (!response.ok) {
-        setCheckoutPhase("idle");
+        resetCheckoutProgress();
         setError({
           message: data?.error || "No pudimos registrar tu pedido. Intenta nuevamente.",
           invalidProducts:
@@ -469,7 +508,7 @@ export default function CheckoutSteps({
 
       const externalReference = typeof data?.externalReference === "string" ? data.externalReference : "";
       if (!externalReference) {
-        setCheckoutPhase("idle");
+        resetCheckoutProgress();
         setError({ message: "Pedido creado sin referencia. Intenta nuevamente." });
         return;
       }
@@ -480,9 +519,10 @@ export default function CheckoutSteps({
         ref: externalReference,
       });
 
+      await finishCheckoutProgress();
       window.location.assign(`/tienda/success?${successParams.toString()}`);
     } catch {
-      setCheckoutPhase("idle");
+      resetCheckoutProgress();
       setError({ message: "No pudimos registrar el pedido por un error de conexion. Intenta nuevamente." });
     }
   };
@@ -707,10 +747,10 @@ export default function CheckoutSteps({
             <button
               type="button"
               onClick={handleContinueToPayment}
-              disabled={isStep1CheckingCart}
-              className="w-full rounded-2xl bg-[var(--brand-gold-300)] px-4 py-3 text-sm font-semibold text-black transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+              disabled={!isContactFormValid}
+              className="w-full rounded-2xl bg-[var(--brand-gold-300)] px-4 py-3 text-sm font-semibold text-black shadow-[0_10px_20px_rgba(18,8,35,0.16)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
             >
-              {isStep1CheckingCart ? "Validando carrito..." : "Continuar al pago"}
+              Continuar al pago
             </button>
           </div>
         )}
@@ -867,23 +907,33 @@ export default function CheckoutSteps({
           </div>
         ) : null}
 
-        {paymentMethod === "mercadopago" && checkoutPhase === "redirecting" ? (
-          <p className="mt-3 text-xs text-[var(--brand-cream)]/75" role="status" aria-live="polite">
-            Redirigiendo a Mercado Pago...
-          </p>
-        ) : null}
+        <CheckoutProgress phase={checkoutPhase} paymentMethod={paymentMethod} />
 
         <button
           type="button"
           onClick={paymentMethod === "mercadopago" ? startCheckout : startDiscountCheckout}
           disabled={!isContactStepComplete || items.length === 0 || checkoutPhase !== "idle"}
-          className="mt-5 w-full rounded-2xl bg-[var(--brand-gold-300)] px-4 py-3 text-sm font-semibold text-black shadow-[0_10px_20px_rgba(18,8,35,0.25)] transition hover:-translate-y-0.5 disabled:opacity-60 disabled:hover:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+          className="mt-5 w-full rounded-2xl bg-[var(--brand-gold-300)] px-4 py-3 text-sm font-semibold text-black shadow-[0_10px_20px_rgba(18,8,35,0.25)] transition hover:-translate-y-0.5 disabled:opacity-60 disabled:hover:translate-y-0 disabled:[&_[data-loading='true']]:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
         >
-          {paymentMethod === "mercadopago"
-            ? checkoutPhase === "redirecting"
-              ? "Redirigiendo..."
-              : "Finalizar pedido"
-            : "Finalizar pedido"}
+          <span data-loading={checkoutPhase !== "idle"}>
+            <ButtonContent loading={checkoutPhase !== "idle"}>
+              {paymentMethod === "mercadopago"
+                ? checkoutPhase === "validating"
+                  ? "Validando carrito..."
+                  : checkoutPhase === "creating"
+                  ? "Preparando pago..."
+                  : checkoutPhase === "redirecting"
+                  ? "Redirigiendo..."
+                  : "Finalizar pedido"
+                : checkoutPhase === "validating"
+                ? "Validando carrito..."
+                : checkoutPhase === "creating"
+                ? "Generando pedido..."
+                : checkoutPhase === "redirecting"
+                ? "Abriendo resumen..."
+                : "Finalizar pedido"}
+            </ButtonContent>
+          </span>
         </button>
 
         <p className="mt-2 text-xs text-[var(--brand-cream)]/70">

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/src/config/env";
+import { scheduleAfterResponse } from "@/src/server/http/afterResponse";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { getOrder, markApproved, markRejected, updateOrder } from "@/src/server/orders/store";
@@ -169,7 +170,7 @@ export async function GET(request: NextRequest) {
           mpStatus: String(paymentById.data?.status || "approved"),
           approvedAt,
         });
-        await trySendReceiptEmail(order, paymentId, approvedAt);
+        scheduleAfterResponse(() => trySendReceiptEmail(order, paymentId, approvedAt));
         logEvent("info", "payments.approved_from_verify_payment_id", {
           externalReference: order.externalReference,
           paymentId,
@@ -237,7 +238,7 @@ export async function GET(request: NextRequest) {
       mpStatus: String(approvedPayment.status || "approved"),
       approvedAt,
     });
-    await trySendReceiptEmail(order, approvedPayment.id, approvedAt);
+    scheduleAfterResponse(() => trySendReceiptEmail(order, approvedPayment.id, approvedAt));
 
     logEvent("info", "payments.approved_from_verify", {
       externalReference: order.externalReference,

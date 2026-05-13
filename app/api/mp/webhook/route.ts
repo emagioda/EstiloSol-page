@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/src/config/env";
+import { scheduleAfterResponse } from "@/src/server/http/afterResponse";
 import { getJson, setJson } from "@/src/server/kv";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
@@ -187,7 +188,7 @@ export async function POST(request: NextRequest) {
         mpStatus: status,
         approvedAt,
       });
-      await trySendReceiptEmail(order, String(paymentInfo.id || paymentId), approvedAt);
+      scheduleAfterResponse(() => trySendReceiptEmail(order, String(paymentInfo.id || paymentId), approvedAt));
       await setJson(paymentKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
       logEvent("info", "payments.approved_from_webhook", {
         externalReference,

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 
@@ -12,11 +13,41 @@ type PaymentData = {
   paymentMethodLabel?: string;
 };
 
+type OrderSummaryItem = {
+  productId: string;
+  title: string;
+  qty: number;
+  unitPrice: number;
+  currency: "ARS";
+};
+
+type OrderSummaryData = {
+  externalReference: string;
+  total: number;
+  currency: "ARS";
+  createdAt: number;
+  paymentMethod?: "cash" | "transfer" | "mercadopago";
+  deliveryMethod?: "delivery" | "pickup";
+  items: OrderSummaryItem[];
+};
+
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const ESTILO_SOL_SUPPORT_EMAIL = "estilosol26@gmail.com";
 const ESTILO_SOL_WHATSAPP_LABEL = "+54 9 341 688-8926";
 const ESTILO_SOL_WHATSAPP_PHONE = "5493416888926";
 const RECEIPT_PDF_MODE: "compact" | "a4" = "compact";
+
+const formatMoney = (value: number) =>
+  new Intl.NumberFormat("es-AR", {
+    style: "currency",
+    currency: "ARS",
+    maximumFractionDigits: 0,
+  }).format(Math.round(value));
+
+const shortOrderCode = (externalReference?: string | number) => {
+  const value = String(externalReference || "").trim();
+  return value.split("-").filter(Boolean).at(-1) || value || "N/A";
+};
 
 const formatDateTime24h = (input?: string | number | Date) => {
   const date = input ? new Date(input) : new Date();
@@ -101,6 +132,7 @@ export default function SuccessPage() {
   const [status, setStatus] = useState<"loading" | "approved" | "pending" | "error">("loading");
   const [message, setMessage] = useState("Procesando tu pago...");
   const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
+  const [orderSummary, setOrderSummary] = useState<OrderSummaryData | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const clearRef = useRef(clear);
   const hasStartedPollingRef = useRef(false);
@@ -114,6 +146,31 @@ export default function SuccessPage() {
     hasStartedPollingRef.current = true;
 
     let cancelled = false;
+
+    const fetchOrderSummary = async (ref: string) => {
+      try {
+        const res = await fetch(`/api/orders/${encodeURIComponent(ref)}`, {
+          cache: "no-store",
+        });
+        const data = (await res.json().catch(() => null)) as OrderSummaryData | null;
+
+        if (cancelled || !res.ok || !data?.externalReference || !Array.isArray(data.items)) {
+          return;
+        }
+
+        setOrderSummary(data);
+        setPaymentData((previous) =>
+          previous
+            ? {
+                ...previous,
+                date: formatDateTime24h(data.createdAt),
+              }
+            : previous
+        );
+      } catch {
+        // The order summary is helpful, but it should not block the success screen.
+      }
+    };
 
     const verifyWithPolling = async (
       ref: string,
@@ -156,6 +213,9 @@ export default function SuccessPage() {
 
           if (data?.approved) {
             clearRef.current();
+            if (typeof window !== "undefined") {
+              localStorage.removeItem("es_sol_checkout_draft");
+            }
             setStatus("approved");
             setMessage("Pago completado. Gracias por tu compra.");
             return;
@@ -202,6 +262,9 @@ export default function SuccessPage() {
 
       if (isManualCheckout) {
         clearRef.current();
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("es_sol_checkout_draft");
+        }
         setStatus("pending");
         setMessage("Pedido registrado. Tu pago quedo pendiente de confirmacion.");
         setPaymentData({
@@ -210,11 +273,15 @@ export default function SuccessPage() {
           date: formatDateTime24h(),
           paymentMethodLabel: manualPaymentMethodLabel,
         });
+        await fetchOrderSummary(ref);
         return;
       }
 
       if (approvedHint) {
         clearRef.current();
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("es_sol_checkout_draft");
+        }
         setStatus("approved");
         setMessage("Pago recibido. Estamos validando el comprobante...");
         setPaymentData((previous) =>
@@ -228,6 +295,7 @@ export default function SuccessPage() {
       }
 
       await verifyWithPolling(ref, paymentId, approvedHint);
+      await fetchOrderSummary(ref);
     };
 
     void start();
@@ -408,6 +476,7 @@ export default function SuccessPage() {
     paymentMethodLabel: paymentData?.paymentMethodLabel,
     isPending: status === "pending",
   });
+  const orderCode = shortOrderCode(paymentData?.externalReference);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[var(--brand-violet-950)] text-[var(--brand-cream)] p-4">
@@ -457,8 +526,12 @@ export default function SuccessPage() {
               </div>
               <div className="space-y-2 text-[var(--brand-cream)]/90">
                 <div className="flex justify-between border-b border-[var(--brand-violet-800)] pb-2">
+                  <span>Pedido:</span>
+                  <span className="text-amber-200">#{orderCode}</span>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-[var(--brand-violet-800)] pb-2">
                   <span>Referencia:</span>
-                  <span className="text-amber-200 text-xs break-all">{paymentData.externalReference || "-"}</span>
+                  <span className="text-right text-xs text-amber-200 break-all">{paymentData.externalReference || "-"}</span>
                 </div>
                 <div className="flex justify-between border-b border-[var(--brand-violet-800)] pb-2">
                   <span>Forma de pago:</span>
@@ -472,6 +545,33 @@ export default function SuccessPage() {
               <p className="text-center text-xs text-[var(--brand-cream)]/70 mt-4">
                 Continua por WhatsApp para enviar comprobante o coordinar la entrega.
               </p>
+            </div>
+          )}
+
+          {status === "pending" && orderSummary && (
+            <div className="mb-6 rounded border border-[var(--brand-violet-800)] bg-[var(--brand-violet-950)] p-5 text-sm">
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <h2 className="font-semibold text-[var(--brand-gold-300)]">Productos del pedido</h2>
+                <span className="text-[var(--brand-cream)]/80">{formatMoney(orderSummary.total)}</span>
+              </div>
+              <div className="space-y-3">
+                {orderSummary.items.map((item) => (
+                  <div
+                    key={`${item.productId}-${item.title}`}
+                    className="grid grid-cols-[1fr_auto] gap-3 border-b border-[var(--brand-violet-800)] pb-3 last:border-b-0 last:pb-0"
+                  >
+                    <div>
+                      <p className="font-medium text-[var(--brand-cream)]">{item.title}</p>
+                      <p className="mt-1 text-xs text-[var(--brand-cream)]/65">
+                        {item.qty} x {formatMoney(item.unitPrice)}
+                      </p>
+                    </div>
+                    <p className="text-right font-semibold text-amber-200">
+                      {formatMoney(item.qty * item.unitPrice)}
+                    </p>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -494,12 +594,12 @@ export default function SuccessPage() {
                 Continuar por WhatsApp
               </a>
             )}
-            <a
+            <Link
               href="/tienda"
               className="rounded-xl border border-[var(--brand-violet-700)] bg-[var(--brand-violet-800)]/80 px-5 py-3.5 text-center font-semibold tracking-wide text-[var(--brand-cream)] transition hover:-translate-y-0.5 hover:border-[var(--brand-gold-300)]/60 hover:bg-[var(--brand-violet-700)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
             >
               Volver a la Tienda
-            </a>
+            </Link>
           </div>
 
           {actionNotice && <p className="mt-4 text-center text-sm text-[var(--brand-cream)]/70">{actionNotice}</p>}

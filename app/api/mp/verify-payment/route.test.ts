@@ -2,12 +2,15 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/src/server/sheets/repository", () => ({
+  appendOrderAndDecrementStockInSheet: vi.fn(async () => undefined),
   appendOrderToSalesSheet: vi.fn(async () => undefined),
+  decrementProductsStockInSheet: vi.fn(async () => undefined),
   updateOrderRowInSalesSheet: vi.fn(async () => undefined),
 }));
 
 import { GET } from "@/app/api/mp/verify-payment/route";
 import { createOrder } from "@/src/server/orders/store";
+import { decrementProductsStockInSheet } from "@/src/server/sheets/repository";
 
 describe("verify-payment confirmation flow", () => {
   beforeEach(() => {
@@ -61,6 +64,13 @@ describe("verify-payment confirmation flow", () => {
     expect(response.status).toBe(200);
     expect(body.approved).toBe(true);
     expect(body.externalReference).toBe(ref);
+    expect(decrementProductsStockInSheet).toHaveBeenCalledWith(ref, [
+      {
+        productId: "p1",
+        qty: 1,
+        title: "Producto",
+      },
+    ]);
 
     fetchMock.mockRestore();
   });

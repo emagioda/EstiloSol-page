@@ -166,7 +166,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No se pudo crear la preferencia de pago" }, { status: 502 });
   }
 
-  await markPreferenceCreated(order.externalReference, { preferenceId: String(data.id) });
+  await markPreferenceCreated(
+    order.externalReference,
+    { preferenceId: String(data.id) },
+    { syncSheet: false }
+  );
   await trackBusinessEvent("checkout.preference.created", {
     externalReference: order.externalReference,
     preferenceId: String(data.id),
