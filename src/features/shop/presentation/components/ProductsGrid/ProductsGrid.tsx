@@ -1,9 +1,9 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ProductCard from "../ProductCard/ProductCard";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 
-const PRODUCTS_PER_BATCH = 20;
+const PRODUCTS_PER_BATCH = 24;
 const initialPagination = {
   productSignature: "",
   visibleCount: PRODUCTS_PER_BATCH,
@@ -12,11 +12,18 @@ const initialPagination = {
 export default function ProductsGrid({
   products,
   onQuickView,
+  catalogComplete = true,
+  catalogRefreshing = false,
+  onLoadMoreApproach,
 }: {
   products: Product[];
   onQuickView?: (product: Product) => void;
+  catalogComplete?: boolean;
+  catalogRefreshing?: boolean;
+  onLoadMoreApproach?: () => void;
 }) {
   const [pagination, setPagination] = useState(initialPagination);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const productSignature = useMemo(
     () => products.map((product) => product.id ?? "").join("|"),
     [products]
@@ -25,6 +32,25 @@ export default function ProductsGrid({
     pagination.productSignature === productSignature
       ? pagination.visibleCount
       : PRODUCTS_PER_BATCH;
+
+  useEffect(() => {
+    if (catalogComplete || !onLoadMoreApproach) return;
+
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          onLoadMoreApproach();
+        }
+      },
+      { rootMargin: "520px 0px" },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [catalogComplete, onLoadMoreApproach]);
 
   if (!products || products.length === 0) {
     return (
@@ -50,6 +76,16 @@ export default function ProductsGrid({
           />
         ))}
       </div>
+
+      {!catalogComplete && (
+        <div ref={loadMoreSentinelRef} className="mt-6 min-h-8 text-center" aria-live="polite">
+          {catalogRefreshing ? (
+            <p className="text-xs font-medium text-[var(--brand-cream)]/64">
+              Preparando más productos...
+            </p>
+          ) : null}
+        </div>
+      )}
 
       {hasMoreProducts && (
         <div className="mt-7 flex flex-col items-center gap-3 text-center">

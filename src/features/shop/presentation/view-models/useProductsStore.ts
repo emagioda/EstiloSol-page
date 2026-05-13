@@ -4,7 +4,7 @@ import {
   fetchProductsFromSheets,
   isMissingSheetsEndpointError,
 } from "@/src/features/shop/infrastructure/data/fetchProducts";
-import type { Product } from "@/src/features/shop/domain/entities/Product";
+import type { Departament, Product } from "@/src/features/shop/domain/entities/Product";
 
 export type FilterState = {
   searchTerm: string;
@@ -19,6 +19,16 @@ export type FilterState = {
 type ProductsStatus = "idle" | "loading" | "success" | "error";
 export type SelectedSpecsMap = Record<string, string>;
 export type SpecFiltersMap = Record<string, string[]>;
+export type CatalogFacets = Partial<
+  Record<
+    Departament,
+    {
+      categories: string[];
+      specifications: SpecFiltersMap;
+      specificationsByCategory: Record<string, SpecFiltersMap>;
+    }
+  >
+>;
 
 const SESSION_CATALOG_CACHE_KEY = "es:shop:catalog:session:v1";
 const CATALOG_CACHE_UPDATED_EVENT = "es:catalog-cache-updated";
@@ -28,6 +38,7 @@ const CATALOG_CACHE_UPDATED_EVENT = "es:catalog-cache-updated";
 // avoids re-fetching when moving between store/detail pages.
 let cachedProducts: Product[] | null = null;
 let cachedProductsSignature: string | null = null;
+let cachedProductsComplete = false;
 let catalogPrefetchPromise: Promise<boolean> | null = null;
 
 const normalizeSpecifications = (product: Product): Record<string, string> =>
@@ -35,16 +46,24 @@ const normalizeSpecifications = (product: Product): Record<string, string> =>
     ? product.specifications
     : {};
 
-const setMemoryCatalogCache = (products: Product[]) => {
+const setMemoryCatalogCache = (
+  products: Product[],
+  { complete = true }: { complete?: boolean } = {},
+) => {
+  if (!complete && cachedProductsComplete && cachedProducts && cachedProducts.length > 0) {
+    return;
+  }
+
   cachedProducts = products;
   cachedProductsSignature = productSignature(products);
+  cachedProductsComplete = complete;
 };
 
-const emitCatalogCacheUpdated = (products: Product[]) => {
+const emitCatalogCacheUpdated = (products: Product[], complete = true) => {
   if (typeof window === "undefined") return;
   window.dispatchEvent(
     new CustomEvent(CATALOG_CACHE_UPDATED_EVENT, {
-      detail: { products },
+      detail: { products, complete },
     })
   );
 };
@@ -76,6 +95,7 @@ export const hasSessionCatalogCache = () => {
 export const clearProductsCatalogSessionCache = () => {
   cachedProducts = null;
   cachedProductsSignature = null;
+  cachedProductsComplete = false;
 
   if (typeof window === "undefined") return;
 
@@ -126,19 +146,26 @@ const productSignature = (products: Product[]): string =>
     .sort()
     .join("~");
 
-const updateMemoryCatalogCache = (products: Product[]) => {
-  setMemoryCatalogCache(products);
-  emitCatalogCacheUpdated(products);
+const updateMemoryCatalogCache = (products: Product[], complete = true) => {
+  setMemoryCatalogCache(products, { complete });
+  emitCatalogCacheUpdated(products, complete);
 };
 
 const updateCatalogCache = (products: Product[]) => {
-  updateMemoryCatalogCache(products);
+  updateMemoryCatalogCache(products, true);
   writeSessionCachedProducts(products);
 };
 
-export const primeProductsCatalogCache = (products: Product[]) => {
+export const primeProductsCatalogCache = (
+  products: Product[],
+  { complete = false }: { complete?: boolean } = {},
+) => {
   if (products.length === 0) return;
-  updateCatalogCache(products);
+  setMemoryCatalogCache(products, { complete });
+  if (complete) {
+    writeSessionCachedProducts(products);
+    emitCatalogCacheUpdated(products, true);
+  }
 };
 
 const sortProducts = (
@@ -210,13 +237,13 @@ export const refreshProductsMemoryCacheFromSource = async (): Promise<boolean> =
 };
 
 export const prefetchProductsCatalogSession = async (): Promise<boolean> => {
-  if (cachedProducts && cachedProducts.length > 0) {
+  if (cachedProductsComplete && cachedProducts && cachedProducts.length > 0) {
     return true;
   }
 
   const sessionCachedProducts = readSessionCachedProducts();
   if (sessionCachedProducts && sessionCachedProducts.length > 0) {
-    updateMemoryCatalogCache(sessionCachedProducts);
+    updateMemoryCatalogCache(sessionCachedProducts, true);
     return true;
   }
 
@@ -242,8 +269,14 @@ export const prefetchProductsCatalogSession = async (): Promise<boolean> => {
 
 export const useProductsStore = ({
   initialProducts,
+  initialCatalogComplete = false,
+  initialFacets,
+  initialDepartament = "PELUQUERIA",
 }: {
   initialProducts?: Product[];
+  initialCatalogComplete?: boolean;
+  initialFacets?: CatalogFacets;
+  initialDepartament?: Departament;
 } = {}) => {
   const [products, setProducts] = useState<Product[]>(() => {
     if (cachedProducts && cachedProducts.length > 0) {
@@ -254,7 +287,7 @@ export const useProductsStore = ({
     }
 
     if (initialProducts && initialProducts.length > 0) {
-      setMemoryCatalogCache(initialProducts);
+      setMemoryCatalogCache(initialProducts, { complete: initialCatalogComplete });
       return initialProducts;
     }
 
@@ -268,11 +301,15 @@ export const useProductsStore = ({
       ? "success"
       : "idle"
   );
+  const [catalogComplete, setCatalogComplete] = useState(
+    cachedProductsComplete || (initialCatalogComplete && Boolean(initialProducts?.length))
+  );
+  const [catalogRefreshing, setCatalogRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [filters, setFilters] = useState<FilterState>({
     searchTerm: "",
-    departament: "PELUQUERIA",
+    departament: initialDepartament,
     category: null,
     sortBy: "newest",
     showOnlyPromos: false,
@@ -282,22 +319,24 @@ export const useProductsStore = ({
 
   useEffect(() => {
     if (initialProducts && initialProducts.length > 0) {
-      primeProductsCatalogCache(initialProducts);
+      primeProductsCatalogCache(initialProducts, { complete: initialCatalogComplete });
     }
-  }, [initialProducts]);
+  }, [initialCatalogComplete, initialProducts]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     const syncFromCache = (event: Event) => {
-      const customEvent = event as CustomEvent<{ products?: Product[] }>;
+      const customEvent = event as CustomEvent<{ products?: Product[]; complete?: boolean }>;
       const eventProducts = customEvent.detail?.products;
       const sourceProducts = Array.isArray(eventProducts) ? eventProducts : cachedProducts;
 
       if (!sourceProducts || sourceProducts.length === 0) return;
 
-      setMemoryCatalogCache(sourceProducts);
+      const complete = customEvent.detail?.complete ?? cachedProductsComplete;
+      setMemoryCatalogCache(sourceProducts, { complete });
       setProducts([...sourceProducts]);
+      setCatalogComplete(complete);
       setStatus("success");
       setErrorMessage(null);
     };
@@ -318,6 +357,7 @@ export const useProductsStore = ({
     const hydrateTimer = window.setTimeout(() => {
       setMemoryCatalogCache(sessionCachedProducts);
       setProducts([...sessionCachedProducts]);
+      setCatalogComplete(true);
       setStatus("success");
       setErrorMessage(null);
     }, 0);
@@ -326,14 +366,23 @@ export const useProductsStore = ({
   }, []);
 
   const loadProducts = useCallback(
-    async (forceRefresh = false): Promise<boolean> => {
-      if (!forceRefresh && cachedProducts && cachedProducts.length > 0) {
+    async (
+      forceRefresh = false,
+      options: { silent?: boolean } = {},
+    ): Promise<boolean> => {
+      if (!forceRefresh && cachedProductsComplete && cachedProducts && cachedProducts.length > 0) {
         setProducts(cachedProducts);
+        setCatalogComplete(true);
         setStatus("success");
         return true;
       }
 
-      setStatus("loading");
+      const silent = options.silent === true;
+      if (silent) {
+        setCatalogRefreshing(true);
+      } else {
+        setStatus("loading");
+      }
       setErrorMessage(null);
 
       try {
@@ -354,6 +403,7 @@ export const useProductsStore = ({
           return prev;
         });
 
+        setCatalogComplete(true);
         setStatus("success");
         return true;
       } catch (error) {
@@ -361,14 +411,20 @@ export const useProductsStore = ({
           console.error("Error fetching products:", error);
         }
 
-        setProducts([]);
-        setStatus("error");
         const message =
           error instanceof Error
             ? error.message
             : "No se pudo cargar el catalogo. Verifica tu conexion e intenta nuevamente.";
         setErrorMessage(message);
+        if (!silent) {
+          setProducts([]);
+          setStatus("error");
+        }
         return false;
+      } finally {
+        if (silent) {
+          setCatalogRefreshing(false);
+        }
       }
     },
     [status]
@@ -413,6 +469,17 @@ export const useProductsStore = ({
     () => applyContextFilters(products),
     [applyContextFilters, products]
   );
+  const selectedDepartament =
+    filters.departament === "BIJOUTERIE" ? "BIJOUTERIE" : "PELUQUERIA";
+  const canUseInitialFacets =
+    !catalogComplete &&
+    Boolean(initialFacets) &&
+    !filters.searchTerm.trim() &&
+    !filters.showOnlyPromos &&
+    !filters.showOnlyKits;
+  const initialDepartamentFacets = canUseInitialFacets
+    ? initialFacets?.[selectedDepartament]
+    : undefined;
 
   const filteredProducts = useMemo(() => {
     const withCategory = filters.category
@@ -423,6 +490,14 @@ export const useProductsStore = ({
   }, [contextFilteredProducts, filters.category, filters.selectedSpecs, filters.sortBy]);
 
   const categories = useMemo(() => {
+    if (initialDepartamentFacets) {
+      const cats = new Set(initialDepartamentFacets.categories);
+      if (filters.category) {
+        cats.add(filters.category);
+      }
+      return Array.from(cats).sort((a, b) => a.localeCompare(b));
+    }
+
     const cats = new Set<string>();
     contextFilteredProducts.forEach((product) => {
       if (product.category) {
@@ -433,7 +508,7 @@ export const useProductsStore = ({
       cats.add(filters.category);
     }
     return Array.from(cats).sort((a, b) => a.localeCompare(b));
-  }, [contextFilteredProducts, filters.category]);
+  }, [contextFilteredProducts, filters.category, initialDepartamentFacets]);
 
   const specsSourceProducts = useMemo(() => {
     if (!filters.category) {
@@ -446,6 +521,12 @@ export const useProductsStore = ({
   }, [contextFilteredProducts, filters.category]);
 
   const availableSpecifications = useMemo<SpecFiltersMap>(() => {
+    if (initialDepartamentFacets) {
+      return filters.category
+        ? initialDepartamentFacets.specificationsByCategory[filters.category] ?? {}
+        : initialDepartamentFacets.specifications;
+    }
+
     const specSets: Record<string, Set<string>> = {};
 
     specsSourceProducts.forEach((product) => {
@@ -471,7 +552,7 @@ export const useProductsStore = ({
           Array.from(valuesSet).sort((left, right) => left.localeCompare(right)),
         ])
     );
-  }, [specsSourceProducts]);
+  }, [filters.category, initialDepartamentFacets, specsSourceProducts]);
 
   const setSearchTerm = useCallback((term: string) => {
     setFilters((prev) => ({ ...prev, searchTerm: term }));
@@ -558,6 +639,8 @@ export const useProductsStore = ({
     status,
     errorMessage,
     loadProducts,
+    catalogComplete,
+    catalogRefreshing,
     filters,
     setSearchTerm,
     setDepartament,

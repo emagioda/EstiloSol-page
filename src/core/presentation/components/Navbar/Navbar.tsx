@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -9,7 +10,11 @@ import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useC
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import CartBadge from "@/src/features/shop/presentation/components/CartBadge/CartBadge";
 import TopInfoTicker from "@/src/core/presentation/components/TopInfoTicker/TopInfoTicker";
-import NavDrawer from "@/src/core/presentation/components/NavDrawer/NavDrawer";
+
+const NavDrawer = dynamic(
+  () => import("@/src/core/presentation/components/NavDrawer/NavDrawer"),
+  { ssr: false },
+);
 
 export default function Navbar() {
   const { brandName, logo } = brandConfig;
@@ -34,6 +39,7 @@ export default function Navbar() {
   ];
   const [showTicker, setShowTicker] = useState(true);
   const [navMenuOpen, setNavMenuOpen] = useState(false);
+  const [navDrawerMounted, setNavDrawerMounted] = useState(false);
   const [pendingAdminHref, setPendingAdminHref] = useState<string | null>(null);
   const cartCount = items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
   const cartTotal = items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0);
@@ -141,7 +147,10 @@ export default function Navbar() {
             <div className="flex items-center">
               <button
                 type="button"
-                onClick={() => setNavMenuOpen(true)}
+                onClick={() => {
+                  setNavDrawerMounted(true);
+                  setNavMenuOpen(true);
+                }}
                 className="inline-flex h-8 w-8 items-center justify-center text-[var(--brand-cream)] transition hover:text-[var(--brand-gold-300)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
                 aria-label="Abrir menú"
               >
@@ -310,7 +319,9 @@ export default function Navbar() {
         ) : null}
       </header>
 
-      <NavDrawer open={navMenuOpen} onClose={() => setNavMenuOpen(false)} />
+      {navDrawerMounted && (
+        <NavDrawer open={navMenuOpen} onClose={() => setNavMenuOpen(false)} />
+      )}
     </>
   );
 }

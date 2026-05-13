@@ -2,9 +2,8 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { useProductsStore } from "../view-models/useProductsStore";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs";
 import FormattedDescription from "@/src/features/shop/presentation/components/FormattedDescription";
@@ -19,8 +18,7 @@ import {
 
 type Props = {
   product: Product;
-  // slug is passed by the route; used to re-find product after a reload
-  slug?: string;
+  similarProducts?: Product[];
 };
 
 const formatMoney = (value: number) =>
@@ -57,42 +55,15 @@ const getShortDescription = (shortDescription?: string, description?: string) =>
   return clipped.length < normalizedDescription.length ? `${clipped}…` : clipped;
 };
 
-export default function ProductDetail({ product, slug }: Props) {
-  // load full catalog and sync; slug param is optional fallback if we
-  // don't have the original product prop (e.g. client-side navigation).
-  const { allProducts, status, loadProducts } = useProductsStore({
-    initialProducts: product ? [product] : []
-  });
-
-  useEffect(() => {
-    void loadProducts();
-  }, [loadProducts]);
-
-  const currentProduct = useMemo(() => {
-    if (status !== "success" || allProducts.length === 0) {
-      return product;
-    }
-
-    const idMatch = (p: Product) => p.id === product.id;
-    const slugMatch = slug
-      ? (p: Product) => p.slug === slug
-      : () => false;
-
-    return allProducts.find((p) => idMatch(p) || slugMatch(p)) ?? product;
-  }, [status, allProducts, product, slug]);
-
-  const similarProducts = useMemo(() => {
-    if (!currentProduct.category) {
-      return [];
-    }
-
-    return allProducts
-      .filter(
-        (candidate) =>
-          candidate.id !== currentProduct.id && candidate.category === currentProduct.category
-      )
-      .slice(0, 6);
-  }, [allProducts, currentProduct.category, currentProduct.id]);
+export default function ProductDetail({ product, similarProducts = [] }: Props) {
+  const currentProduct = product;
+  const visibleSimilarProducts = useMemo(
+    () =>
+      similarProducts
+        .filter((candidate) => candidate.id !== currentProduct.id)
+        .slice(0, 6),
+    [currentProduct.id, similarProducts],
+  );
 
   const images = useMemo(
     () =>
@@ -292,7 +263,7 @@ export default function ProductDetail({ product, slug }: Props) {
         <FormattedDescription description={longDescription} />
       </section>
 
-      {similarProducts.length > 0 && (
+      {visibleSimilarProducts.length > 0 && (
         <section className="mt-12">
           <h2 className="mb-4 text-lg font-semibold text-[var(--brand-gold-300)]">
             Tambien te puede gustar
@@ -300,7 +271,7 @@ export default function ProductDetail({ product, slug }: Props) {
           <div className="mb-6 h-px bg-gradient-to-r from-[var(--brand-gold-400)]/40 via-[var(--brand-gold-300)]/20 to-transparent" />
 
           <div className="-mx-1 flex snap-x snap-mandatory gap-4 overflow-x-auto px-1 pb-2">
-            {similarProducts.map((similarProduct) => {
+            {visibleSimilarProducts.map((similarProduct) => {
               const similarPrice = isValidPrice(similarProduct.price)
                 ? formatMoney(similarProduct.price)
                 : "Consultar";

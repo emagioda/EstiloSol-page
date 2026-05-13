@@ -1,14 +1,16 @@
 "use client";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   clearProductsCatalogSessionCache,
   hasSessionCatalogCache,
   useProductsStore,
+  type CatalogFacets,
+  type FilterState,
 } from "../view-models/useProductsStore";
-import type { Product } from "@/src/features/shop/domain/entities/Product";
+import type { Departament, Product } from "@/src/features/shop/domain/entities/Product";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
 import FiltersSidebar from "@/src/features/shop/presentation/components/FiltersSidebar/FiltersSidebar";
 import StoreToolbar from "@/src/features/shop/presentation/components/StoreToolbar/StoreToolbar";
@@ -27,6 +29,9 @@ const QuickViewModal = dynamic(
 
 type TiendaClientViewProps = {
   initialProducts: Product[];
+  initialCatalogComplete?: boolean;
+  initialDepartament?: Departament;
+  initialFacets?: CatalogFacets;
 };
 
 const sortOptions = [
@@ -64,6 +69,9 @@ const normalizeDepartamentParam = (value: string | null): string | null => {
 
 export default function TiendaClientView({
   initialProducts,
+  initialCatalogComplete = false,
+  initialDepartament = "PELUQUERIA",
+  initialFacets,
 }: TiendaClientViewProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -74,6 +82,8 @@ export default function TiendaClientView({
     status,
     errorMessage,
     loadProducts,
+    catalogComplete,
+    catalogRefreshing,
     filters,
     setSearchTerm,
     setDepartament,
@@ -89,7 +99,12 @@ export default function TiendaClientView({
     isQuickViewOpen,
     openQuickView,
     closeQuickView,
-  } = useProductsStore({ initialProducts });
+  } = useProductsStore({
+    initialProducts,
+    initialCatalogComplete,
+    initialDepartament,
+    initialFacets,
+  });
 
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filtersShouldRender, setFiltersShouldRender] = useState(false);
@@ -119,6 +134,53 @@ export default function TiendaClientView({
     departamentOptions.findIndex((option) => option.value === selectedWorld),
     0
   );
+  const ensureFullCatalog = useCallback(() => {
+    if (catalogComplete || catalogRefreshing) return;
+    void loadProducts(false, { silent: true });
+  }, [catalogComplete, catalogRefreshing, loadProducts]);
+  const handleSearchChange = useCallback(
+    (term: string) => {
+      ensureFullCatalog();
+      setSearchTerm(term);
+    },
+    [ensureFullCatalog, setSearchTerm]
+  );
+  const handleDepartamentChange = useCallback(
+    (departament: string | null) => {
+      ensureFullCatalog();
+      setDepartament(departament);
+    },
+    [ensureFullCatalog, setDepartament]
+  );
+  const handleCategoryChange = useCallback(
+    (category: string | null) => {
+      ensureFullCatalog();
+      setCategory(category);
+    },
+    [ensureFullCatalog, setCategory]
+  );
+  const handleSortChange = useCallback(
+    (sortBy: FilterState["sortBy"]) => {
+      ensureFullCatalog();
+      setSortBy(sortBy);
+    },
+    [ensureFullCatalog, setSortBy]
+  );
+  const handleTogglePromoFilter = useCallback(() => {
+    ensureFullCatalog();
+    togglePromoFilter();
+  }, [ensureFullCatalog, togglePromoFilter]);
+  const handleToggleKitFilter = useCallback(() => {
+    ensureFullCatalog();
+    toggleKitFilter();
+  }, [ensureFullCatalog, toggleKitFilter]);
+  const handleToggleSpecFilter = useCallback(
+    (specKey: string, specValue: string) => {
+      ensureFullCatalog();
+      toggleSpecFilter(specKey, specValue);
+    },
+    [ensureFullCatalog, toggleSpecFilter]
+  );
 
   const departamentFilteredProducts = products.filter(
     (p) =>
@@ -132,7 +194,7 @@ export default function TiendaClientView({
           {
             key: "promo",
             label: "Solo ofertas",
-            onRemove: togglePromoFilter,
+            onRemove: handleTogglePromoFilter,
           },
         ]
       : []),
@@ -141,7 +203,7 @@ export default function TiendaClientView({
           {
             key: "kits",
             label: "Combos",
-            onRemove: toggleKitFilter,
+            onRemove: handleToggleKitFilter,
           },
         ]
       : []),
@@ -150,14 +212,14 @@ export default function TiendaClientView({
           {
             key: "search",
             label: filters.searchTerm.trim(),
-            onRemove: () => setSearchTerm(""),
+            onRemove: () => handleSearchChange(""),
           },
         ]
       : []),
     ...Object.entries(filters.selectedSpecs).map(([specKey, value]) => ({
       key: `spec-${specKey}-${value}`,
       label: `${specKey}: ${value}`,
-      onRemove: () => toggleSpecFilter(specKey, value),
+      onRemove: () => handleToggleSpecFilter(specKey, value),
     })),
   ];
 
@@ -418,10 +480,11 @@ export default function TiendaClientView({
     if (previousRubroFromQuery !== undefined && previousRubroFromQuery === rubroFromQuery) return;
     if (rubroFromQuery === selectedWorld) return;
 
+    ensureFullCatalog();
     skipNextUrlSyncRef.current = true;
     setCategory(null);
     setDepartament(rubroFromQuery);
-  }, [rubroFromQuery, selectedWorld, setCategory, setDepartament]);
+  }, [ensureFullCatalog, rubroFromQuery, selectedWorld, setCategory, setDepartament]);
 
   useEffect(() => {
     if (skipNextUrlSyncRef.current) {
@@ -482,7 +545,7 @@ export default function TiendaClientView({
                   <button
                     key={opt.value}
                     type="button"
-                    onClick={() => { setCategory(null); setDepartament(opt.value); }}
+                    onClick={() => { setCategory(null); handleDepartamentChange(opt.value); }}
                     className="relative z-10 flex h-10 items-center justify-center rounded-full border border-transparent px-4 text-center transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                     aria-pressed={active}
                     aria-label={`Filtrar por ${opt.label}`}
@@ -513,7 +576,7 @@ export default function TiendaClientView({
                   <button
                     key={opt.value}
                     type="button"
-                    onClick={() => { setCategory(null); setDepartament(opt.value); }}
+                    onClick={() => { setCategory(null); handleDepartamentChange(opt.value); }}
                     className="relative z-10 flex h-9 items-center justify-center rounded-full border border-transparent px-3 text-center transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                     aria-pressed={active}
                     aria-label={`Filtrar por ${opt.label}`}
@@ -535,13 +598,13 @@ export default function TiendaClientView({
                 availableSpecifications={availableSpecifications}
                 filters={filters}
                 onFilterChange={{
-                  departament: setDepartament,
-                  category: setCategory,
-                  search: setSearchTerm,
-                  sort: setSortBy,
-                  togglePromo: togglePromoFilter,
-                  toggleKit: toggleKitFilter,
-                  toggleSpec: toggleSpecFilter,
+                  departament: handleDepartamentChange,
+                  category: handleCategoryChange,
+                  search: handleSearchChange,
+                  sort: handleSortChange,
+                  togglePromo: handleTogglePromoFilter,
+                  toggleKit: handleToggleKitFilter,
+                  toggleSpec: handleToggleSpecFilter,
                 }}
                 onClearFilters={clearFilters}
                 showSortSection={false}
@@ -553,8 +616,9 @@ export default function TiendaClientView({
               <div className="sticky top-[var(--header-height-mobile)] z-30 -mx-1 rounded-xl bg-[var(--brand-violet-950)] px-1 pt-1 md:hidden">
                 <StoreToolbar
                   searchTerm={filters.searchTerm}
-                  onSearchChange={setSearchTerm}
+                  onSearchChange={handleSearchChange}
                   onFiltersClick={() => {
+                    ensureFullCatalog();
                     setSortOpen(false);
                     setFiltersOpen(true);
                   }}
@@ -599,7 +663,8 @@ export default function TiendaClientView({
                     type="text"
                     placeholder="¿Qué estás buscando?"
                     value={filters.searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onChange={(e) => handleSearchChange(e.target.value)}
+                    onFocus={ensureFullCatalog}
                     className="w-full rounded-xl border border-white/20 bg-white/10 px-3.5 py-2.5 text-sm text-[var(--brand-cream)] placeholder-[var(--brand-cream)]/55 backdrop-blur-sm transition duration-200 focus:border-[var(--brand-gold-300)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]/55"
                   />
                   <span aria-hidden className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--brand-gold-300)]/90">🔍</span>
@@ -609,7 +674,7 @@ export default function TiendaClientView({
                   <div className="relative flex-1">
                     <select
                       value={filters.sortBy}
-                      onChange={(e) => setSortBy(e.target.value as typeof filters.sortBy)}
+                      onChange={(e) => handleSortChange(e.target.value as typeof filters.sortBy)}
                       className="w-full cursor-pointer appearance-none rounded-lg border border-white/20 bg-white/8 py-1.5 pl-3 pr-7 text-sm text-[var(--brand-cream)] transition hover:border-white/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
                     >
                       {sortOptions.map((opt) => (
@@ -647,6 +712,9 @@ export default function TiendaClientView({
                 <ProductsGrid
                   products={departamentFilteredProducts}
                   onQuickView={openQuickView}
+                  catalogComplete={catalogComplete}
+                  catalogRefreshing={catalogRefreshing}
+                  onLoadMoreApproach={ensureFullCatalog}
                 />
               )}
             </div>
@@ -660,13 +728,13 @@ export default function TiendaClientView({
               availableSpecifications={availableSpecifications}
               filters={filters}
               onFilterChange={{
-                departament: setDepartament,
-                category: setCategory,
-                search: setSearchTerm,
-                sort: setSortBy,
-                togglePromo: togglePromoFilter,
-                toggleKit: toggleKitFilter,
-                toggleSpec: toggleSpecFilter,
+                departament: handleDepartamentChange,
+                category: handleCategoryChange,
+                search: handleSearchChange,
+                sort: handleSortChange,
+                togglePromo: handleTogglePromoFilter,
+                toggleKit: handleToggleKitFilter,
+                toggleSpec: handleToggleSpecFilter,
               }}
               onClearFilters={clearFilters}
               isOpen={!filtersClosing}
@@ -720,7 +788,7 @@ export default function TiendaClientView({
                         value={option.value}
                         checked={active}
                         onChange={() => {
-                          setSortBy(option.value);
+                          handleSortChange(option.value);
                           setSortOpen(false);
                         }}
                         className="sr-only"

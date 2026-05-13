@@ -23,6 +23,31 @@ const loadProduct = async (slug: string): Promise<Product | undefined> => {
   return findProductBySlugOrId(products, slug);
 };
 
+const findSimilarProducts = (products: Product[], product: Product): Product[] => {
+  if (!product.category) return [];
+
+  return products
+    .filter(
+      (candidate) =>
+        candidate.id !== product.id &&
+        candidate.category === product.category &&
+        candidate.departament === product.departament,
+    )
+    .slice(0, 6);
+};
+
+const loadProductContext = async (
+  slug: string,
+): Promise<{ product?: Product; similarProducts: Product[] }> => {
+  const products = await fetchProductsFromCatalogSource();
+  const product = findProductBySlugOrId(products, slug);
+
+  return {
+    product,
+    similarProducts: product ? findSimilarProducts(products, product) : [],
+  };
+};
+
 const productUrl = (product: Product) => {
   const handle = product.slug || product.id;
   return `${baseUrl()}/tienda/producto/${encodeURIComponent(String(handle))}`;
@@ -97,9 +122,12 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function ProductDetailRoute({ params }: Props) {
   const resolvedParams = await params;
   let product: Product | undefined;
+  let similarProducts: Product[] = [];
 
   try {
-    product = await loadProduct(resolvedParams.slug);
+    const context = await loadProductContext(resolvedParams.slug);
+    product = context.product;
+    similarProducts = context.similarProducts;
   } catch (error) {
     console.error("Error obteniendo producto:", error);
   }
@@ -135,7 +163,7 @@ export default async function ProductDetailRoute({ params }: Props) {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: escapeJsonForHtml(jsonLd) }}
       />
-      <ProductDetail product={product} slug={resolvedParams.slug} />
+      <ProductDetail product={product} similarProducts={similarProducts} />
     </>
   );
 }
