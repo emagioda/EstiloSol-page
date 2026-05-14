@@ -36,12 +36,9 @@ export default function HomeSplit() {
               "--home-image-filter": isBookingSection
                 ? "brightness(0.54) saturate(0.92) contrast(1.04)"
                 : "brightness(0.62) saturate(0.9) contrast(1.02)",
-              "--home-image-hover-filter": isBookingSection
-                ? "brightness(0.68) saturate(1.03) contrast(1.08)"
-                : "brightness(0.76) saturate(1.05) contrast(1.06)",
-              "--home-image-rest-filter": "brightness(0.43) saturate(0.78) contrast(1.02)",
               "--home-veil-opacity": isBookingSection ? "0.34" : "0.42",
               "--home-veil-hover-opacity": isBookingSection ? "0.22" : "0.3",
+              "--home-veil-rest-opacity": isBookingSection ? "0.52" : "0.58",
             } as CSSProperties;
 
             return (
