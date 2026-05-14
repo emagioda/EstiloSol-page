@@ -105,6 +105,175 @@
   animation: pulse-dot 1.2s infinite;
 }
 
+.home-split {
+  --home-motion: cubic-bezier(0.22, 1, 0.36, 1);
+  background: #130d1a;
+}
+
+.home-panel {
+  flex-basis: 50%;
+  transition:
+    flex-basis 620ms var(--home-motion),
+    transform 620ms var(--home-motion);
+}
+
+.home-panel__image {
+  filter: var(--home-image-filter);
+  transform: scale(1.01);
+  transition:
+    filter 680ms var(--home-motion),
+    transform 920ms var(--home-motion);
+}
+
+.home-panel__veil {
+  opacity: var(--home-veil-opacity);
+  transition: opacity 620ms var(--home-motion);
+}
+
+.home-panel__wash {
+  background: linear-gradient(
+    180deg,
+    rgba(19, 13, 26, 0) 0%,
+    rgba(19, 13, 26, 0.3) 45%,
+    rgba(19, 13, 26, 0.68) 100%
+  );
+  opacity: 0.72;
+  transition: opacity 620ms var(--home-motion);
+}
+
+.home-panel__edge {
+  background: linear-gradient(
+    180deg,
+    rgba(248, 227, 176, 0) 0%,
+    rgba(248, 227, 176, 0.4) 25%,
+    rgba(248, 227, 176, 0.16) 70%,
+    rgba(248, 227, 176, 0) 100%
+  );
+  opacity: 0.5;
+}
+
+.home-panel__spotlight {
+  background:
+    radial-gradient(circle at 50% 48%, rgba(248, 227, 176, 0.18), transparent 34%),
+    linear-gradient(120deg, rgba(248, 227, 176, 0.12), transparent 42%);
+  opacity: 0;
+  transition: opacity 620ms var(--home-motion);
+}
+
+.home-panel__content {
+  transform: translateY(0);
+  transition:
+    opacity 520ms var(--home-motion),
+    transform 620ms var(--home-motion);
+}
+
+.home-panel__kicker,
+.home-panel__cta {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 14px 34px rgba(18, 8, 35, 0.22);
+  transition:
+    background-color 260ms ease,
+    border-color 260ms ease,
+    box-shadow 320ms ease,
+    color 260ms ease,
+    transform 320ms ease;
+}
+
+.home-panel__title,
+.home-panel__subtitle,
+.home-panel__trust {
+  transition:
+    opacity 420ms ease,
+    transform 520ms var(--home-motion);
+}
+
+@media (min-width: 768px) {
+  .home-split:hover .home-panel {
+    flex-basis: 44%;
+  }
+
+  .home-split:hover .home-panel:hover,
+  .home-split:hover .home-panel:focus-within {
+    flex-basis: 56%;
+  }
+
+  .home-split:hover .home-panel:not(:hover):not(:focus-within) .home-panel__image {
+    filter: var(--home-image-rest-filter);
+    transform: scale(1.015);
+  }
+
+  .home-split:hover .home-panel:not(:hover):not(:focus-within) .home-panel__content {
+    opacity: 0.82;
+    transform: translateY(3px) scale(0.985);
+  }
+
+  .home-panel:hover .home-panel__image,
+  .home-panel:focus-within .home-panel__image {
+    filter: var(--home-image-hover-filter);
+    transform: scale(1.075);
+  }
+
+  .home-panel:hover .home-panel__veil,
+  .home-panel:focus-within .home-panel__veil {
+    opacity: var(--home-veil-hover-opacity);
+  }
+
+  .home-panel:hover .home-panel__wash,
+  .home-panel:focus-within .home-panel__wash {
+    opacity: 0.55;
+  }
+
+  .home-panel:hover .home-panel__spotlight,
+  .home-panel:focus-within .home-panel__spotlight {
+    opacity: 1;
+  }
+
+  .home-panel:hover .home-panel__content,
+  .home-panel:focus-within .home-panel__content {
+    transform: translateY(-7px);
+  }
+
+  .home-panel:hover .home-panel__kicker,
+  .home-panel:focus-within .home-panel__kicker {
+    border-color: rgba(248, 227, 176, 0.82);
+    background: rgba(18, 8, 35, 0.5);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 16px 38px rgba(18, 8, 35, 0.25);
+  }
+
+  .home-panel:hover .home-panel__cta,
+  .home-panel:focus-within .home-panel__cta {
+    border-color: var(--brand-gold-300);
+    background: var(--brand-gold-300);
+    color: #3a1f5f !important;
+    font-weight: 700;
+    text-shadow: none !important;
+    transform: translateY(-2px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.44),
+      0 18px 38px rgba(248, 227, 176, 0.2),
+      0 16px 38px rgba(18, 8, 35, 0.32);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-panel,
+  .home-panel__image,
+  .home-panel__veil,
+  .home-panel__wash,
+  .home-panel__spotlight,
+  .home-panel__content,
+  .home-panel__kicker,
+  .home-panel__cta,
+  .home-panel__title,
+  .home-panel__subtitle,
+  .home-panel__trust {
+    transition-duration: 1ms !important;
+  }
+}
+
 
 .scrollbar-hide {
   -ms-overflow-style: none;

@@ -1,7 +1,7 @@
 "use client";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   clearProductsCatalogSessionCache,
@@ -67,6 +67,74 @@ const normalizeDepartamentParam = (value: string | null): string | null => {
   return null;
 };
 
+const SHOP_SCROLL_CACHE_KEY = "es:shop:scroll:v1";
+
+type ShopScrollCache = {
+  locationKey: string;
+  scrollY: number;
+  updatedAt: number;
+};
+
+const readShopScrollCache = (): ShopScrollCache | null => {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(SHOP_SCROLL_CACHE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const cache = parsed as Partial<ShopScrollCache>;
+    if (
+      typeof cache.locationKey !== "string" ||
+      typeof cache.scrollY !== "number" ||
+      !Number.isFinite(cache.scrollY)
+    ) {
+      return null;
+    }
+
+    return {
+      locationKey: cache.locationKey,
+      scrollY: cache.scrollY,
+      updatedAt: typeof cache.updatedAt === "number" ? cache.updatedAt : 0,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeShopScrollCache = (locationKey: string, scrollY: number) => {
+  if (typeof window === "undefined" || !locationKey) return;
+
+  try {
+    window.sessionStorage.setItem(
+      SHOP_SCROLL_CACHE_KEY,
+      JSON.stringify({
+        locationKey,
+        scrollY: Math.max(0, Math.round(scrollY)),
+        updatedAt: Date.now(),
+      } satisfies ShopScrollCache)
+    );
+  } catch {
+    return;
+  }
+};
+
+const restoreWindowScroll = (scrollY: number) => {
+  if (typeof window === "undefined") return;
+
+  const restore = () => {
+    window.scrollTo({ top: Math.max(0, scrollY), left: 0, behavior: "auto" });
+  };
+
+  restore();
+  window.requestAnimationFrame(() => {
+    restore();
+    window.requestAnimationFrame(restore);
+  });
+  window.setTimeout(restore, 120);
+};
+
 export default function TiendaClientView({
   initialProducts,
   initialCatalogComplete = false,
@@ -76,6 +144,8 @@ export default function TiendaClientView({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const rubroFromQuery = normalizeDepartamentParam(searchParams.get("rubro"));
+  const effectiveInitialDepartament = (rubroFromQuery ?? initialDepartament) as Departament;
   const {
     products,
     loading,
@@ -102,7 +172,7 @@ export default function TiendaClientView({
   } = useProductsStore({
     initialProducts,
     initialCatalogComplete,
-    initialDepartament,
+    initialDepartament: effectiveInitialDepartament,
     initialFacets,
   });
 
@@ -119,6 +189,7 @@ export default function TiendaClientView({
   const filtersShouldRenderRef = useRef(false);
   const sortOpenRef = useRef(false);
   const introBlockRef = useRef<HTMLDivElement | null>(null);
+  const quickViewScrollYRef = useRef(0);
   const skipNextUrlSyncRef = useRef(false);
   const previousRubroFromQueryRef = useRef<string | null | undefined>(undefined);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
@@ -127,9 +198,12 @@ export default function TiendaClientView({
 
   const availableCategories = categories;
   const selectedWorld = filters.departament ?? "PELUQUERIA";
-  const rubroFromQuery = normalizeDepartamentParam(searchParams.get("rubro"));
   const shouldRefreshCatalog = searchParams.get("refresh") === "1";
   const hasInitialCatalog = initialProducts.length > 0;
+  const shopLocationKey = useMemo(() => {
+    const query = searchParams.toString();
+    return query ? `${pathname}?${query}` : pathname ?? "/tienda";
+  }, [pathname, searchParams]);
   const selectedWorldIndex = Math.max(
     departamentOptions.findIndex((option) => option.value === selectedWorld),
     0
@@ -138,6 +212,32 @@ export default function TiendaClientView({
     if (catalogComplete || catalogRefreshing) return;
     void loadProducts(false, { silent: true });
   }, [catalogComplete, catalogRefreshing, loadProducts]);
+
+  const syncDepartamentToUrl = useCallback(
+    (departament: string, mode: "push" | "replace" = "replace") => {
+      if (!pathname) return;
+
+      const normalizedDepartament = normalizeDepartamentParam(departament);
+      if (!normalizedDepartament) return;
+
+      const params = new URLSearchParams(searchParams.toString());
+      const desiredRubro = normalizedDepartament.toLowerCase();
+
+      if (params.get("rubro") === desiredRubro) return;
+
+      params.set("rubro", desiredRubro);
+      const nextUrl = `${pathname}?${params.toString()}`;
+
+      if (mode === "push") {
+        router.push(nextUrl, { scroll: false });
+        return;
+      }
+
+      router.replace(nextUrl, { scroll: false });
+    },
+    [pathname, router, searchParams]
+  );
+
   const handleSearchChange = useCallback(
     (term: string) => {
       ensureFullCatalog();
@@ -148,9 +248,14 @@ export default function TiendaClientView({
   const handleDepartamentChange = useCallback(
     (departament: string | null) => {
       ensureFullCatalog();
+      const normalizedDepartament = normalizeDepartamentParam(departament);
+      if (normalizedDepartament) {
+        skipNextUrlSyncRef.current = true;
+        syncDepartamentToUrl(normalizedDepartament, "push");
+      }
       setDepartament(departament);
     },
-    [ensureFullCatalog, setDepartament]
+    [ensureFullCatalog, setDepartament, syncDepartamentToUrl]
   );
   const handleCategoryChange = useCallback(
     (category: string | null) => {
@@ -347,12 +452,47 @@ export default function TiendaClientView({
   }, []);
 
   useEffect(() => {
+    const saveScroll = () => {
+      writeShopScrollCache(shopLocationKey, window.scrollY);
+    };
+
+    window.addEventListener("pagehide", saveScroll);
+    window.addEventListener("beforeunload", saveScroll);
+
+    return () => {
+      saveScroll();
+      window.removeEventListener("pagehide", saveScroll);
+      window.removeEventListener("beforeunload", saveScroll);
+    };
+  }, [shopLocationKey]);
+
+  useEffect(() => {
+    if (loading || status === "loading") return;
+
+    const cachedScroll = readShopScrollCache();
+    if (!cachedScroll || cachedScroll.locationKey !== shopLocationKey) return;
+    if (Date.now() - cachedScroll.updatedAt > 1000 * 60 * 30) return;
+
+    restoreWindowScroll(cachedScroll.scrollY);
+  }, [loading, shopLocationKey, status]);
+
+  useEffect(() => {
     if (!isQuickViewOpen) return;
 
-    window.history.pushState({ ...(window.history.state ?? {}), shopQuickViewOpen: true }, "", window.location.href);
+    const quickViewScrollY = quickViewScrollYRef.current;
+    window.history.pushState(
+      {
+        ...(window.history.state ?? {}),
+        shopQuickViewOpen: true,
+        shopScrollY: quickViewScrollY,
+      },
+      "",
+      window.location.href
+    );
 
     const handlePopState = () => {
       closeQuickView();
+      restoreWindowScroll(quickViewScrollY);
     };
 
     window.addEventListener("popstate", handlePopState);
@@ -516,6 +656,14 @@ export default function TiendaClientView({
       onViewCart: () => setOpen(true),
     });
   };
+
+  const handleOpenQuickView = useCallback(
+    (product: Product) => {
+      quickViewScrollYRef.current = window.scrollY;
+      openQuickView(product);
+    },
+    [openQuickView]
+  );
 
   return (
     <main className="min-h-screen bg-[var(--brand-violet-950)]">
@@ -711,7 +859,7 @@ export default function TiendaClientView({
               ) : (
                 <ProductsGrid
                   products={departamentFilteredProducts}
-                  onQuickView={openQuickView}
+                  onQuickView={handleOpenQuickView}
                   catalogComplete={catalogComplete}
                   catalogRefreshing={catalogRefreshing}
                   onLoadMoreApproach={ensureFullCatalog}

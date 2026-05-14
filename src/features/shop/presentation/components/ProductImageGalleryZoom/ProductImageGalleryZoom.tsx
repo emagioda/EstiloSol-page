@@ -107,11 +107,11 @@ export default function ProductImageGalleryZoom({
     ? "mt-4 gap-2 md:mt-0 md:flex md:flex-col md:w-16 md:order-first"
     : "mt-4 grid grid-cols-5 gap-2 md:mt-0 md:w-16 md:flex-col md:flex md:order-first";
 
-  // layout: normally we switch to row on md when thumbnails exist,
-  // but the optional `alwaysColumn` prop forces a vertical stack.
+  // Use the same desktop gallery layout even for a single image, so the
+  // thumbnail rail never jumps above the main product photo on PDP pages.
   const galleryLayoutClassName = alwaysColumn
     ? "flex flex-col"
-    : thumbnailsDesktopOnly || images.length > 1
+    : thumbnailsDesktopOnly || images.length > 0
     ? "flex flex-col md:flex-row md:gap-4 md:items-start"
     : "flex flex-col";
 
