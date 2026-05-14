@@ -263,10 +263,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .home-panel,
+  .home-panel {
+    transition: flex-basis 260ms ease-out;
+  }
+
   .home-panel__image,
-  .home-panel__veil,
-  .home-panel__wash,
   .home-panel__spotlight,
   .home-panel__content,
   .home-panel__kicker,
@@ -276,13 +277,21 @@
   .home-panel__trust {
     transition-duration: 1ms !important;
   }
+
+  .home-panel__veil,
+  .home-panel__wash {
+    transition: opacity 180ms ease-out;
+  }
 }
 
 @media (min-width: 768px) and (prefers-reduced-motion: reduce) {
-  .home-split:hover .home-panel,
+  .home-split:hover .home-panel {
+    flex-basis: 47%;
+  }
+
   .home-split:hover .home-panel:hover,
   .home-split:hover .home-panel:focus-within {
-    flex-basis: 50%;
+    flex-basis: 53%;
   }
 
   .home-split:hover .home-panel:not(:hover):not(:focus-within) .home-panel__image,
