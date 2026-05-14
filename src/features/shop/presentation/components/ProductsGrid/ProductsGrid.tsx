@@ -2,6 +2,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ProductCard from "../ProductCard/ProductCard";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import {
+  getCurrentShopLocationKey,
+  isMatchingShopListingCache,
+  isShopScrollRestoreRequested,
+  readShopScrollCache,
+} from "@/src/features/shop/presentation/lib/shopScrollRestoration";
 
 const PRODUCTS_PER_BATCH = 24;
 const PAGINATION_CACHE_KEY = "es:shop:products-grid-pagination:v1";
@@ -50,6 +56,12 @@ const writeCachedVisibleCount = (
   }
 };
 
+const visibleCountForProductIndex = (index: number, productCount: number) =>
+  clampVisibleCount(
+    Math.ceil((index + 1) / PRODUCTS_PER_BATCH) * PRODUCTS_PER_BATCH,
+    productCount,
+  );
+
 export default function ProductsGrid({
   products,
   onQuickView,
@@ -67,17 +79,25 @@ export default function ProductsGrid({
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const productSignature = useMemo(
     () => products.map((product) => product.id ?? "").join("|"),
-    [products]
+    [products],
   );
   const visibleCount =
     pagination.productSignature === productSignature
       ? pagination.visibleCount
       : PRODUCTS_PER_BATCH;
+  const hasMoreProducts = visibleCount < products.length;
 
   useEffect(() => {
     if (!productSignature) return;
 
-    const cachedVisibleCount = readCachedVisibleCount(productSignature, products.length);
+    const cachedScroll = readShopScrollCache();
+    const shouldRestoreCachedPageSize =
+      cachedScroll &&
+      isMatchingShopListingCache(cachedScroll.locationKey, getCurrentShopLocationKey()) &&
+      isShopScrollRestoreRequested(cachedScroll);
+    const cachedVisibleCount = shouldRestoreCachedPageSize
+      ? readCachedVisibleCount(productSignature, products.length)
+      : PRODUCTS_PER_BATCH;
 
     const restoreTimer = window.setTimeout(() => {
       setPagination((prev) => {
@@ -99,35 +119,91 @@ export default function ProductsGrid({
   }, [productSignature, products.length]);
 
   useEffect(() => {
-    if (catalogComplete || !onLoadMoreApproach) return;
+    const cachedScroll = readShopScrollCache();
+    if (!cachedScroll) return;
+    if (!isMatchingShopListingCache(cachedScroll.locationKey, getCurrentShopLocationKey())) return;
+    if (!isShopScrollRestoreRequested(cachedScroll)) return;
+    if (!cachedScroll.productId && !cachedScroll.productHandle) return;
+
+    const targetProductIndex = products.findIndex(
+      (product) =>
+        product.id === cachedScroll.productId ||
+        product.slug === cachedScroll.productHandle ||
+        product.id === cachedScroll.productHandle,
+    );
+    if (targetProductIndex < 0) return;
+
+    const targetVisibleCount = visibleCountForProductIndex(targetProductIndex, products.length);
+
+    const restoreTargetTimer = window.setTimeout(() => {
+      setPagination((prev) => {
+        if (
+          prev.productSignature === productSignature &&
+          prev.visibleCount >= targetVisibleCount
+        ) {
+          return prev;
+        }
+
+        return {
+          productSignature,
+          visibleCount: targetVisibleCount,
+        };
+      });
+    }, 0);
+
+    return () => window.clearTimeout(restoreTargetTimer);
+  }, [productSignature, products]);
+
+  useEffect(() => {
+    if (catalogComplete && !hasMoreProducts) return;
 
     const sentinel = loadMoreSentinelRef.current;
     if (!sentinel || typeof IntersectionObserver === "undefined") return;
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          onLoadMoreApproach();
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+
+        if (!catalogComplete) {
+          onLoadMoreApproach?.();
+        }
+
+        if (hasMoreProducts) {
+          const nextVisibleCount = Math.min(visibleCount + PRODUCTS_PER_BATCH, products.length);
+          writeCachedVisibleCount(productSignature, nextVisibleCount, products.length);
+          setPagination({
+            productSignature,
+            visibleCount: nextVisibleCount,
+          });
         }
       },
-      { rootMargin: "520px 0px" },
+      { rootMargin: "720px 0px" },
     );
 
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [catalogComplete, onLoadMoreApproach]);
+  }, [
+    catalogComplete,
+    hasMoreProducts,
+    onLoadMoreApproach,
+    productSignature,
+    products.length,
+    visibleCount,
+  ]);
 
   if (!products || products.length === 0) {
     return (
       <div className="rounded-2xl border border-white/12 bg-white/6 p-6 py-12 text-center text-[var(--brand-cream)]/80">
         <h3 className="text-lg font-medium">No encontramos productos con esos filtros</h3>
-        <p className="mt-2 text-sm text-[var(--brand-cream)]/80">Probá quitar algunos filtros o buscá otro término.</p>
+        <p className="mt-2 text-sm text-[var(--brand-cream)]/80">
+          Proba quitar algunos filtros o busca otro termino.
+        </p>
       </div>
     );
   }
 
   const visibleProducts = products.slice(0, visibleCount);
-  const hasMoreProducts = visibleCount < products.length;
+  const shouldRenderLoadSentinel = hasMoreProducts || !catalogComplete;
 
   return (
     <>
@@ -142,35 +218,13 @@ export default function ProductsGrid({
         ))}
       </div>
 
-      {!catalogComplete && (
-        <div ref={loadMoreSentinelRef} className="mt-6 min-h-8 text-center" aria-live="polite">
+      {shouldRenderLoadSentinel && (
+        <div ref={loadMoreSentinelRef} className="mt-6 min-h-10 text-center" aria-live="polite">
           {catalogRefreshing ? (
             <p className="text-xs font-medium text-[var(--brand-cream)]/64">
-              Preparando más productos...
+              Preparando mas productos...
             </p>
           ) : null}
-        </div>
-      )}
-
-      {hasMoreProducts && (
-        <div className="mt-7 flex flex-col items-center gap-3 text-center">
-          <p className="text-xs font-medium text-[var(--brand-cream)]/70">
-            Mostrando {visibleProducts.length} de {products.length} productos
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              const nextVisibleCount = Math.min(visibleCount + PRODUCTS_PER_BATCH, products.length);
-              writeCachedVisibleCount(productSignature, nextVisibleCount, products.length);
-              setPagination({
-                productSignature,
-                visibleCount: nextVisibleCount,
-              });
-            }}
-            className="inline-flex min-h-11 items-center justify-center rounded-full border border-[var(--brand-gold-300)] bg-[var(--brand-gold-300)] px-7 text-sm font-bold text-[var(--brand-violet-950)] shadow-[0_10px_24px_rgba(45,22,75,0.22)] transition duration-200 hover:-translate-y-0.5 hover:border-[var(--brand-cream)] hover:bg-[var(--brand-cream)] hover:text-[var(--brand-violet-950)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-950)]"
-          >
-            Ver más productos
-          </button>
         </div>
       )}
     </>

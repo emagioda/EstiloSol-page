@@ -1,10 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import type { MouseEventHandler } from "react";
 
 type BreadcrumbItem = {
   label: string;
   href?: string;
+  onClick?: MouseEventHandler<HTMLAnchorElement>;
+  scroll?: boolean;
 };
 
 type Props = {
@@ -30,6 +33,8 @@ export default function Breadcrumbs({ items }: Props) {
             ) : (
               <Link
                 href={item.href || "#"}
+                onClick={item.onClick}
+                scroll={item.scroll}
                 className="uppercase text-[var(--brand-gold-300)] transition hover:text-[var(--brand-gold-400)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-950)] rounded-sm"
               >
                 {item.label}

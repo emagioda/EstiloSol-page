@@ -2,12 +2,17 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type MouseEvent } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs";
 import FormattedDescription from "@/src/features/shop/presentation/components/FormattedDescription";
 import { showCartAddedToast } from "@/src/features/shop/presentation/lib/cartToast";
+import {
+  getLastShopListingHref,
+  requestShopScrollRestoreForNextVisit,
+} from "@/src/features/shop/presentation/lib/shopScrollRestoration";
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
@@ -74,6 +79,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
   );
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [qty, setQty] = useState(1);
+  const router = useRouter();
   const { addItem, items } = useCart();
   const { setOpen } = useCartDrawer();
 
@@ -99,6 +105,18 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
     typeof currentProduct.description === "string" && currentProduct.description.trim().length > 0
       ? currentProduct.description
       : LONG_DESCRIPTION_PLACEHOLDER;
+
+  const handleShopBreadcrumbClick = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>) => {
+      const shopHref = getLastShopListingHref("/tienda");
+      if (shopHref === "/tienda") return;
+
+      event.preventDefault();
+      requestShopScrollRestoreForNextVisit();
+      router.push(shopHref, { scroll: false });
+    },
+    [router]
+  );
 
   const handleAddToCart = () => {
     if (!canAddToCart) return;
@@ -137,7 +155,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
       <Breadcrumbs
         items={[
           { label: "INICIO", href: "/" },
-          { label: "Tienda", href: "/tienda" },
+          { label: "Tienda", href: "/tienda", onClick: handleShopBreadcrumbClick },
           { label: currentProduct.name },
         ]}
       />

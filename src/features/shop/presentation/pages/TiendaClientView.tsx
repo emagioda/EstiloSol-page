@@ -18,6 +18,15 @@ import LoadingGrid from "@/src/features/shop/presentation/components/LoadingGrid
 import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs";
 import BackToTopButton from "@/src/features/shop/presentation/components/BackToTopButton/BackToTopButton";
 import { showCartAddedToast } from "@/src/features/shop/presentation/lib/cartToast";
+import {
+  clearShopScrollRestoreRequest,
+  getShopScrollCacheRestoreKey,
+  isMatchingShopListingCache,
+  isShopScrollRestoreRequested,
+  readShopScrollCache,
+  restoreWindowScroll,
+  writeShopScrollCache,
+} from "@/src/features/shop/presentation/lib/shopScrollRestoration";
 import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
@@ -65,74 +74,6 @@ const normalizeDepartamentParam = (value: string | null): string | null => {
   }
 
   return null;
-};
-
-const SHOP_SCROLL_CACHE_KEY = "es:shop:scroll:v1";
-
-type ShopScrollCache = {
-  locationKey: string;
-  scrollY: number;
-  updatedAt: number;
-};
-
-const readShopScrollCache = (): ShopScrollCache | null => {
-  if (typeof window === "undefined") return null;
-
-  try {
-    const raw = window.sessionStorage.getItem(SHOP_SCROLL_CACHE_KEY);
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return null;
-
-    const cache = parsed as Partial<ShopScrollCache>;
-    if (
-      typeof cache.locationKey !== "string" ||
-      typeof cache.scrollY !== "number" ||
-      !Number.isFinite(cache.scrollY)
-    ) {
-      return null;
-    }
-
-    return {
-      locationKey: cache.locationKey,
-      scrollY: cache.scrollY,
-      updatedAt: typeof cache.updatedAt === "number" ? cache.updatedAt : 0,
-    };
-  } catch {
-    return null;
-  }
-};
-
-const writeShopScrollCache = (locationKey: string, scrollY: number) => {
-  if (typeof window === "undefined" || !locationKey) return;
-
-  try {
-    window.sessionStorage.setItem(
-      SHOP_SCROLL_CACHE_KEY,
-      JSON.stringify({
-        locationKey,
-        scrollY: Math.max(0, Math.round(scrollY)),
-        updatedAt: Date.now(),
-      } satisfies ShopScrollCache)
-    );
-  } catch {
-    return;
-  }
-};
-
-const restoreWindowScroll = (scrollY: number) => {
-  if (typeof window === "undefined") return;
-
-  const restore = () => {
-    window.scrollTo({ top: Math.max(0, scrollY), left: 0, behavior: "auto" });
-  };
-
-  restore();
-  window.requestAnimationFrame(() => {
-    restore();
-    window.requestAnimationFrame(restore);
-  });
-  window.setTimeout(restore, 120);
 };
 
 export default function TiendaClientView({
@@ -191,6 +132,10 @@ export default function TiendaClientView({
   const introBlockRef = useRef<HTMLDivElement | null>(null);
   const quickViewScrollYRef = useRef(0);
   const skipNextUrlSyncRef = useRef(false);
+  const restoredScrollCacheKeyRef = useRef<string | null>(null);
+  const cancelActiveScrollRestoreRef = useRef<(() => void) | null>(null);
+  const handledShopVisitKeyRef = useRef<string | null>(null);
+  const clearRestoreRequestTimerRef = useRef<number | null>(null);
   const previousRubroFromQueryRef = useRef<string | null | undefined>(undefined);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
   const { setOpen } = useCartDrawer();
@@ -442,12 +387,27 @@ export default function TiendaClientView({
 
   useEffect(() => {
     return () => {
+      cancelActiveScrollRestoreRef.current?.();
+      if (clearRestoreRequestTimerRef.current !== null) {
+        window.clearTimeout(clearRestoreRequestTimerRef.current);
+      }
       if (filtersCloseTimerRef.current !== null) {
         window.clearTimeout(filtersCloseTimerRef.current);
       }
       if (sortCloseTimerRef.current !== null) {
         window.clearTimeout(sortCloseTimerRef.current);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!("scrollRestoration" in window.history)) return;
+
+    const previousScrollRestoration = window.history.scrollRestoration;
+    window.history.scrollRestoration = "manual";
+
+    return () => {
+      window.history.scrollRestoration = previousScrollRestoration;
     };
   }, []);
 
@@ -460,7 +420,6 @@ export default function TiendaClientView({
     window.addEventListener("beforeunload", saveScroll);
 
     return () => {
-      saveScroll();
       window.removeEventListener("pagehide", saveScroll);
       window.removeEventListener("beforeunload", saveScroll);
     };
@@ -468,12 +427,38 @@ export default function TiendaClientView({
 
   useEffect(() => {
     if (loading || status === "loading") return;
+    if (handledShopVisitKeyRef.current === shopLocationKey) return;
 
     const cachedScroll = readShopScrollCache();
-    if (!cachedScroll || cachedScroll.locationKey !== shopLocationKey) return;
-    if (Date.now() - cachedScroll.updatedAt > 1000 * 60 * 30) return;
+    const shouldRestore =
+      cachedScroll &&
+      isMatchingShopListingCache(cachedScroll.locationKey, shopLocationKey) &&
+      Date.now() - cachedScroll.updatedAt <= 1000 * 60 * 30 &&
+      isShopScrollRestoreRequested(cachedScroll);
 
-    restoreWindowScroll(cachedScroll.scrollY);
+    handledShopVisitKeyRef.current = shopLocationKey;
+
+    if (!shouldRestore) {
+      cancelActiveScrollRestoreRef.current?.();
+      clearShopScrollRestoreRequest();
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      return;
+    }
+
+    const restoreKey = getShopScrollCacheRestoreKey(cachedScroll);
+    if (restoredScrollCacheKeyRef.current === restoreKey) return;
+
+    restoredScrollCacheKeyRef.current = restoreKey;
+    cancelActiveScrollRestoreRef.current?.();
+    cancelActiveScrollRestoreRef.current = restoreWindowScroll(cachedScroll.scrollY);
+
+    if (clearRestoreRequestTimerRef.current !== null) {
+      window.clearTimeout(clearRestoreRequestTimerRef.current);
+    }
+    clearRestoreRequestTimerRef.current = window.setTimeout(() => {
+      clearShopScrollRestoreRequest();
+      clearRestoreRequestTimerRef.current = null;
+    }, 700);
   }, [loading, shopLocationKey, status]);
 
   useEffect(() => {

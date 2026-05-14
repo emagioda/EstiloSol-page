@@ -3,6 +3,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { memo } from "react";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import { rememberCurrentShopScroll } from "@/src/features/shop/presentation/lib/shopScrollRestoration";
 import {
   getStockLabel,
   isProductPurchasable,
@@ -35,6 +36,12 @@ function ProductCard({
     : null;
 
   const detailHref = `/tienda/producto/${product.slug || product.id}`;
+  const rememberScrollForProduct = () => {
+    rememberCurrentShopScroll({
+      id: product.id,
+      handle: product.slug || product.id,
+    });
+  };
 
   const thumb = product.images && product.images.length > 0 ? product.images[0] : undefined;
   const stockLabel = getStockLabel(product);
@@ -142,7 +149,13 @@ function ProductCard({
 
   return (
     <article className="animate-fade-up flex h-full flex-col overflow-hidden rounded-2xl border border-[var(--brand-gold-300)]/22 bg-white/[0.14] text-[var(--brand-cream)] shadow-lg shadow-black/22 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/60 hover:bg-white/[0.18] hover:shadow-2xl hover:shadow-black/30">
-      <Link href={detailHref} className="group flex h-full flex-col" aria-label={`Ver detalle de ${product.name}`}>
+      <Link
+        href={detailHref}
+        className="group flex h-full flex-col"
+        aria-label={`Ver detalle de ${product.name}`}
+        onClick={rememberScrollForProduct}
+        onPointerDown={rememberScrollForProduct}
+      >
         {mediaAndBody}
       </Link>
 
