@@ -230,7 +230,7 @@ describe("CheckoutSteps Auto-Advance", () => {
           ok: false,
           json: async () => ({
             error: "Algunos productos no tienen stock suficiente. Ajusta el carrito para continuar.",
-            invalidProducts: [{ productId: "p1", name: "Thermo Protector" }],
+            invalidProducts: [{ productId: "p1", name: "Thermo Protector", reason: "out_of_stock", availableQty: 0 }],
           }),
         };
       }
@@ -279,6 +279,77 @@ describe("CheckoutSteps Auto-Advance", () => {
     expect(fetchMock).not.toHaveBeenCalledWith("/api/orders/create", expect.anything());
 
     vi.useRealTimers();
+  });
+
+  it("groups price changes separately from unavailable products", async () => {
+    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url) === "/api/mp/validate-cart") {
+        return {
+          ok: false,
+          json: async () => ({
+            error: "Hay cambios en el carrito. Revisa los productos marcados antes de continuar.",
+            invalidProducts: [
+              {
+                productId: "p1",
+                name: "Ampollita Hyaluronic",
+                reason: "price_changed",
+                requestedPrice: 12000,
+                currentPrice: 350000,
+                availableQty: 2,
+                stockStatus: "in_stock",
+              },
+              { productId: "p2", name: "Thermo Protector", reason: "out_of_stock", availableQty: 0 },
+            ],
+          }),
+        };
+      }
+
+      if (String(url).startsWith("/api/catalog")) {
+        return {
+          ok: true,
+          json: async () => [],
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => ({ externalReference: "ORDER-123" }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockUseCart.mockReturnValue({
+      items: [
+        { productId: "p1", name: "Ampollita Hyaluronic", unitPrice: 12000, qty: 1 },
+        { productId: "p2", name: "Thermo Protector", unitPrice: 10500, qty: 1 },
+      ],
+      paymentMethod: "cash",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts: vi.fn(),
+      clear: vi.fn(),
+      getTotal: () => 22500,
+      getDiscountedTotal: () => 20250,
+    });
+
+    render(<CheckoutSteps subtotal={22500} discountedTotal={20250} />);
+
+    fireEvent.change(await screen.findByLabelText(/Nombre/i), { target: { value: "Jane" } });
+    fireEvent.change(screen.getByLabelText(/Apellido/i), { target: { value: "Smith" } });
+    fireEvent.change(screen.getByLabelText(/WhatsApp/i), { target: { value: "5491198765432" } });
+    fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: "jane@example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: /Continuar al pago/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Finalizar pedido/i }));
+
+    expect(await screen.findByText(/Hay cambios en el carrito/i)).toBeInTheDocument();
+    expect(screen.getByText(/Precios actualizados/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ampollita Hyaluronic/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/No disponibles/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Thermo Protector/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Quitar no disponibles/i })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/orders/create", expect.anything());
   });
 
   it("clears cart and checkout draft after finishing a manual order", async () => {

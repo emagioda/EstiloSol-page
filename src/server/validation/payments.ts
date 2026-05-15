@@ -4,6 +4,7 @@ type CheckoutItemInput = {
   productId?: unknown;
   qty?: unknown;
   name?: unknown;
+  unitPrice?: unknown;
 };
 
 type CheckoutBodyInput = {
@@ -22,6 +23,7 @@ export type ParsedCheckoutItem = {
   productId: string;
   qty: number;
   name?: string;
+  unitPrice?: number;
 };
 
 export type ParsedCheckoutBody = {
@@ -59,6 +61,13 @@ const normalizeQuantity = (value: unknown) => {
   if (!Number.isInteger(quantity)) return null;
   if (quantity < 1 || quantity > 50) return null;
   return quantity;
+};
+
+const normalizePrice = (value: unknown) => {
+  if (value === undefined || value === null || value === "") return undefined;
+  const price = Number(value);
+  if (!Number.isFinite(price) || price < 0) return null;
+  return Number(price.toFixed(2));
 };
 
 const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -110,11 +119,14 @@ export const parseCheckoutBody = (
       const productId = sanitizeText(item.productId, 120);
       const qty = normalizeQuantity(item.qty);
       const name = sanitizeText(item.name, 120);
+      const unitPrice = normalizePrice(item.unitPrice);
       if (!productId || !qty) return null;
+      if (unitPrice === null) return null;
       return {
         productId,
         qty,
         ...(name ? { name } : {}),
+        ...(unitPrice !== undefined ? { unitPrice } : {}),
       };
     })
     .filter((item): item is ParsedCheckoutItem => item !== null);

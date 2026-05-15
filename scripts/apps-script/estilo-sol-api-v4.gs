@@ -433,6 +433,7 @@ function handleUpdateRow(payload) {
   const sheetName = payload.sheet || payload.sheetName || (payload.orderId ? SHEET_SALES : payload.productId ? SHEET_PRODUCTS : null);
   if (!sheetName) throw new Error("updateRow requires sheet or orderId/productId");
   assertAllowedSheet_(sheetName);
+  const isProductsSheet = normalizeKey(sheetName) === normalizeKey(SHEET_PRODUCTS);
 
   const updates = payload.updates || payload.data || payload.row;
   if (!updates || typeof updates !== "object" || Array.isArray(updates)) throw new Error("updateRow requires updates object");
@@ -460,7 +461,9 @@ function handleUpdateRow(payload) {
   const updateMap = buildValueMap(updates);
   const columnUpdates = {};
   headers.forEach((header, idx) => {
-    const value = resolveValueByHeader(normalizeKey(header), updateMap);
+    const normalizedHeader = normalizeKey(header);
+    if (isProductsSheet && (normalizedHeader === "stock_status" || normalizedHeader === "estado_stock")) return;
+    const value = resolveValueByHeader(normalizedHeader, updateMap);
     if (value !== undefined) columnUpdates[idx] = toCellValue(value);
   });
 
@@ -473,14 +476,12 @@ function handleUpdateRow(payload) {
   if (updateCols.length === 0) throw new Error("No update keys matched headers");
 
   matchedRows.forEach((rowNumber) => {
-    const row = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
     updateCols.forEach((colIndex) => {
-      row[Number(colIndex)] = columnUpdates[colIndex];
+      sheet.getRange(rowNumber, Number(colIndex) + 1).setValue(columnUpdates[colIndex]);
     });
-    sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row]);
   });
 
-  if (normalizeKey(sheetName) === normalizeKey(SHEET_PRODUCTS)) clearCatalogCache_();
+  if (isProductsSheet) clearCatalogCache_();
   return { ok: true, action: "updateRow", sheet: sheetName, updatedRows: matchedRows.length, rowNumbers: matchedRows };
 }
 
@@ -560,7 +561,6 @@ function handleDecrementStock(payload) {
     updates.push({
       productId: item.productId,
       rowNumber: found.rowNumber,
-      row: found.row.slice(),
       previousQty: currentQty,
       nextQty: nextQty
     });
@@ -568,9 +568,8 @@ function handleDecrementStock(payload) {
 
   const now = new Date().toISOString();
   updates.forEach(function(update) {
-    update.row[stockQtyCol] = update.nextQty;
-    if (updatedAtCol !== -1) update.row[updatedAtCol] = now;
-    sheet.getRange(update.rowNumber, 1, 1, headers.length).setValues([update.row]);
+    sheet.getRange(update.rowNumber, stockQtyCol + 1).setValue(update.nextQty);
+    if (updatedAtCol !== -1) sheet.getRange(update.rowNumber, updatedAtCol + 1).setValue(now);
   });
 
   props.setProperty(deductionKey, now);
@@ -634,7 +633,6 @@ function planStockDecrement_(items) {
     updates.push({
       productId: item.productId,
       rowNumber: found.rowNumber,
-      row: found.row.slice(),
       previousQty: currentQty,
       nextQty: nextQty
     });
@@ -652,9 +650,8 @@ function planStockDecrement_(items) {
 
 function applyStockPlan_(plan, now) {
   plan.updates.forEach(function(update) {
-    update.row[plan.stockQtyCol] = update.nextQty;
-    if (plan.updatedAtCol !== -1) update.row[plan.updatedAtCol] = now;
-    plan.sheet.getRange(update.rowNumber, 1, 1, plan.headers.length).setValues([update.row]);
+    plan.sheet.getRange(update.rowNumber, plan.stockQtyCol + 1).setValue(update.nextQty);
+    if (plan.updatedAtCol !== -1) plan.sheet.getRange(update.rowNumber, plan.updatedAtCol + 1).setValue(now);
   });
 }
 

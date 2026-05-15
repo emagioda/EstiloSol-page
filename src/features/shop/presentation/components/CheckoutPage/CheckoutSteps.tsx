@@ -27,19 +27,40 @@ const REDIRECT_FEEDBACK_DELAY_MS = 350;
 
 type CheckoutPhase = "idle" | "validating" | "creating" | "redirecting";
 
+export type CheckoutInvalidProduct = {
+  productId: string;
+  name: string;
+  reason?: string;
+  requestedQty?: number;
+  availableQty?: number | null;
+  requestedPrice?: number;
+  currentPrice?: number;
+  stockStatus?: "in_stock" | "out_of_stock" | "preorder";
+};
+
 type CheckoutErrorState = {
   message: string;
-  invalidProducts?: Array<{ productId: string; name: string }>;
+  invalidProducts?: CheckoutInvalidProduct[];
 };
 
 type CheckoutApiError = {
   error?: string;
-  invalidProducts?: Array<{ productId?: string; name?: string }>;
+  invalidProducts?: Array<{
+    productId?: string;
+    name?: string;
+    reason?: string;
+    requestedQty?: number;
+    availableQty?: number | null;
+    requestedPrice?: number;
+    currentPrice?: number;
+    stockStatus?: "in_stock" | "out_of_stock" | "preorder";
+  }>;
 };
 
 type CheckoutStepsProps = {
   subtotal: number;
   discountedTotal: number;
+  onInvalidProductsChange?: (products: CheckoutInvalidProduct[]) => void;
 };
 
 type BankField = "cbu" | "alias";
@@ -65,9 +86,44 @@ const parseInvalidProducts = (items: CheckoutApiError["invalidProducts"]) =>
         .map((item) => ({
           productId: typeof item?.productId === "string" ? item.productId : "",
           name: typeof item?.name === "string" ? item.name : "Producto no disponible",
+          reason: typeof item?.reason === "string" ? item.reason : undefined,
+          requestedQty: typeof item?.requestedQty === "number" ? item.requestedQty : undefined,
+          availableQty:
+            typeof item?.availableQty === "number" || item?.availableQty === null ? item.availableQty : undefined,
+          requestedPrice: typeof item?.requestedPrice === "number" ? item.requestedPrice : undefined,
+          currentPrice: typeof item?.currentPrice === "number" ? item.currentPrice : undefined,
+          stockStatus:
+            item?.stockStatus === "in_stock" || item?.stockStatus === "out_of_stock" || item?.stockStatus === "preorder"
+              ? item.stockStatus
+              : undefined,
         }))
         .filter((item) => item.productId)
     : undefined;
+
+const isPriceChangedProduct = (item: CheckoutInvalidProduct) => item.reason === "price_changed";
+const isUnavailableProduct = (item: CheckoutInvalidProduct) =>
+  item.reason === "missing" ||
+  item.reason === "out_of_stock" ||
+  item.stockStatus === "out_of_stock" ||
+  item.availableQty === 0;
+const isInsufficientStockProduct = (item: CheckoutInvalidProduct) => item.reason === "insufficient_stock";
+
+const checkoutErrorMessage = (fallback: string | undefined, invalidProducts: CheckoutInvalidProduct[] | undefined) => {
+  if (!invalidProducts || invalidProducts.length === 0) {
+    return fallback || "Algunos productos del carrito ya no estan disponibles.";
+  }
+
+  const hasPriceChanges = invalidProducts.some(isPriceChangedProduct);
+  const hasStockProblems = invalidProducts.some((item) => isUnavailableProduct(item) || isInsufficientStockProduct(item));
+
+  if (hasPriceChanges && hasStockProblems) {
+    return "Hay cambios en el carrito. Revisa los productos marcados antes de continuar.";
+  }
+  if (hasPriceChanges) {
+    return "El precio de algunos productos cambio. Revisa el carrito antes de continuar.";
+  }
+  return fallback || "Algunos productos no tienen stock suficiente. Ajusta el carrito para continuar.";
+};
 
 const LoadingIndicator = () => (
   <span
@@ -172,8 +228,9 @@ const CheckoutProgress = ({
 export default function CheckoutSteps({
   subtotal: _subtotal,
   discountedTotal: _discountedTotal,
+  onInvalidProductsChange,
 }: CheckoutStepsProps) {
-  const { items, paymentMethod, setPaymentMethod, removeItem } = useCart();
+  const { items, paymentMethod, setPaymentMethod, removeItem, syncStockFromProducts } = useCart();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
@@ -194,6 +251,18 @@ export default function CheckoutSteps({
   const fullName = useMemo(() => `${firstName} ${lastName}`.replace(/\s+/g, " ").trim(), [firstName, lastName]);
   const isDiscountMethod = isDiscountPaymentMethod(paymentMethod);
   const displayedTotal = isDiscountMethod ? _discountedTotal : _subtotal;
+  const priceChangedProducts = useMemo(
+    () => (error?.invalidProducts ?? []).filter(isPriceChangedProduct),
+    [error?.invalidProducts]
+  );
+  const unavailableProducts = useMemo(
+    () => (error?.invalidProducts ?? []).filter(isUnavailableProduct),
+    [error?.invalidProducts]
+  );
+  const insufficientStockProducts = useMemo(
+    () => (error?.invalidProducts ?? []).filter(isInsufficientStockProduct),
+    [error?.invalidProducts]
+  );
 
   const firstNameError = showValidation && !firstName.trim();
   const lastNameError = showValidation && !lastName.trim();
@@ -312,6 +381,10 @@ export default function CheckoutSteps({
     };
   }, []);
 
+  useEffect(() => {
+    onInvalidProductsChange?.(error?.invalidProducts ?? []);
+  }, [error?.invalidProducts, onInvalidProductsChange]);
+
   const clearCheckoutPhaseTimer = () => {
     if (checkoutPhaseTimerRef.current === null) return;
     window.clearTimeout(checkoutPhaseTimerRef.current);
@@ -339,6 +412,7 @@ export default function CheckoutSteps({
       productId: item.productId,
       qty: item.qty,
       name: item.name,
+      unitPrice: item.unitPrice,
     }));
 
   const validateCartBeforeCheckout = async () => {
@@ -358,13 +432,26 @@ export default function CheckoutSteps({
 
     const invalidProducts = parseInvalidProducts(data?.invalidProducts);
     if (invalidProducts && invalidProducts.length > 0) {
-      await refreshProductsMemoryCacheFromSource();
+      syncStockFromProducts(
+        invalidProducts
+          .filter((product) => typeof product.currentPrice === "number")
+          .map((product) => ({
+            id: product.productId,
+            name: product.name,
+            price: product.currentPrice ?? 0,
+            stock_status: product.stockStatus,
+            stock_qty: product.availableQty,
+          }))
+      );
     }
 
     setError({
-      message: data?.error || "Algunos productos del carrito ya no estan disponibles.",
+      message: checkoutErrorMessage(data?.error, invalidProducts),
       invalidProducts,
     });
+    if (invalidProducts && invalidProducts.length > 0) {
+      void refreshProductsMemoryCacheFromSource();
+    }
     return false;
   };
 
@@ -469,10 +556,13 @@ export default function CheckoutSteps({
         : data?.initPoint || data?.sandboxInitPoint;
 
       if (!response.ok || !checkoutUrl) {
+        const invalidProducts = parseInvalidProducts(data?.invalidProducts);
         resetCheckoutProgress();
         setError({
-          message: data?.error || "No pudimos iniciar el pago. Intenta nuevamente.",
-          invalidProducts: parseInvalidProducts(data?.invalidProducts),
+          message: invalidProducts
+            ? checkoutErrorMessage(data?.error, invalidProducts)
+            : data?.error || "No pudimos iniciar el pago. Intenta nuevamente.",
+          invalidProducts,
         });
         return;
       }
@@ -534,10 +624,13 @@ export default function CheckoutSteps({
         | null;
 
       if (!response.ok) {
+        const invalidProducts = parseInvalidProducts(data?.invalidProducts);
         resetCheckoutProgress();
         setError({
-          message: data?.error || "No pudimos registrar tu pedido. Intenta nuevamente.",
-          invalidProducts: parseInvalidProducts(data?.invalidProducts),
+          message: invalidProducts
+            ? checkoutErrorMessage(data?.error, invalidProducts)
+            : data?.error || "No pudimos registrar tu pedido. Intenta nuevamente.",
+          invalidProducts,
         });
         return;
       }
@@ -564,7 +657,7 @@ export default function CheckoutSteps({
   };
 
   const removeInvalidProducts = () => {
-    const invalidProducts = error?.invalidProducts ?? [];
+    const invalidProducts = (error?.invalidProducts ?? []).filter(isUnavailableProduct);
     if (invalidProducts.length === 0) return;
 
     invalidProducts.forEach((item) => {
@@ -924,20 +1017,57 @@ export default function CheckoutSteps({
             <p>{error.message}</p>
             {error.invalidProducts && error.invalidProducts.length > 0 ? (
               <>
-                <ul className="mt-2 list-disc space-y-1 pl-5 text-[var(--brand-cream)]/90">
-                  {error.invalidProducts.map((item) => (
-                    <li key={item.productId}>{item.name}</li>
-                  ))}
-                </ul>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={removeInvalidProducts}
-                    className="rounded bg-[var(--brand-gold-300)] px-3 py-1.5 text-xs font-semibold text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
-                  >
-                    Quitar no disponibles
-                  </button>
-                </div>
+                {priceChangedProducts.length > 0 ? (
+                  <div className="mt-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/75">
+                      Precios actualizados
+                    </p>
+                    <ul className="mt-1 list-disc space-y-1 pl-5 text-[var(--brand-cream)]/90">
+                      {priceChangedProducts.map((item) => (
+                        <li key={item.productId}>
+                          {item.name}
+                          {typeof item.currentPrice === "number" ? `: ahora ${formatMoney(item.currentPrice)}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {unavailableProducts.length > 0 ? (
+                  <div className="mt-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/75">
+                      No disponibles
+                    </p>
+                    <ul className="mt-1 list-disc space-y-1 pl-5 text-[var(--brand-cream)]/90">
+                      {unavailableProducts.map((item) => (
+                        <li key={item.productId}>{item.name}</li>
+                      ))}
+                    </ul>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={removeInvalidProducts}
+                        className="rounded bg-[var(--brand-gold-300)] px-3 py-1.5 text-xs font-semibold text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                      >
+                        Quitar no disponibles
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                {insufficientStockProducts.length > 0 ? (
+                  <div className="mt-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/75">
+                      Stock insuficiente
+                    </p>
+                    <ul className="mt-1 list-disc space-y-1 pl-5 text-[var(--brand-cream)]/90">
+                      {insufficientStockProducts.map((item) => (
+                        <li key={item.productId}>
+                          {item.name}
+                          {typeof item.availableQty === "number" ? `: quedan ${item.availableQty}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </>
             ) : null}
           </div>

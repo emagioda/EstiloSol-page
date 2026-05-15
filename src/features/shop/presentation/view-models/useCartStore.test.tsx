@@ -56,7 +56,7 @@ describe("cart flow", () => {
     expect(result.current.items).toHaveLength(0);
   });
 
-  it("caps added and updated quantities by available stock", () => {
+  it("caps added quantities by available stock", () => {
     const { result } = renderHook(() => useCart(), { wrapper });
 
     act(() => {
@@ -71,10 +71,6 @@ describe("cart flow", () => {
     });
 
     expect(result.current.items[0].qty).toBe(3);
-
-    act(() => {
-      result.current.updateQty("p1", 8);
-    });
 
     expect(result.current.items[0].qty).toBe(3);
   });
@@ -96,7 +92,7 @@ describe("cart flow", () => {
     expect(result.current.items[0].qty).toBe(50);
   });
 
-  it("syncs stored cart quantities with current product stock", () => {
+  it("syncs product stock without removing or shrinking existing cart items", () => {
     const { result } = renderHook(() => useCart(), { wrapper });
 
     act(() => {
@@ -125,8 +121,42 @@ describe("cart flow", () => {
     expect(result.current.items[0]).toMatchObject({
       name: "Producto actualizado",
       unitPrice: 1200,
-      qty: 2,
+      qty: 5,
       stockQty: 2,
+    });
+  });
+
+  it("keeps an existing cart item visible when synced stock reaches zero", () => {
+    const { result } = renderHook(() => useCart(), { wrapper });
+
+    act(() => {
+      result.current.addItem({
+        productId: "p1",
+        name: "Producto viejo",
+        unitPrice: 1000,
+        qty: 1,
+        stockStatus: "in_stock",
+        stockQty: 1,
+      });
+    });
+
+    act(() => {
+      result.current.syncStockFromProducts([
+        {
+          id: "p1",
+          name: "Producto actualizado",
+          price: 1200,
+          stock_status: "out_of_stock",
+          stock_qty: 0,
+        },
+      ]);
+    });
+
+    expect(result.current.items[0]).toMatchObject({
+      name: "Producto actualizado",
+      qty: 1,
+      stockStatus: "out_of_stock",
+      stockQty: 0,
     });
   });
 });

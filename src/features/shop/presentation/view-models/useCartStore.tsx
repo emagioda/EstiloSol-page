@@ -272,13 +272,11 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
     setItems((prev) =>
       safeQty <= 0
         ? prev.filter((p) => p.productId !== productId)
-        : prev
-            .map((p) =>
-              p.productId === productId
-                ? { ...p, qty: clampQtyForStock(safeQty, p) }
-                : p
-            )
-            .filter((p) => p.qty > 0)
+        : prev.map((p) =>
+            p.productId === productId
+              ? { ...p, qty: safeQty }
+              : p
+          )
     );
   }, []);
 
@@ -302,7 +300,7 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
 
           return {
             ...syncedItem,
-            qty: clampQtyForStock(item.qty, syncedItem),
+            qty: item.qty,
           };
         })
         .filter((item) => item.qty > 0)

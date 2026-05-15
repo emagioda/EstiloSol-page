@@ -42,6 +42,19 @@ describe("catalog stock validation", () => {
     });
   });
 
+  it("blocks products whose cart price is stale", () => {
+    const catalog = new Map([["p-1", product({ price: 1200, stock_qty: 2 })]]);
+
+    expect(
+      validateCatalogItem(catalog, { productId: "p-1", qty: 1, name: "Producto 1", unitPrice: 1000 })
+    ).toMatchObject({
+      productId: "p-1",
+      reason: "price_changed",
+      requestedPrice: 1000,
+      currentPrice: 1200,
+    });
+  });
+
   it("marks missing products as invalid", () => {
     expect(validateCatalogItem(new Map(), { productId: "missing", qty: 1, name: "" })).toMatchObject({
       productId: "missing",
