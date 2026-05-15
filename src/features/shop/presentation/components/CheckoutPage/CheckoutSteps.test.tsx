@@ -28,6 +28,7 @@ describe("CheckoutSteps Auto-Advance", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     localStorage.clear();
     vi.unstubAllGlobals();
   });
@@ -220,6 +221,64 @@ describe("CheckoutSteps Auto-Advance", () => {
     expect(await screen.findByText(/Cliente:/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Finalizar pedido/i })).toBeEnabled();
     expect(fetch).not.toHaveBeenCalledWith("/api/mp/validate-cart", expect.anything());
+  });
+
+  it("validates cart stock before creating a manual order", async () => {
+    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url) === "/api/mp/validate-cart") {
+        return {
+          ok: false,
+          json: async () => ({
+            error: "Algunos productos no tienen stock suficiente. Ajusta el carrito para continuar.",
+            invalidProducts: [{ productId: "p1", name: "Thermo Protector" }],
+          }),
+        };
+      }
+
+      if (String(url).startsWith("/api/catalog")) {
+        return {
+          ok: true,
+          json: async () => [],
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          externalReference: "ORDER-123",
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockUseCart.mockReturnValue({
+      items: [{ productId: "p1", name: "Thermo Protector", unitPrice: 100, qty: 1 }],
+      paymentMethod: "cash",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts: vi.fn(),
+      clear: vi.fn(),
+      getTotal: () => 100,
+      getDiscountedTotal: () => 90,
+    });
+
+    render(<CheckoutSteps subtotal={100} discountedTotal={90} />);
+
+    fireEvent.change(await screen.findByLabelText(/Nombre/i), { target: { value: "Jane" } });
+    fireEvent.change(screen.getByLabelText(/Apellido/i), { target: { value: "Smith" } });
+    fireEvent.change(screen.getByLabelText(/WhatsApp/i), { target: { value: "5491198765432" } });
+    fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: "jane@example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: /Continuar al pago/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Finalizar pedido/i }));
+
+    expect(await screen.findByText(/Algunos productos no tienen stock suficiente/i)).toBeInTheDocument();
+    expect(screen.getByText(/Thermo Protector/i)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/mp/validate-cart", expect.anything());
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/orders/create", expect.anything());
+
+    vi.useRealTimers();
   });
 
   it("clears cart and checkout draft after finishing a manual order", async () => {

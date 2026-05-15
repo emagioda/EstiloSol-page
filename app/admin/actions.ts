@@ -45,12 +45,6 @@ const parseCatalogProductType = (value: FormDataEntryValue | null) => {
   return normalized === "KIT" ? "KIT" : "UNICO";
 };
 
-const parseCatalogStockStatus = (value: FormDataEntryValue | null) => {
-  const normalized = String(value || "in_stock").trim();
-  if (normalized === "out_of_stock" || normalized === "preorder") return normalized;
-  return "in_stock";
-};
-
 const parseOptionalStockQty = (value: FormDataEntryValue | null) => {
   const raw = String(value || "").trim();
   if (!raw) return null;
@@ -308,7 +302,6 @@ export async function updateCatalogProductAction(formData: FormData) {
   const images = parseStringList(formData.get("images"));
   const isNew = String(formData.get("isNew") || "").toLowerCase() === "true";
   const isFeatured = String(formData.get("isFeatured") || "").toLowerCase() === "true";
-  const stockStatus = parseCatalogStockStatus(formData.get("stockStatus"));
   const stockQty = parseOptionalStockQty(formData.get("stockQty"));
   const redirectTo = resolveAdminRedirectPath(formData.get("redirectTo"), "/admin/productos");
 
@@ -329,7 +322,6 @@ export async function updateCatalogProductAction(formData: FormData) {
     isNew,
     isFeatured,
     productType,
-    stockStatus,
     stockQty,
   });
 

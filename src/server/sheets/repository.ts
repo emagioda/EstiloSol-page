@@ -558,7 +558,6 @@ export async function updateProductRowInSheet(
     isNew: boolean;
     isFeatured: boolean;
     productType: AdminProductType;
-    stockStatus: StockStatus;
     stockQty: number | null;
   }>
 ): Promise<void> {
@@ -591,13 +590,6 @@ export async function updateProductRowInSheet(
   }
   if (updates.productType === "UNICO" || updates.productType === "KIT") {
     payload.product_type = updates.productType;
-  }
-  if (
-    updates.stockStatus === "in_stock" ||
-    updates.stockStatus === "out_of_stock" ||
-    updates.stockStatus === "preorder"
-  ) {
-    payload.stock_status = updates.stockStatus;
   }
   if (typeof updates.stockQty === "number" && Number.isFinite(updates.stockQty)) {
     payload.stock_qty = Math.max(0, Math.trunc(updates.stockQty));

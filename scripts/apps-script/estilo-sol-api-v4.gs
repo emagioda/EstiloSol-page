@@ -525,7 +525,6 @@ function handleDecrementStock(payload) {
 
   const idCol = findColumnIndex(headers, ["id", "product_id", "id_producto"]);
   const stockQtyCol = findColumnIndex(headers, ["stock_qty", "stock", "cantidad_stock"]);
-  const stockStatusCol = findColumnIndex(headers, ["stock_status", "estado_stock"]);
   const updatedAtCol = findColumnIndex(headers, ["updated_at", "actualizado_en", "fecha_actualizacion"]);
 
   if (idCol === -1) throw new Error("Products sheet is missing product id column");
@@ -570,7 +569,6 @@ function handleDecrementStock(payload) {
   const now = new Date().toISOString();
   updates.forEach(function(update) {
     update.row[stockQtyCol] = update.nextQty;
-    if (stockStatusCol !== -1) update.row[stockStatusCol] = update.nextQty <= 0 ? "out_of_stock" : "in_stock";
     if (updatedAtCol !== -1) update.row[updatedAtCol] = now;
     sheet.getRange(update.rowNumber, 1, 1, headers.length).setValues([update.row]);
   });
@@ -601,7 +599,6 @@ function planStockDecrement_(items) {
 
   const idCol = findColumnIndex(headers, ["id", "product_id", "id_producto"]);
   const stockQtyCol = findColumnIndex(headers, ["stock_qty", "stock", "cantidad_stock"]);
-  const stockStatusCol = findColumnIndex(headers, ["stock_status", "estado_stock"]);
   const updatedAtCol = findColumnIndex(headers, ["updated_at", "actualizado_en", "fecha_actualizacion"]);
 
   if (idCol === -1) throw new Error("Products sheet is missing product id column");
@@ -647,7 +644,6 @@ function planStockDecrement_(items) {
     sheet: sheet,
     headers: headers,
     stockQtyCol: stockQtyCol,
-    stockStatusCol: stockStatusCol,
     updatedAtCol: updatedAtCol,
     updates: updates,
     skipped: skipped
@@ -657,7 +653,6 @@ function planStockDecrement_(items) {
 function applyStockPlan_(plan, now) {
   plan.updates.forEach(function(update) {
     update.row[plan.stockQtyCol] = update.nextQty;
-    if (plan.stockStatusCol !== -1) update.row[plan.stockStatusCol] = update.nextQty <= 0 ? "out_of_stock" : "in_stock";
     if (plan.updatedAtCol !== -1) update.row[plan.updatedAtCol] = now;
     plan.sheet.getRange(update.rowNumber, 1, 1, plan.headers.length).setValues([update.row]);
   });

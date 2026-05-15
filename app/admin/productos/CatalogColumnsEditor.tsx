@@ -303,18 +303,12 @@ export default function CatalogColumnsEditor({
                 </select>
               </label>
 
-              <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
+              <div className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
                 Estado de stock
-                <select
-                  name="stockStatus"
-                  defaultValue={editingProduct.stockStatus}
-                  className="rounded-lg border border-[var(--brand-gold-300)]/30 bg-white px-2.5 py-2 text-sm font-normal text-slate-900"
-                >
-                  <option value="in_stock">Con stock</option>
-                  <option value="out_of_stock">Sin stock</option>
-                  <option value="preorder">Preventa</option>
-                </select>
-              </label>
+                <div className="rounded-lg border border-[var(--brand-gold-300)]/30 bg-white px-2.5 py-2 text-sm font-normal text-slate-900">
+                  {stockStatusLabels[editingProduct.stockStatus]}
+                </div>
+              </div>
 
               <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-cream)]/80">
                 Cantidad

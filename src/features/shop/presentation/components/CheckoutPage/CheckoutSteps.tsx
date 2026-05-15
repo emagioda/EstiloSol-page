@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { PaymentMethod } from "../../view-models/useCartStore";
 import { useCart } from "../../view-models/useCartStore";
+import { refreshProductsMemoryCacheFromSource } from "../../view-models/useProductsStore";
 import {
   deliveryMethodLabel,
   formatMoney,
@@ -31,6 +32,11 @@ type CheckoutErrorState = {
   invalidProducts?: Array<{ productId: string; name: string }>;
 };
 
+type CheckoutApiError = {
+  error?: string;
+  invalidProducts?: Array<{ productId?: string; name?: string }>;
+};
+
 type CheckoutStepsProps = {
   subtotal: number;
   discountedTotal: number;
@@ -52,6 +58,16 @@ const isDeliveryMethod = (value: unknown): value is DeliveryMethod =>
 
 const buildApiNotes = (notes: string) => sanitizeText(notes, 250);
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const parseInvalidProducts = (items: CheckoutApiError["invalidProducts"]) =>
+  Array.isArray(items) && items.length > 0
+    ? items
+        .map((item) => ({
+          productId: typeof item?.productId === "string" ? item.productId : "",
+          name: typeof item?.name === "string" ? item.name : "Producto no disponible",
+        }))
+        .filter((item) => item.productId)
+    : undefined;
 
 const LoadingIndicator = () => (
   <span
@@ -305,10 +321,6 @@ export default function CheckoutSteps({
   const startCheckoutProgress = () => {
     clearCheckoutPhaseTimer();
     setCheckoutPhase("validating");
-    checkoutPhaseTimerRef.current = window.setTimeout(() => {
-      setCheckoutPhase("creating");
-      checkoutPhaseTimerRef.current = null;
-    }, PROGRESS_STEP_DELAY_MS);
   };
 
   const resetCheckoutProgress = () => {
@@ -320,6 +332,40 @@ export default function CheckoutSteps({
     clearCheckoutPhaseTimer();
     setCheckoutPhase("redirecting");
     await wait(REDIRECT_FEEDBACK_DELAY_MS);
+  };
+
+  const checkoutItemsPayload = () =>
+    items.map((item) => ({
+      productId: item.productId,
+      qty: item.qty,
+      name: item.name,
+    }));
+
+  const validateCartBeforeCheckout = async () => {
+    const response = await fetch("/api/mp/validate-cart", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        items: checkoutItemsPayload(),
+      }),
+    });
+
+    const data = (await response.json().catch(() => null)) as CheckoutApiError | null;
+
+    if (response.ok) return true;
+
+    const invalidProducts = parseInvalidProducts(data?.invalidProducts);
+    if (invalidProducts && invalidProducts.length > 0) {
+      await refreshProductsMemoryCacheFromSource();
+    }
+
+    setError({
+      message: data?.error || "Algunos productos del carrito ya no estan disponibles.",
+      invalidProducts,
+    });
+    return false;
   };
 
   useEffect(() => {
@@ -384,17 +430,20 @@ export default function CheckoutSteps({
     setError(null);
 
     try {
+      const [isCartValid] = await Promise.all([validateCartBeforeCheckout(), wait(PROGRESS_STEP_DELAY_MS)]);
+      if (!isCartValid) {
+        resetCheckoutProgress();
+        return;
+      }
+      setCheckoutPhase("creating");
+
       const response = await fetch("/api/mp/create-preference", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          items: items.map((item) => ({
-            productId: item.productId,
-            qty: item.qty,
-            name: item.name,
-          })),
+          items: checkoutItemsPayload(),
           paymentMethod,
           deliveryMethod,
           payer: {
@@ -423,15 +472,7 @@ export default function CheckoutSteps({
         resetCheckoutProgress();
         setError({
           message: data?.error || "No pudimos iniciar el pago. Intenta nuevamente.",
-          invalidProducts:
-            Array.isArray(data?.invalidProducts) && data.invalidProducts.length > 0
-              ? data.invalidProducts
-                  .map((item) => ({
-                    productId: typeof item?.productId === "string" ? item.productId : "",
-                    name: typeof item?.name === "string" ? item.name : "Producto no disponible",
-                  }))
-                  .filter((item) => item.productId)
-              : undefined,
+          invalidProducts: parseInvalidProducts(data?.invalidProducts),
         });
         return;
       }
@@ -459,17 +500,20 @@ export default function CheckoutSteps({
     setError(null);
 
     try {
+      const [isCartValid] = await Promise.all([validateCartBeforeCheckout(), wait(PROGRESS_STEP_DELAY_MS)]);
+      if (!isCartValid) {
+        resetCheckoutProgress();
+        return;
+      }
+      setCheckoutPhase("creating");
+
       const response = await fetch("/api/orders/create", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          items: items.map((item) => ({
-            productId: item.productId,
-            qty: item.qty,
-            name: item.name,
-          })),
+          items: checkoutItemsPayload(),
           paymentMethod,
           deliveryMethod,
           payer: {
@@ -493,15 +537,7 @@ export default function CheckoutSteps({
         resetCheckoutProgress();
         setError({
           message: data?.error || "No pudimos registrar tu pedido. Intenta nuevamente.",
-          invalidProducts:
-            Array.isArray(data?.invalidProducts) && data.invalidProducts.length > 0
-              ? data.invalidProducts
-                  .map((item) => ({
-                    productId: typeof item?.productId === "string" ? item.productId : "",
-                    name: typeof item?.name === "string" ? item.name : "Producto no disponible",
-                  }))
-                  .filter((item) => item.productId)
-              : undefined,
+          invalidProducts: parseInvalidProducts(data?.invalidProducts),
         });
         return;
       }
