@@ -13,7 +13,6 @@ export async function GET(request: Request) {
     const products = await fetchProductsFromCatalogSource({
       forceFresh,
       includeInactive: false,
-      allowMockFallback: false,
     });
 
     return NextResponse.json(products, {

@@ -12,7 +12,6 @@ export const isMissingSheetsEndpointError = (error: unknown) =>
 
 type FetchProductsOptions = {
   cacheMode?: RequestCache;
-  layer?: "catalog" | "detail" | "checkout-validation" | "client-refresh";
   cacheBust?: boolean;
 };
 
@@ -23,34 +22,24 @@ const withCacheBust = (endpoint: string) => {
   return `${url.pathname}${url.search}`;
 };
 
-async function fetchLocalMock(): Promise<Product[]> {
-  try {
-    const mock: unknown = (await import("./products.mock.json")).default;
-    if (Array.isArray(mock)) {
-      return adaptSheetRowsToProducts(
-        mock.filter((row): row is Record<string, unknown> => row !== null && typeof row === "object"),
-      );
-    }
-  } catch (err) {
-    console.warn("could not load local mock products:", err);
-  }
-
-  return [];
-}
-
 export const fetchProductsFromSheets = async ({
   cacheMode,
   cacheBust = false,
 }: FetchProductsOptions = {}): Promise<Product[]> => {
   if (typeof window === "undefined") {
-    return fetchLocalMock();
+    throw new Error(MISSING_SHEETS_ENDPOINT_ERROR);
   }
 
   const endpoint = cacheBust ? withCacheBust("/api/catalog") : "/api/catalog";
   const response = await fetch(endpoint, { cache: cacheMode ?? "no-store" });
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch products: ${response.status}`);
+    const errorPayload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+    const message =
+      typeof errorPayload?.error === "string"
+        ? errorPayload.error
+        : `No se pudo cargar el catalogo. Codigo ${response.status}.`;
+    throw new Error(message);
   }
 
   const payload: unknown = await response.json();

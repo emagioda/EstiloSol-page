@@ -27,7 +27,6 @@ export default function StoreToolbar({
 
   return (
     <div className="mb-1.5 flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-3 md:hidden">
-      {/* Search Input */}
       <div className="relative w-full flex-1">
         <label htmlFor="store-search" className="sr-only">
           Buscar productos

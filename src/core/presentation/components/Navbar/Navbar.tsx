@@ -143,7 +143,6 @@ export default function Navbar() {
         <nav className="h-[var(--header-height-mobile-base)] border-b border-[var(--brand-gold-400)] md:h-[var(--header-height-desktop-base)]">
           <div className="mx-auto flex h-full w-full items-center justify-between gap-6 px-4 md:px-8">
 
-            {/* Left: hamburger, all pages, all sizes */}
             <div className="flex items-center">
               <button
                 type="button"
@@ -158,7 +157,6 @@ export default function Navbar() {
               </button>
             </div>
 
-            {/* Center: Logo */}
             <Link
               href="/"
               aria-label={brandName}
@@ -190,7 +188,6 @@ export default function Navbar() {
               </div>
             </Link>
 
-            {/* Right: admin links or cart */}
             <div className="flex flex-1 items-center justify-end">
               {isAdmin ? (
                 <div className="flex items-center gap-2">
@@ -242,7 +239,6 @@ export default function Navbar() {
                 </div>
               ) : isTienda ? (
                 <>
-                  {/* Mobile cart */}
                   <button
                     onClick={() => setCartOpen(!isCartOpen)}
                     className="relative inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--brand-gold-300)] bg-[var(--brand-violet-900)] text-[var(--brand-cream)] transition hover:border-[var(--brand-gold-300)] hover:text-[var(--brand-gold-300)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] md:hidden"
@@ -252,7 +248,6 @@ export default function Navbar() {
                     <CartBadge className="absolute -right-1 -top-1 flex h-[1.1rem] min-w-[1.1rem] items-center justify-center rounded-full border border-[var(--brand-violet-900)] bg-[var(--brand-gold-300)] px-1 text-[9px] font-bold leading-none tabular-nums text-black shadow-[0_4px_10px_rgba(0,0,0,0.25)]" />
                   </button>
 
-                  {/* Desktop cart */}
                   <div className="hidden md:flex items-center gap-2.5">
                     <span aria-hidden className="h-5 w-px rounded-full bg-[var(--brand-gold-300)]" />
                     <button

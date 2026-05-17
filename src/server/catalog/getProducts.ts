@@ -34,7 +34,6 @@ export async function getProductsCatalog(
 
   const products = await fetchProductsFromCatalogSource({
     forceFresh,
-    allowMockFallback: false,
   });
   const catalogProducts = products
     .filter((product) => product.active !== false)

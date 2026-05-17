@@ -306,7 +306,6 @@ const applySpecFilters = (
 export const refreshProductsMemoryCacheFromSource = async (): Promise<boolean> => {
   try {
     const data = await fetchProductsFromSheets({
-      layer: "client-refresh",
       cacheBust: true,
     });
     updateCatalogCache(data);
@@ -332,7 +331,6 @@ export const prefetchProductsCatalogSession = async (): Promise<boolean> => {
   }
 
   catalogPrefetchPromise = fetchProductsFromSheets({
-    layer: "client-refresh",
     cacheBust: false,
   })
     .then((data) => {
@@ -495,7 +493,6 @@ export const useProductsStore = ({
 
       try {
         const data = await fetchProductsFromSheets({
-          layer: "client-refresh",
           cacheBust: forceRefresh,
         });
 

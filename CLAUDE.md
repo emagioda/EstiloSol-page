@@ -43,7 +43,7 @@ app/              # Next.js App Router: pages, layouts, API routes
 ### Data Storage (no traditional DB)
 
 - **Vercel KV (Redis)**: Transient order state, catalog cache, rate limiting. Falls back to in-memory `Map` if `KV_*` env vars are absent (fine for local dev).
-- **Google Sheets via Apps Script** (`SHEETS_ENDPOINT` + `SHEETS_API_TOKEN`): Persistent orders + product catalog. Public clients must use `/api/catalog`, never Apps Script directly. Falls back to `products.mock.json` if endpoint is missing.
+- **Google Sheets via Apps Script** (`SHEETS_ENDPOINT` + `SHEETS_API_TOKEN`): Persistent orders + product catalog. Public clients must use `/api/catalog`, never Apps Script directly. If Sheets is unavailable or unconfigured, the catalog should fail visibly instead of serving hardcoded products.
 
 ### Key Data Flows
 

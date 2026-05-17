@@ -18,12 +18,6 @@ export type BrandSection = {
   ctaHref: string;
 };
 
-export type BrandDecorAsset = BrandImage & {
-  width: number;
-  height: number;
-  fallback?: string;
-};
-
 export type BrandSocialNetwork = {
   name: "Instagram" | "WhatsApp";
   label: string;
@@ -134,24 +128,6 @@ export const brandConfig = {
     ctaLabel: "Comprar en la tienda",
     ctaHref: "/tienda",
   } as BrandSection,
-  assetsDecorativos: {
-    left: {
-      src: "/home/tijeras.png",
-      alt: "Tijeras decorativas",
-      width: 120,
-      height: 80,
-      fallback: "✂️",
-      isAvailable: false,
-    },
-    right: {
-      src: "/home/joyas.png",
-      alt: "Diseños únicos decorativos",
-      width: 120,
-      height: 120,
-      fallback: "💎",
-      isAvailable: false,
-    },
-  } as Record<string, BrandDecorAsset>,
 };
 
 export default brandConfig;

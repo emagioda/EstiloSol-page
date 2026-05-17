@@ -29,7 +29,6 @@ export default function QuickViewModal({
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
-  // Reset image index when product changes
   useEffect(() => {
     const timer = window.setTimeout(() => setCurrentImageIndex(0), 0);
     return () => window.clearTimeout(timer);
@@ -100,7 +99,6 @@ export default function QuickViewModal({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
 
-  // Reset local state when modal closes
   useEffect(() => {
     if (!open) {
       const timer = setTimeout(() => {
@@ -124,15 +122,12 @@ export default function QuickViewModal({
         role="dialog"
         aria-modal="true"
         aria-label={`Vista rápida de ${product.name}`}
-        onClick={onClose} // Click outside closes modal
+        onClick={onClose}
       >
         <div
-          // MODIFICACIÓN CLAVE: max-h-[90vh], overflow-y-auto, overscroll-contain
           className="relative grid h-auto w-full max-w-4xl max-h-[90vh] overflow-y-auto overflow-x-hidden overscroll-contain rounded-lg border border-[var(--brand-violet-700)]/40 bg-[var(--brand-cream)] text-[var(--brand-violet-950)] shadow-[0_20px_80px_rgba(0,0,0,0.45)] sm:grid-cols-2 scrollbar-hide"
-          // clicks inside the card should *not* close the modal
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Botón Cerrar */}
           <button
             ref={closeButtonRef}
             className="absolute right-0 top-0 z-50 flex h-10 w-10 items-center justify-center bg-[var(--brand-violet-900)] text-2xl leading-none text-[var(--brand-gold-300)] shadow-md transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
@@ -144,7 +139,6 @@ export default function QuickViewModal({
             </span>
           </button>
 
-          {/* Columna Izquierda: Imágenes */}
           <div className="flex h-auto flex-col bg-[var(--brand-cream)] p-3 sm:p-4">
             <ProductImageGalleryZoom
               key={`${product.id}-${open ? "open" : "closed"}`}
@@ -153,12 +147,11 @@ export default function QuickViewModal({
               currentImageIndex={safeIndex}
               onImageIndexChange={setCurrentImageIndex}
               theme="quickview"
-              thumbnailsDesktopOnly={false} // allow thumbnails in all breakpoints
-              alwaysColumn // force the vertical layout (thumbnails below) inside modal
+              thumbnailsDesktopOnly={false}
+              alwaysColumn
             />
           </div>
 
-          {/* Columna Derecha: Información */}
           <div className="flex flex-col gap-4 p-5 sm:p-7 text-[var(--brand-violet-950)]">
             <div>
               <h3 className="text-3xl font-bold uppercase leading-tight tracking-[0.02em] text-[var(--brand-violet-950)] sm:text-[2.2rem]">
@@ -191,7 +184,6 @@ export default function QuickViewModal({
               </div>
             )}
 
-            {/* Acciones de compra */}
             <div className="mt-auto flex flex-col gap-4 pt-4">
               <div className="flex flex-nowrap items-center justify-between gap-3 w-full">
                 <div className="inline-flex items-center rounded-2xl bg-[var(--brand-violet-950)]/10 border border-[var(--brand-violet-950)]/15 p-1 backdrop-blur-sm">

@@ -106,21 +106,18 @@ export default function NavDrawer({ open, onClose }: NavDrawerProps) {
 
   return (
     <div className="fixed inset-0 z-[260]">
-      {/* Backdrop */}
       <div
         className={`absolute inset-0 bg-[#20102f]/40 backdrop-blur-[1px] ${isClosing ? "animate-fadeOutBackdrop" : "animate-fadeInBackdrop"}`}
         onClick={handleClose}
         aria-hidden
       />
 
-      {/* Panel */}
       <aside
         role="dialog"
         aria-modal="true"
         aria-label="Menú de navegación"
         className={`absolute left-0 top-0 flex h-full w-[19rem] max-w-[88vw] flex-col border-r border-[#eadcf4] bg-[linear-gradient(180deg,#fffafd_0%,#f4e7fb_100%)] shadow-[8px_0_34px_rgba(54,25,80,0.18)] ${isClosing ? "animate-slideOutDrawerLeft" : "animate-slideInDrawerLeft"}`}
       >
-        {/* Header */}
         <div className="flex min-h-16 items-center justify-between border-b border-[#eadcf4] px-4 py-3">
           <div>
             <span className="block text-lg font-semibold leading-none text-[#351953]">
@@ -140,9 +137,7 @@ export default function NavDrawer({ open, onClose }: NavDrawerProps) {
           </button>
         </div>
 
-        {/* Nav links */}
         <nav className="flex flex-col gap-2.5 p-4">
-          {/* Inicio */}
           <Link
             href="/"
             onClick={handleClose}
@@ -151,7 +146,6 @@ export default function NavDrawer({ open, onClose }: NavDrawerProps) {
             Inicio
           </Link>
 
-          {/* Tienda + submenu */}
           <div className={`rounded-[22px] transition duration-200 ${tiendaExpanded ? "bg-white/45 p-1 shadow-[0_10px_24px_rgba(72,42,100,0.08)]" : ""}`}>
             <button
               type="button"
@@ -196,7 +190,6 @@ export default function NavDrawer({ open, onClose }: NavDrawerProps) {
             )}
           </div>
 
-          {/* Reservar turnos */}
           <Link
             href="/turnos"
             onClick={handleClose}
@@ -205,10 +198,8 @@ export default function NavDrawer({ open, onClose }: NavDrawerProps) {
             Reservar turnos
           </Link>
 
-          {/* Divisor */}
           <div className="my-1 h-px bg-[#eadcf4]" aria-hidden />
 
-          {/* Información + submenu */}
           <div>
             <button
               type="button"
