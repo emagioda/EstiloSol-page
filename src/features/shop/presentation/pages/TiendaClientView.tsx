@@ -115,6 +115,8 @@ export default function TiendaClientView({
     initialCatalogComplete,
     initialDepartament: effectiveInitialDepartament,
     initialFacets,
+    persistFilters: true,
+    initialDepartamentOverridesPersistedFilters: Boolean(rubroFromQuery),
   });
 
   const [filtersOpen, setFiltersOpen] = useState(false);

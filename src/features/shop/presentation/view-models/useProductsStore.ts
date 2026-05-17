@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchProductsFromSheets,
   isMissingSheetsEndpointError,
@@ -31,6 +31,7 @@ export type CatalogFacets = Partial<
 >;
 
 const SESSION_CATALOG_CACHE_KEY = "es:shop:catalog:session:v1";
+const SESSION_FILTERS_KEY = "es:shop:filters:session:v1";
 const CATALOG_CACHE_UPDATED_EVENT = "es:catalog-cache-updated";
 
 // Simple in-memory cache that survives component unmounts while the
@@ -40,6 +41,85 @@ let cachedProducts: Product[] | null = null;
 let cachedProductsSignature: string | null = null;
 let cachedProductsComplete = false;
 let catalogPrefetchPromise: Promise<boolean> | null = null;
+
+const sortValues = new Set<FilterState["sortBy"]>([
+  "price-asc",
+  "price-desc",
+  "name-asc",
+  "name-desc",
+  "newest",
+]);
+
+const createDefaultFilters = (departament: Departament = "PELUQUERIA"): FilterState => ({
+  searchTerm: "",
+  departament,
+  category: null,
+  sortBy: "newest",
+  showOnlyPromos: false,
+  showOnlyKits: false,
+  selectedSpecs: {},
+});
+
+const readSessionFilters = (): FilterState | null => {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_FILTERS_KEY);
+    if (!raw) return null;
+
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const candidate = parsed as Partial<FilterState>;
+    const selectedSpecs =
+      candidate.selectedSpecs && typeof candidate.selectedSpecs === "object"
+        ? Object.fromEntries(
+            Object.entries(candidate.selectedSpecs).filter(
+              (entry): entry is [string, string] =>
+                typeof entry[0] === "string" &&
+                entry[0].trim().length > 0 &&
+                typeof entry[1] === "string" &&
+                entry[1].trim().length > 0,
+            ),
+          )
+        : {};
+
+    return {
+      searchTerm: typeof candidate.searchTerm === "string" ? candidate.searchTerm : "",
+      departament:
+        candidate.departament === "BIJOUTERIE" || candidate.departament === "PELUQUERIA"
+          ? candidate.departament
+          : "PELUQUERIA",
+      category: typeof candidate.category === "string" && candidate.category.trim() ? candidate.category : null,
+      sortBy: candidate.sortBy && sortValues.has(candidate.sortBy) ? candidate.sortBy : "newest",
+      showOnlyPromos: candidate.showOnlyPromos === true,
+      showOnlyKits: candidate.showOnlyKits === true,
+      selectedSpecs,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeSessionFilters = (filters: FilterState) => {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(SESSION_FILTERS_KEY, JSON.stringify(filters));
+  } catch {
+    return;
+  }
+};
+
+export const clearShopFiltersSessionState = () => {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.removeItem(SESSION_FILTERS_KEY);
+  } catch {
+    return;
+  }
+};
 
 const normalizeSpecifications = (product: Product): Record<string, string> =>
   product.specifications && typeof product.specifications === "object"
@@ -272,11 +352,15 @@ export const useProductsStore = ({
   initialCatalogComplete = false,
   initialFacets,
   initialDepartament = "PELUQUERIA",
+  persistFilters = false,
+  initialDepartamentOverridesPersistedFilters = false,
 }: {
   initialProducts?: Product[];
   initialCatalogComplete?: boolean;
   initialFacets?: CatalogFacets;
   initialDepartament?: Departament;
+  persistFilters?: boolean;
+  initialDepartamentOverridesPersistedFilters?: boolean;
 } = {}) => {
   const [products, setProducts] = useState<Product[]>(() => {
     if (cachedProducts && cachedProducts.length > 0) {
@@ -307,21 +391,45 @@ export const useProductsStore = ({
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [filters, setFilters] = useState<FilterState>({
-    searchTerm: "",
-    departament: initialDepartament,
-    category: null,
-    sortBy: "newest",
-    showOnlyPromos: false,
-    showOnlyKits: false,
-    selectedSpecs: {},
-  });
+  const [filters, setFilters] = useState<FilterState>(() => createDefaultFilters(initialDepartament));
+  const filtersHydratedRef = useRef(!persistFilters);
+  const skipNextFiltersPersistRef = useRef(persistFilters);
 
   useEffect(() => {
     if (initialProducts && initialProducts.length > 0) {
       primeProductsCatalogCache(initialProducts, { complete: initialCatalogComplete });
     }
   }, [initialCatalogComplete, initialProducts]);
+
+  useEffect(() => {
+    if (!persistFilters) return;
+
+    const storedFilters = readSessionFilters();
+    if (storedFilters) {
+      const shouldOverrideDepartament =
+        initialDepartamentOverridesPersistedFilters &&
+        storedFilters.departament !== initialDepartament;
+
+      setFilters({
+        ...storedFilters,
+        ...(initialDepartamentOverridesPersistedFilters
+          ? { departament: initialDepartament }
+          : {}),
+        ...(shouldOverrideDepartament ? { category: null, selectedSpecs: {} } : {}),
+      });
+    }
+
+    filtersHydratedRef.current = true;
+  }, [initialDepartament, initialDepartamentOverridesPersistedFilters, persistFilters]);
+
+  useEffect(() => {
+    if (!persistFilters || !filtersHydratedRef.current) return;
+    if (skipNextFiltersPersistRef.current) {
+      skipNextFiltersPersistRef.current = false;
+      return;
+    }
+    writeSessionFilters(filters);
+  }, [filters, persistFilters]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -611,15 +719,7 @@ export const useProductsStore = ({
   }, []);
 
   const clearFilters = useCallback(() => {
-    setFilters({
-      searchTerm: "",
-      category: null,
-      departament: "PELUQUERIA",
-      sortBy: "newest",
-      showOnlyPromos: false,
-      showOnlyKits: false,
-      selectedSpecs: {},
-    });
+    setFilters(createDefaultFilters("PELUQUERIA"));
   }, []);
 
   const openQuickView = useCallback((product: Product) => {
