@@ -16,6 +16,7 @@ import {
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import { formatProductCategories } from "@/src/features/shop/domain/productCategories";
 import {
   getStockLabel,
   isProductPurchasable,
@@ -172,7 +173,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
 
         <div className="flex flex-col gap-5">
           <p className="text-xs uppercase tracking-[0.22em] text-[var(--brand-gold-300)]">
-            {currentProduct.category || "General"}
+            {formatProductCategories(currentProduct)}
           </p>
           <h1 className="text-3xl font-semibold leading-tight text-[var(--brand-cream)]">{currentProduct.name}</h1>
           <p className="text-3xl font-extrabold text-yellow-100">

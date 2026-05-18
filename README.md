@@ -114,13 +114,13 @@ Add these variables to `.env.local`:
 
 ```bash
 RESEND_API_KEY=re_xxx
-CONTACT_TO_EMAIL=tu-email-destino@dominio.com
 CONTACT_FROM_EMAIL="Estilo Sol <onboarding@resend.dev>"
 ```
 
 Notes:
 
 - `CONTACT_FROM_EMAIL` can use `onboarding@resend.dev` for initial testing.
+- The destination email is configured locally in `src/config/brand.ts`.
 - For production delivery, use a verified domain/sender in Resend.
 
 ## Learn More

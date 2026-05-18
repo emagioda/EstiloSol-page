@@ -21,6 +21,7 @@ interface FiltersSidebarProps {
   onClose?: () => void;
   showSortSection?: boolean;
   showDepartamentSection?: boolean;
+  showCategorySection?: boolean;
 }
 
 const sortLabels: Record<FilterState["sortBy"], string> = {
@@ -36,6 +37,13 @@ const optionClass = (active: boolean) =>
     active
       ? "bg-[#fff4dc] font-semibold text-[#3a1f5f]"
       : "text-[#674a7f] hover:border-[#eadcf4] hover:bg-white/70 hover:text-[#3a1f5f]"
+  }`;
+
+const categoryOptionClass = (active: boolean) =>
+  `flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#d4ac62] ${
+    active
+      ? "border-[#e0b85f] bg-[#fff0c8] font-semibold text-[#3a1f5f] shadow-[0_8px_18px_rgba(64,32,91,0.10)]"
+      : "border-[#eadcf4] bg-white/56 text-[#674a7f] hover:border-[#d4ac62]/70 hover:bg-white/80 hover:text-[#3a1f5f]"
   }`;
 
 const checkboxIndicatorClass = (active: boolean) =>
@@ -56,6 +64,7 @@ export default function FiltersSidebar({
   onClose,
   showSortSection = true,
   showDepartamentSection = true,
+  showCategorySection = true,
 }: FiltersSidebarProps) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     departament: false,
@@ -265,67 +274,71 @@ export default function FiltersSidebar({
             </div>
           )}
 
-          <div className="border-b border-[#eadcf4] pb-3.5">
-            <div className={sectionButtonClass}>
-              Categoría
-            </div>
-            <div className="mt-2.5 flex flex-col gap-1.5" role="radiogroup" aria-label="Filtrar por categoria">
-              <label className={optionClass(filters.category === null)}>
-                <input
-                  type="radio"
-                  name="category"
-                  value=""
-                  checked={filters.category === null}
-                  onChange={() => onFilterChange.category(null)}
-                  className="sr-only"
-                />
-                <span
-                  aria-hidden="true"
-                  className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
-                    filters.category === null ? "border-[#d6a64b]" : "border-[#b99dcc]"
-                  }`}
-                >
-                  {filters.category === null && (
-                    <span className="h-1.5 w-1.5 rounded-full bg-[#d6a64b]" />
-                  )}
-                </span>
-                <span className="flex-1">Todas</span>
-              </label>
-              {categories.map((category) => {
-                const active = filters.category === category;
-                return (
-                  <label key={category} className={optionClass(active)}>
-                    <input
-                      type="radio"
-                      name="category"
-                      value={category}
-                      checked={active}
-                      onChange={() => onFilterChange.category(active ? null : category)}
-                      className="sr-only"
-                    />
-                    <span
-                      aria-hidden="true"
-                      className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
-                        active ? "border-[#d6a64b]" : "border-[#b99dcc]"
-                      }`}
-                    >
-                      {active && <span className="h-1.5 w-1.5 rounded-full bg-[#d6a64b]" />}
-                    </span>
-                    <span className="flex-1">{category}</span>
-                  </label>
-                );
-              })}
-              {categories.length === 0 && (
-                <p className="px-2 py-1 text-xs text-[#7a5b92]">
-                  No hay categorias disponibles para este rubro.
+          {showCategorySection && (
+            <div className="border-b-2 border-[#d9b15d]/45 pb-4">
+              <div className="px-1">
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#3a1f5f]">
+                  Categorías
                 </p>
-              )}
+              </div>
+              <div className="mt-3 flex flex-col gap-2" role="radiogroup" aria-label="Filtrar por categoria">
+                <label className={categoryOptionClass(filters.category === null)}>
+                  <input
+                    type="radio"
+                    name="category"
+                    value=""
+                    checked={filters.category === null}
+                    onChange={() => onFilterChange.category(null)}
+                    className="sr-only"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+                      filters.category === null ? "border-[#d6a64b]" : "border-[#b99dcc]"
+                    }`}
+                  >
+                    {filters.category === null && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#d6a64b]" />
+                    )}
+                  </span>
+                  <span className="flex-1">Todas</span>
+                </label>
+                {categories.map((category) => {
+                  const active = filters.category === category;
+                  return (
+                    <label key={category} className={categoryOptionClass(active)}>
+                      <input
+                        type="radio"
+                        name="category"
+                        value={category}
+                        checked={active}
+                        onChange={() => onFilterChange.category(active ? null : category)}
+                        className="sr-only"
+                      />
+                      <span
+                        aria-hidden="true"
+                        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+                          active ? "border-[#d6a64b]" : "border-[#b99dcc]"
+                        }`}
+                      >
+                        {active && <span className="h-1.5 w-1.5 rounded-full bg-[#d6a64b]" />}
+                      </span>
+                      <span className="flex-1">{category}</span>
+                    </label>
+                  );
+                })}
+                {categories.length === 0 && (
+                  <p className="px-2 py-1 text-xs text-[#7a5b92]">
+                    No hay categorias disponibles para este rubro.
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="pt-1">
+          <div className="pt-1.5">
             <p className="px-1 text-[11px] font-semibold text-[#5d3b76]">
-              Características
+              Refinar resultados
             </p>
           </div>
 

@@ -1,4 +1,4 @@
-import { kv as vercelKv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
 
 type KvValue = unknown;
 
@@ -16,9 +16,18 @@ type MemoryEntry = {
   expiresAt: number | null;
 };
 
-const hasVercelKvEnv =
-  Boolean(process.env.KV_URL) ||
-  (Boolean(process.env.KV_REST_API_URL) && Boolean(process.env.KV_REST_API_TOKEN));
+const hasRedisEnv =
+  Boolean(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL) &&
+  Boolean(process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN);
+
+const createRedisClient = (): KvClient => {
+  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  if (!url || !token) return memoryKv;
+
+  return new Redis({ url, token }) as unknown as KvClient;
+};
 
 const memoryStore = new Map<string, MemoryEntry>();
 
@@ -85,10 +94,10 @@ const memoryKv: KvClient = {
   },
 };
 
-export const kv: KvClient = hasVercelKvEnv ? (vercelKv as unknown as KvClient) : memoryKv;
+export const kv: KvClient = hasRedisEnv ? createRedisClient() : memoryKv;
 
-if (!hasVercelKvEnv && process.env.NODE_ENV !== "production") {
-  console.warn("[kv] Using in-memory KV fallback. Configure KV_* env vars to use persistent storage.");
+if (!hasRedisEnv && process.env.NODE_ENV !== "production") {
+  console.warn("[kv] Using in-memory KV fallback. Configure KV_REST_API_* or UPSTASH_REDIS_REST_* env vars to use persistent storage.");
 }
 
 export async function getJson<T>(key: string): Promise<T | null> {

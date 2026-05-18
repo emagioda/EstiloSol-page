@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import TiendaClientView from "./TiendaClientView";
 import { fetchProductsFromCatalogSource } from "@/src/server/catalog/source";
 import type { CatalogFacets, SpecFiltersMap } from "../view-models/useProductsStore";
+import { getProductCategories } from "@/src/features/shop/domain/productCategories";
 
 const INITIAL_PRODUCTS_COUNT = 24;
 
@@ -57,20 +58,20 @@ const buildCatalogFacets = (products: Product[]): CatalogFacets => {
     if (!departament) return;
 
     const departmentFacets = workingFacets[departament];
-    const category = typeof product.category === "string" ? product.category.trim() : "";
+    const categories = getProductCategories(product);
 
-    if (category) {
+    categories.forEach((category) => {
       departmentFacets.categories.add(category);
       if (!departmentFacets.specificationsByCategory[category]) {
         departmentFacets.specificationsByCategory[category] = {};
       }
-    }
+    });
 
     Object.entries(normalizeSpecifications(product)).forEach(([specKey, specValue]) => {
       addSpecValue(departmentFacets.specifications, specKey, specValue);
-      if (category) {
+      categories.forEach((category) => {
         addSpecValue(departmentFacets.specificationsByCategory[category], specKey, specValue);
-      }
+      });
     });
   });
 

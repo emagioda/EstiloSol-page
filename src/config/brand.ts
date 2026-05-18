@@ -32,6 +32,17 @@ export type BrandContactInfo = {
   socialNetworks: BrandSocialNetwork[];
 };
 
+export type BrandBankTransferInfo = {
+  bankName: string;
+  alias: string;
+  cvu: string;
+};
+
+export type BrandFooterLinks = {
+  primary: BrandLink[];
+  support: BrandLink[];
+};
+
 const DEFAULT_WHATSAPP_PHONE = "5493416888926";
 const DEFAULT_WHATSAPP_MESSAGE = "Hola Estilo Sol, quisiera consultar sobre ";
 
@@ -64,6 +75,22 @@ export const brandConfig = {
     { label: "Tienda", href: "/tienda" },
     { label: "Contacto", href: "/contacto" },
   ] as BrandLink[],
+  footerLinks: {
+    primary: [
+      { label: "Inicio", href: "/" },
+      { label: "Turnos", href: "/turnos" },
+      { label: "Tienda", href: "/tienda" },
+    ],
+    support: [
+      { label: "Preguntas Frecuentes", href: "/preguntas-frecuentes" },
+      { label: "Contacto y Redes", href: "/contacto" },
+    ],
+  } as BrandFooterLinks,
+  shopTickerMessages: [
+    "Envios en Rosario",
+    "10% OFF en efectivo o transferencia",
+    "Productos profesionales y bijouterie",
+  ],
   palette: {
     violet: {
       deepest: "#b497d6",
@@ -86,14 +113,14 @@ export const brandConfig = {
     body: "var(--font-brand-body)",
   },
   contactInfo: {
-    email: "estilosol26@gmail.com",
+    email: "estilosol.ms@gmail.com",
     whatsappPhone: DEFAULT_WHATSAPP_PHONE,
     initialContactMessage: DEFAULT_WHATSAPP_MESSAGE,
     socialNetworks: [
       {
         name: "Instagram",
-        label: "estilo-sol",
-        href: "https://www.instagram.com/estilo-sol",
+        label: "estilosol_ms",
+        href: "https://www.instagram.com/estilosol_ms",
         icon: "instagram",
       },
       {
@@ -104,6 +131,13 @@ export const brandConfig = {
       },
     ],
   } as BrandContactInfo,
+  paymentInfo: {
+    transfer: {
+      bankName: "Mercado Pago",
+      alias: "estilosol.ms",
+      cvu: "0000003100095356162045",
+    } as BrandBankTransferInfo,
+  },
   heroLeft: {
     title: "Estilo y Cuidado Profesional",
     subtitle: "Reservá tu turno en minutos y recibí atención experta para potenciar tu look.",

@@ -32,11 +32,7 @@ export default function Navbar() {
     { href: "/admin/productos", label: "Productos", active: isAdminProductos, disabled: false },
     { href: "#", label: "Servicios", active: false, disabled: true },
   ];
-  const tickerMessages = [
-    "Envios en Rosario",
-    "10% OFF en efectivo o transferencia",
-    "Productos profesionales y bijouterie",
-  ];
+  const tickerMessages = brandConfig.shopTickerMessages;
   const [showTicker, setShowTicker] = useState(true);
   const [navMenuOpen, setNavMenuOpen] = useState(false);
   const [navDrawerMounted, setNavDrawerMounted] = useState(false);

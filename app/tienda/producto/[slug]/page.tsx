@@ -3,6 +3,10 @@ import { notFound } from "next/navigation";
 
 import ProductDetail from "@/src/features/shop/presentation/pages/ProductDetail";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import {
+  getProductCategories,
+  productBelongsToCategory,
+} from "@/src/features/shop/domain/productCategories";
 import { fetchProductsFromCatalogSource } from "@/src/server/catalog/source";
 
 export const dynamicParams = true;
@@ -24,13 +28,14 @@ const loadProduct = async (slug: string): Promise<Product | undefined> => {
 };
 
 const findSimilarProducts = (products: Product[], product: Product): Product[] => {
-  if (!product.category) return [];
+  const categories = getProductCategories(product);
+  if (categories.length === 0) return [];
 
   return products
     .filter(
       (candidate) =>
         candidate.id !== product.id &&
-        candidate.category === product.category &&
+        categories.some((category) => productBelongsToCategory(candidate, category)) &&
         candidate.departament === product.departament,
     )
     .slice(0, 6);

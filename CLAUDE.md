@@ -42,7 +42,7 @@ app/              # Next.js App Router: pages, layouts, API routes
 
 ### Data Storage (no traditional DB)
 
-- **Vercel KV (Redis)**: Transient order state, catalog cache, rate limiting. Falls back to in-memory `Map` if `KV_*` env vars are absent (fine for local dev).
+- **Upstash Redis**: Transient order state, catalog cache, rate limiting. Falls back to in-memory `Map` if Redis env vars are absent (fine for local dev).
 - **Google Sheets via Apps Script** (`SHEETS_ENDPOINT` + `SHEETS_API_TOKEN`): Persistent orders + product catalog. Public clients must use `/api/catalog`, never Apps Script directly. If Sheets is unavailable or unconfigured, the catalog should fail visibly instead of serving hardcoded products.
 
 ### Key Data Flows
@@ -68,7 +68,7 @@ app/              # Next.js App Router: pages, layouts, API routes
 | Mercado Pago | `MP_ACCESS_TOKEN`, `NEXT_PUBLIC_MP_PUBLIC_KEY`, `MP_WEBHOOK_SECRET` | Payments |
 | Google Sheets (Apps Script) | `SHEETS_ENDPOINT`, `SHEETS_API_TOKEN` | Product catalog + orders |
 | NextAuth + Google OAuth | `AUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ADMIN_EMAIL` | Admin auth |
-| Vercel KV | `KV_REST_API_URL`, `KV_REST_API_TOKEN` | Cache + order state |
-| Resend | `RESEND_API_KEY`, `CONTACT_TO_EMAIL`, `CONTACT_FROM_EMAIL` | Transactional email |
+| Upstash Redis | `KV_REST_API_URL`, `KV_REST_API_TOKEN` or `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Cache + order state |
+| Resend | `RESEND_API_KEY`, `CONTACT_FROM_EMAIL` | Transactional email |
 
 See `.env.example` for the full list including `APP_BASE_URL`, `MP_WEBHOOK_URL`, `MP_SUCCESS_URL`, etc.

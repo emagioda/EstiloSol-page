@@ -22,6 +22,13 @@ const products: Product[] = [
     category: "Aros",
     price: 2000,
   },
+  {
+    id: "p3",
+    name: "Siete nudos",
+    departament: "BIJOUTERIE",
+    category: "Pulsera, Tobillera",
+    price: 1999,
+  },
 ];
 
 describe("shop filter session state", () => {
@@ -97,6 +104,52 @@ describe("shop filter session state", () => {
 
     await waitFor(() => {
       expect(second.result.current.filters.searchTerm).toBe("");
+    });
+  });
+
+  it("splits comma-separated product categories into independent filters", () => {
+    const store = renderHook(() =>
+      useProductsStore({
+        initialProducts: products,
+        initialCatalogComplete: true,
+        initialDepartament: "BIJOUTERIE",
+      }),
+    );
+
+    expect(store.result.current.categories).toEqual(["Aros", "Pulsera", "Tobillera"]);
+
+    act(() => {
+      store.result.current.setCategory("Pulsera");
+    });
+
+    expect(store.result.current.products.map((product) => product.id)).toContain("p3");
+
+    act(() => {
+      store.result.current.setCategory("Tobillera");
+    });
+
+    expect(store.result.current.products.map((product) => product.id)).toContain("p3");
+  });
+
+  it("keeps the selected departament when clearing filters", () => {
+    const store = renderHook(() =>
+      useProductsStore({
+        initialProducts: products,
+        initialCatalogComplete: true,
+        initialDepartament: "BIJOUTERIE",
+      }),
+    );
+
+    act(() => {
+      store.result.current.setCategory("Aros");
+      store.result.current.setSearchTerm("aro");
+      store.result.current.clearFilters();
+    });
+
+    expect(store.result.current.filters).toMatchObject({
+      departament: "BIJOUTERIE",
+      category: null,
+      searchTerm: "",
     });
   });
 });

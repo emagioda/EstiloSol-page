@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { brandConfig } from "@/src/config/brand";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 
 type PaymentData = {
@@ -32,9 +33,10 @@ type OrderSummaryData = {
 };
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const ESTILO_SOL_SUPPORT_EMAIL = "estilosol26@gmail.com";
-const ESTILO_SOL_WHATSAPP_LABEL = "+54 9 341 688-8926";
-const ESTILO_SOL_WHATSAPP_PHONE = "5493416888926";
+const ESTILO_SOL_SUPPORT_EMAIL = brandConfig.contactInfo.email;
+const ESTILO_SOL_WHATSAPP_LABEL =
+  brandConfig.contactInfo.socialNetworks.find((network) => network.icon === "whatsapp")?.label || "";
+const ESTILO_SOL_WHATSAPP_PHONE = brandConfig.contactInfo.whatsappPhone;
 const RECEIPT_PDF_MODE: "compact" | "a4" = "compact";
 
 const formatMoney = (value: number) =>
@@ -89,8 +91,8 @@ const buildWhatsappOrderMessage = ({
   const dateText = date?.trim() || formatDateTime24h();
   return [
     isPending
-      ? "Hola Estilo Sol, ya cargue mi pedido y quiero continuar por WhatsApp."
-      : "Hola Estilo Sol, quiero consultar por mi pedido.",
+      ? `Hola ${brandConfig.brandName}, ya cargue mi pedido y quiero continuar por WhatsApp.`
+      : `Hola ${brandConfig.brandName}, quiero consultar por mi pedido.`,
     `Numero de referencia: ${referenceText}`,
     paymentMethodLabel ? `Forma de pago: ${paymentMethodLabel}` : "",
     `${isPending ? "Fecha del pedido" : "Fecha del pago"}: ${dateText}`,

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { brandConfig } from "@/src/config/brand";
 import { env } from "@/src/config/env";
 import { logEvent } from "@/src/server/observability/log";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
@@ -97,16 +98,13 @@ export async function POST(request: NextRequest) {
   }
 
   const resendApiKey = env.getOptionalServer("RESEND_API_KEY");
-  const contactToEmail = env.getOptionalServer("CONTACT_TO_EMAIL");
+  const contactToEmail = brandConfig.contactInfo.email;
   const contactFromEmail =
     env.getOptionalServer("CONTACT_FROM_EMAIL") || "Estilo Sol <onboarding@resend.dev>";
 
-  if (!resendApiKey || !contactToEmail) {
+  if (!resendApiKey) {
     logEvent("error", "contact.email_env_missing", {
-      missing: [
-        !resendApiKey ? "RESEND_API_KEY" : null,
-        !contactToEmail ? "CONTACT_TO_EMAIL" : null,
-      ].filter(Boolean),
+      missing: ["RESEND_API_KEY"],
     });
 
     return NextResponse.json(

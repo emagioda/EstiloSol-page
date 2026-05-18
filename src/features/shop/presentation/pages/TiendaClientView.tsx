@@ -259,6 +259,15 @@ export default function TiendaClientView({
           },
         ]
       : []),
+    ...(filters.category
+      ? [
+          {
+            key: "category",
+            label: filters.category,
+            onRemove: () => handleCategoryChange(null),
+          },
+        ]
+      : []),
     ...(filters.searchTerm.trim()
       ? [
           {
@@ -724,6 +733,7 @@ export default function TiendaClientView({
               })}
             </div>
           </div>
+
           </div>
 
           <div className="grid grid-cols-1 gap-6 md:grid-cols-[280px_1fr] md:gap-8">

@@ -32,6 +32,7 @@ export default function HomeSplit() {
               : "0 2px 8px rgba(0, 0, 0, 0.3)";
             const TitleTag = "h2";
             const imageObjectPosition = isBookingSection ? "center 28%" : "center 42%";
+            const mobileSeamClass = isBookingSection ? "z-10" : "-mt-10 pt-20 md:mt-0 md:pt-24 md:z-auto";
             const panelStyle = {
               "--home-image-filter": isBookingSection
                 ? "brightness(0.54) saturate(0.92) contrast(1.04)"
@@ -44,7 +45,7 @@ export default function HomeSplit() {
             return (
               <article
                 key={section.title}
-                className="home-panel group relative isolate flex w-full flex-1 flex-col items-center justify-center overflow-hidden bg-[var(--brand-violet-800)] px-6 py-10 text-center text-[var(--brand-cream)] sm:py-14 md:basis-1/2 md:px-10 md:py-24"
+                className={`home-panel group relative isolate flex w-full flex-1 flex-col items-center justify-center overflow-visible bg-[var(--brand-violet-800)] px-6 py-10 text-center text-[var(--brand-cream)] sm:py-14 md:basis-1/2 md:overflow-hidden md:px-10 md:py-24 ${mobileSeamClass}`}
                 style={panelStyle}
               >
                 {section.image.isAvailable && (
@@ -82,8 +83,8 @@ export default function HomeSplit() {
                   aria-hidden="true"
                   className={`md:hidden ${
                     isBookingSection
-                      ? "absolute -bottom-1 left-0 right-0 h-24 bg-gradient-to-t from-[#130d1a] to-transparent z-[2]"
-                      : "absolute -top-1 left-0 right-0 h-24 bg-gradient-to-b from-[#130d1a] to-transparent z-[2]"
+                      ? "pointer-events-none absolute -bottom-20 left-0 right-0 h-48 bg-gradient-to-b from-transparent via-[#130d1a] to-transparent z-[8]"
+                      : "absolute top-0 left-0 right-0 h-28 bg-gradient-to-b from-[#130d1a]/72 to-transparent z-[2]"
                   }`}
                 />
                 <div

@@ -5,6 +5,10 @@ import {
   isMissingSheetsEndpointError,
 } from "@/src/features/shop/infrastructure/data/fetchProducts";
 import type { Departament, Product } from "@/src/features/shop/domain/entities/Product";
+import {
+  getProductCategories,
+  productBelongsToCategory,
+} from "@/src/features/shop/domain/productCategories";
 
 export type FilterState = {
   searchTerm: string;
@@ -588,7 +592,7 @@ export const useProductsStore = ({
 
   const filteredProducts = useMemo(() => {
     const withCategory = filters.category
-      ? contextFilteredProducts.filter((product) => product.category === filters.category)
+      ? contextFilteredProducts.filter((product) => productBelongsToCategory(product, filters.category))
       : contextFilteredProducts;
     const withSpecs = applySpecFilters(withCategory, filters.selectedSpecs);
     return sortProducts(withSpecs, filters.sortBy);
@@ -605,9 +609,7 @@ export const useProductsStore = ({
 
     const cats = new Set<string>();
     contextFilteredProducts.forEach((product) => {
-      if (product.category) {
-        cats.add(product.category);
-      }
+      getProductCategories(product).forEach((category) => cats.add(category));
     });
     if (filters.category) {
       cats.add(filters.category);
@@ -620,9 +622,7 @@ export const useProductsStore = ({
       return contextFilteredProducts;
     }
 
-    return contextFilteredProducts.filter(
-      (product) => product.category === filters.category
-    );
+    return contextFilteredProducts.filter((product) => productBelongsToCategory(product, filters.category));
   }, [contextFilteredProducts, filters.category]);
 
   const availableSpecifications = useMemo<SpecFiltersMap>(() => {
@@ -716,7 +716,7 @@ export const useProductsStore = ({
   }, []);
 
   const clearFilters = useCallback(() => {
-    setFilters(createDefaultFilters("PELUQUERIA"));
+    setFilters((prev) => createDefaultFilters(prev.departament === "BIJOUTERIE" ? "BIJOUTERIE" : "PELUQUERIA"));
   }, []);
 
   const openQuickView = useCallback((product: Product) => {

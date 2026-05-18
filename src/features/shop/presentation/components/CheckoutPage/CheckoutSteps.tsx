@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { brandConfig } from "@/src/config/brand";
 import type { PaymentMethod } from "../../view-models/useCartStore";
 import { useCart } from "../../view-models/useCartStore";
 import { refreshProductsMemoryCacheFromSource } from "../../view-models/useProductsStore";
@@ -20,8 +21,7 @@ import {
 } from "./checkoutUtils";
 
 const DRAFT_STORAGE_KEY = "es_sol_checkout_draft";
-const BANK_CBU = "0000000000000000000000";
-const BANK_ALIAS = "ESTILOSOL.OK";
+const BANK_TRANSFER_INFO = brandConfig.paymentInfo.transfer;
 const PROGRESS_STEP_DELAY_MS = 850;
 const REDIRECT_FEEDBACK_DELAY_MS = 350;
 
@@ -63,7 +63,7 @@ type CheckoutStepsProps = {
   onInvalidProductsChange?: (products: CheckoutInvalidProduct[]) => void;
 };
 
-type BankField = "cbu" | "alias";
+type BankField = "cvu" | "alias";
 
 const inputBaseClassName =
   "w-full rounded-2xl border border-transparent bg-[color-mix(in_srgb,var(--brand-violet-700)_24%,white_76%)] px-3.5 py-2.5 text-sm text-[var(--brand-violet-950)] placeholder:text-[var(--brand-violet-950)]/55 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-500)]";
@@ -962,27 +962,26 @@ export default function CheckoutSteps({
               {transferInfoOpen ? (
                 <div className="mt-2 rounded-lg border border-[rgba(242,199,119,0.42)] bg-[rgba(250,242,255,0.94)] p-3 text-[var(--brand-violet-950)]">
                   <div className="space-y-1 text-xs sm:text-sm">
-                    <p><span className="font-semibold">Banco:</span> Banco Galicia</p>
-                    <p><span className="font-semibold">Titular:</span> Estilo Sol</p>
+                    <p><span className="font-semibold">Banco:</span> {BANK_TRANSFER_INFO.bankName}</p>
                     <div className="flex items-start justify-between gap-2">
                       <p className="break-all">
-                        <span className="font-semibold">CBU:</span> {BANK_CBU}
+                        <span className="font-semibold">CVU:</span> {BANK_TRANSFER_INFO.cvu}
                       </p>
                       <button
                         type="button"
-                        onClick={() => void copyBankValue(BANK_CBU, "cbu")}
+                        onClick={() => void copyBankValue(BANK_TRANSFER_INFO.cvu, "cvu")}
                         className="shrink-0 rounded border border-[rgba(94,58,146,0.32)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand-violet-950)] transition hover:bg-[rgba(214,166,75,0.2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-500)]"
                       >
-                        {copiedField === "cbu" ? "Copiado" : "Copiar"}
+                        {copiedField === "cvu" ? "Copiado" : "Copiar"}
                       </button>
                     </div>
                     <div className="flex items-start justify-between gap-2">
                       <p>
-                        <span className="font-semibold">Alias:</span> {BANK_ALIAS}
+                        <span className="font-semibold">Alias:</span> {BANK_TRANSFER_INFO.alias}
                       </p>
                       <button
                         type="button"
-                        onClick={() => void copyBankValue(BANK_ALIAS, "alias")}
+                        onClick={() => void copyBankValue(BANK_TRANSFER_INFO.alias, "alias")}
                         className="shrink-0 rounded border border-[rgba(94,58,146,0.32)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand-violet-950)] transition hover:bg-[rgba(214,166,75,0.2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-500)]"
                       >
                         {copiedField === "alias" ? "Copiado" : "Copiar"}
