@@ -147,6 +147,7 @@ export default function TiendaClientView({
   const selectedWorld = filters.departament ?? "PELUQUERIA";
   const shouldRefreshCatalog = searchParams.get("refresh") === "1";
   const hasInitialCatalog = initialProducts.length > 0;
+  const shouldShowInitialLoading = status === "idle" && products.length === 0;
   const shopLocationKey = useMemo(() => {
     const query = searchParams.toString();
     return query ? `${pathname}?${query}` : pathname ?? "/tienda";
@@ -833,7 +834,7 @@ export default function TiendaClientView({
                 </div>
               </div>
 
-              {loading ? (
+              {loading || shouldShowInitialLoading ? (
                 <LoadingGrid />
               ) : status === "error" ? (
                 <div className="rounded-2xl border border-rose-300/35 bg-rose-950/30 px-5 py-8 text-center">

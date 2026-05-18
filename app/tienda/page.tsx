@@ -37,7 +37,5 @@ export default async function TiendaRoute({ searchParams }: TiendaRouteProps) {
   const params = searchParams ? await searchParams : undefined;
   const initialDepartament = normalizeRubroParam(params?.rubro);
 
-  return (
-    <TiendaPage initialDepartament={initialDepartament} />
-  );
+  return <TiendaPage initialDepartament={initialDepartament} />;
 }
