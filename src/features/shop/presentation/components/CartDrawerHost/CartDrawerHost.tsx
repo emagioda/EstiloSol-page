@@ -11,5 +11,11 @@ const CartDrawer = dynamic(
 export default function CartDrawerHost() {
   const { open, setOpen } = useCartDrawer();
 
-  return <CartDrawer open={open} onClose={() => setOpen(false)} />;
+  return (
+    <CartDrawer
+      open={open}
+      onClose={() => setOpen(false)}
+      onNavigate={() => setOpen(false, { skipHistoryBack: true })}
+    />
+  );
 }

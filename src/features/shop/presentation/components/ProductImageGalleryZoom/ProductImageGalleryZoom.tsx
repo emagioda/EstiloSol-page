@@ -2,10 +2,60 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { type MouseEvent, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 
 const ProductLightbox = dynamic(() => import("./ProductLightbox"), { ssr: false });
+const PRODUCT_LIGHTBOX_HISTORY_KEY = "__estiloSolProductLightboxOpen";
+
+const pushProductLightboxHistoryEntry = () => {
+  if (typeof window === "undefined") return false;
+
+  try {
+    const currentState = window.history.state;
+    const nextState =
+      currentState && typeof currentState === "object"
+        ? {
+            ...(currentState as Record<string, unknown>),
+            [PRODUCT_LIGHTBOX_HISTORY_KEY]: true,
+          }
+        : { [PRODUCT_LIGHTBOX_HISTORY_KEY]: true };
+
+    window.history.pushState(nextState, "", window.location.href);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const clearProductLightboxHistoryMarker = () => {
+  if (typeof window === "undefined") return;
+
+  try {
+    const currentState = window.history.state;
+    if (!currentState || typeof currentState !== "object") return;
+
+    const currentRecord = currentState as Record<string, unknown>;
+    if (!currentRecord[PRODUCT_LIGHTBOX_HISTORY_KEY]) return;
+
+    const nextState = { ...currentRecord };
+    delete nextState[PRODUCT_LIGHTBOX_HISTORY_KEY];
+    window.history.replaceState(nextState, "", window.location.href);
+  } catch {
+    return;
+  }
+};
+
+const isProductLightboxHistoryState = () => {
+  if (typeof window === "undefined") return false;
+
+  const currentState = window.history.state;
+  return Boolean(
+    currentState &&
+      typeof currentState === "object" &&
+      (currentState as Record<string, unknown>)[PRODUCT_LIGHTBOX_HISTORY_KEY]
+  );
+};
 
 type Theme = "quickview" | "pdp";
 
@@ -35,6 +85,7 @@ export default function ProductImageGalleryZoom({
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
   const [animationKey, setAnimationKey] = useState(0);
   const [slideDirection, setSlideDirection] = useState<"left" | "right">("right");
+  const lightboxHistoryEntryRef = useRef(false);
   const pointerStartRef = useRef<{
     pointerId: number;
     x: number;
@@ -53,6 +104,50 @@ export default function ProductImageGalleryZoom({
     : 0;
   const currentImage = images[safeIndex] ?? "";
   const slides = useMemo(() => images.map((src) => ({ src })), [images]);
+
+  const openLightbox = useCallback(() => {
+    if (!images.length) return;
+
+    setIsLightboxOpen(true);
+    if (!lightboxHistoryEntryRef.current && pushProductLightboxHistoryEntry()) {
+      lightboxHistoryEntryRef.current = true;
+    }
+  }, [images.length]);
+
+  const closeLightbox = useCallback(() => {
+    setIsLightboxOpen(false);
+
+    if (!lightboxHistoryEntryRef.current) return;
+    if (typeof window === "undefined") return;
+
+    lightboxHistoryEntryRef.current = false;
+    window.history.back();
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      if (isProductLightboxHistoryState()) {
+        lightboxHistoryEntryRef.current = true;
+        setIsLightboxOpen(true);
+        return;
+      }
+
+      if (!lightboxHistoryEntryRef.current) return;
+
+      lightboxHistoryEntryRef.current = false;
+      setIsLightboxOpen(false);
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      lightboxHistoryEntryRef.current = false;
+      clearProductLightboxHistoryMarker();
+    };
+  }, []);
 
   const changeImageIndex = (nextIndex: number) => {
     if (!images.length) {
@@ -182,7 +277,7 @@ export default function ProductImageGalleryZoom({
             const distSq = dx * dx + dy * dy;
             const TAP_DIST_SQ = 25; // ~5px tolerance
             if (distSq < TAP_DIST_SQ && images.length) {
-              setIsLightboxOpen(true);
+              openLightbox();
             }
           }
 
@@ -199,7 +294,7 @@ export default function ProductImageGalleryZoom({
         }}
         onClick={() => {
           if (!images.length) return;
-          setIsLightboxOpen(true);
+          openLightbox();
         }}
         role="button"
         tabIndex={0}
@@ -208,7 +303,7 @@ export default function ProductImageGalleryZoom({
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             if (!images.length) return;
-            setIsLightboxOpen(true);
+            openLightbox();
           }
         }}
       >
@@ -319,7 +414,7 @@ export default function ProductImageGalleryZoom({
       {isLightboxOpen && images.length > 0 ? (
         <ProductLightbox
           open={isLightboxOpen}
-          onClose={() => setIsLightboxOpen(false)}
+          onClose={closeLightbox}
           slides={slides}
           index={safeIndex}
           hasMultipleImages={hasMultipleImages}

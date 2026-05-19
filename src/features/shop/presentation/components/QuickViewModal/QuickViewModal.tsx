@@ -125,7 +125,7 @@ export default function QuickViewModal({
         onClick={onClose}
       >
         <div
-          className="relative grid h-auto w-full max-w-4xl max-h-[90vh] overflow-y-auto overflow-x-hidden overscroll-contain rounded-lg border border-[var(--brand-violet-700)]/40 bg-[var(--brand-cream)] text-[var(--brand-violet-950)] shadow-[0_20px_80px_rgba(0,0,0,0.45)] sm:grid-cols-2 scrollbar-hide"
+          className="relative h-auto w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-lg border border-[var(--brand-violet-700)]/40 bg-[var(--brand-cream)] text-[var(--brand-violet-950)] shadow-[0_20px_80px_rgba(0,0,0,0.45)]"
           onClick={(e) => e.stopPropagation()}
         >
           <button
@@ -139,18 +139,19 @@ export default function QuickViewModal({
             </span>
           </button>
 
-          <div className="flex h-auto flex-col bg-[var(--brand-cream)] p-3 sm:p-4">
-            <ProductImageGalleryZoom
-              key={`${product.id}-${open ? "open" : "closed"}`}
-              images={images}
-              productName={product.name}
-              currentImageIndex={safeIndex}
-              onImageIndexChange={setCurrentImageIndex}
-              theme="quickview"
-              thumbnailsDesktopOnly={false}
-              alwaysColumn
-            />
-          </div>
+          <div className="grid max-h-[90vh] overflow-y-auto overflow-x-hidden overscroll-contain sm:grid-cols-2 scrollbar-hide">
+            <div className="flex h-auto flex-col bg-[var(--brand-cream)] p-3 sm:p-4">
+              <ProductImageGalleryZoom
+                key={`${product.id}-${open ? "open" : "closed"}`}
+                images={images}
+                productName={product.name}
+                currentImageIndex={safeIndex}
+                onImageIndexChange={setCurrentImageIndex}
+                theme="quickview"
+                thumbnailsDesktopOnly={false}
+                alwaysColumn
+              />
+            </div>
 
           <div className="flex flex-col gap-4 p-5 sm:p-7 text-[var(--brand-violet-950)]">
             <div>
@@ -270,6 +271,7 @@ export default function QuickViewModal({
               </Link>
             </div>
           </div>
+        </div>
         </div>
       </div>
 

@@ -266,8 +266,8 @@ export default function Navbar() {
                         <path d="M3 4h2l2.3 10.1a1 1 0 0 0 .97.78h8.85a1 1 0 0 0 .97-.76L20 7H7.4" />
                       </svg>
                       <span className="flex min-w-[7.25rem] flex-col items-start text-left normal-case tracking-normal leading-tight">
-                        <span className="text-xs font-semibold text-[var(--brand-cream)]">Carrito ({cartCount})</span>
-                        <span className="text-[11px] text-[var(--brand-gold-300)]">{formattedTotal}</span>
+                        <span suppressHydrationWarning className="text-xs font-semibold text-[var(--brand-cream)]">Carrito ({cartCount})</span>
+                        <span suppressHydrationWarning className="text-[11px] text-[var(--brand-gold-300)]">{formattedTotal}</span>
                       </span>
                     </button>
                   </div>

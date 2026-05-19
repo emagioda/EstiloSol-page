@@ -289,7 +289,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
           </h2>
           <div className="mb-6 h-px bg-gradient-to-r from-[var(--brand-gold-400)]/40 via-[var(--brand-gold-300)]/20 to-transparent" />
 
-          <div className="-mx-1 flex snap-x snap-mandatory gap-4 overflow-x-auto px-1 pb-2">
+          <div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2">
             {visibleSimilarProducts.map((similarProduct) => {
               const similarPrice = isValidPrice(similarProduct.price)
                 ? formatMoney(similarProduct.price)
@@ -309,7 +309,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
                 <Link
                   key={similarProduct.id}
                   href={`/tienda/producto/${similarProduct.slug || similarProduct.id}`}
-                  className="group snap-start shrink-0 basis-[74%] overflow-hidden rounded-2xl border border-[var(--brand-gold-300)]/22 bg-white/[0.12] shadow-lg shadow-black/20 transition-all duration-200 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/50 sm:basis-[46%] lg:basis-[30%]"
+                  className="group snap-start shrink-0 basis-[38%] overflow-hidden rounded-xl border border-[var(--brand-gold-300)]/22 bg-white/[0.12] shadow-lg shadow-black/20 transition-all duration-200 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/50 sm:basis-[30%] lg:basis-[22%]"
                 >
                   <div className="relative aspect-[4/5] w-full">
                     {Array.isArray(similarProduct.images) && similarProduct.images[0] ? (
@@ -318,7 +318,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
                         alt={similarProduct.name}
                         fill
                         className="object-cover transition-transform duration-300 group-hover:scale-105"
-                        sizes="(max-width:640px) 70vw, (max-width:1024px) 40vw, 24vw"
+                        sizes="(max-width:640px) 38vw, (max-width:1024px) 30vw, 22vw"
                       />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[var(--brand-gold-300)]">
@@ -326,16 +326,16 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
                       </div>
                     )}
                   </div>
-                  <div className="flex flex-col gap-1.5 p-3.5">
+                  <div className="flex flex-col gap-1.5 p-3">
                     {similarOldPrice && (
                       <span className="text-xs text-[var(--brand-cream)]/60 line-through">
                         {similarOldPrice}
                       </span>
                     )}
-                    <span className="text-sm font-semibold text-[var(--brand-gold-300)]">
+                    <span className="text-xs font-semibold text-[var(--brand-gold-300)] sm:text-sm">
                       {similarPrice}
                     </span>
-                    <p className="line-clamp-2 text-sm leading-relaxed text-[var(--brand-cream)]/92">
+                    <p className="line-clamp-2 text-xs leading-relaxed text-[var(--brand-cream)]/92 sm:text-sm">
                       {similarProduct.name}
                     </p>
                   </div>

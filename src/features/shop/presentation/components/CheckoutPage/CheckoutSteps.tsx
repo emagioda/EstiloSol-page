@@ -14,7 +14,6 @@ import {
   isValidEmail,
   isValidWhatsapp,
   normalizePhoneDigits,
-  paymentMethodLabel,
   sanitizeText,
   type CheckoutContactDraft,
   type DeliveryMethod,
@@ -226,8 +225,6 @@ const CheckoutProgress = ({
 };
 
 export default function CheckoutSteps({
-  subtotal: _subtotal,
-  discountedTotal: _discountedTotal,
   onInvalidProductsChange,
 }: CheckoutStepsProps) {
   const { items, paymentMethod, setPaymentMethod, removeItem, syncStockFromProducts } = useCart();
@@ -250,7 +247,6 @@ export default function CheckoutSteps({
 
   const fullName = useMemo(() => `${firstName} ${lastName}`.replace(/\s+/g, " ").trim(), [firstName, lastName]);
   const isDiscountMethod = isDiscountPaymentMethod(paymentMethod);
-  const displayedTotal = isDiscountMethod ? _discountedTotal : _subtotal;
   const priceChangedProducts = useMemo(
     () => (error?.invalidProducts ?? []).filter(isPriceChangedProduct),
     [error?.invalidProducts]
@@ -901,7 +897,13 @@ export default function CheckoutSteps({
           </p>
         ) : (
           <div className="mt-4 space-y-2.5">
-            <label className="block w-full cursor-pointer rounded-2xl border border-[rgba(242,199,119,0.42)] bg-[rgba(206,175,228,0.24)] p-3 transition hover:border-[rgba(248,227,176,0.74)]">
+            <label
+              className={`block w-full cursor-pointer rounded-2xl border p-3 transition hover:border-[rgba(248,227,176,0.74)] ${
+                paymentMethod === "cash"
+                  ? "border-[rgba(248,227,176,0.68)] bg-[rgba(116,79,154,0.42)] shadow-[inset_0_0_0_1px_rgba(248,227,176,0.12)]"
+                  : "border-[rgba(242,199,119,0.42)] bg-[rgba(206,175,228,0.24)]"
+              }`}
+            >
               <div className="flex items-start gap-3">
                 <input
                   type="radio"
@@ -920,7 +922,13 @@ export default function CheckoutSteps({
               </div>
             </label>
 
-            <div className="rounded-2xl border border-[rgba(242,199,119,0.42)] bg-[rgba(206,175,228,0.24)] px-3 pt-3 pb-2.5">
+            <div
+              className={`rounded-2xl border px-3 pt-3 pb-2.5 transition ${
+                paymentMethod === "transfer"
+                  ? "border-[rgba(248,227,176,0.68)] bg-[rgba(116,79,154,0.42)] shadow-[inset_0_0_0_1px_rgba(248,227,176,0.12)]"
+                  : "border-[rgba(242,199,119,0.42)] bg-[rgba(206,175,228,0.24)]"
+              }`}
+            >
               <label className="block w-full cursor-pointer">
                 <div className="flex items-start gap-3">
                   <input
@@ -960,39 +968,60 @@ export default function CheckoutSteps({
               </button>
 
               {transferInfoOpen ? (
-                <div className="mt-2 rounded-lg border border-[rgba(242,199,119,0.42)] bg-[rgba(250,242,255,0.94)] p-3 text-[var(--brand-violet-950)]">
-                  <div className="space-y-1 text-xs sm:text-sm">
-                    <p><span className="font-semibold">Banco:</span> {BANK_TRANSFER_INFO.bankName}</p>
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="break-all">
-                        <span className="font-semibold">CVU:</span> {BANK_TRANSFER_INFO.cvu}
-                      </p>
+                <div className="mt-2 rounded-lg border border-[rgba(242,199,119,0.42)] bg-[rgba(250,242,255,0.94)] px-3 py-2 text-[var(--brand-violet-950)] shadow-sm">
+                  <dl className="divide-y divide-[rgba(94,58,146,0.14)] text-xs sm:text-sm">
+                    <div className="grid grid-cols-[3.75rem_minmax(0,1fr)] items-center gap-2 py-1.5">
+                      <dt className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--brand-violet-950)]/58">
+                        Banco
+                      </dt>
+                      <dd className="min-w-0 font-semibold leading-snug">
+                        {BANK_TRANSFER_INFO.bankName}
+                      </dd>
+                    </div>
+
+                    <div className="grid grid-cols-[3.75rem_minmax(0,1fr)_auto] items-center gap-2 py-1.5">
+                      <dt className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--brand-violet-950)]/58">
+                        CVU
+                      </dt>
+                      <dd className="min-w-0 break-all font-mono text-[12px] font-semibold leading-tight tabular-nums text-[var(--brand-violet-950)]/88 sm:text-[13px]">
+                        {BANK_TRANSFER_INFO.cvu}
+                      </dd>
                       <button
                         type="button"
                         onClick={() => void copyBankValue(BANK_TRANSFER_INFO.cvu, "cvu")}
-                        className="shrink-0 rounded border border-[rgba(94,58,146,0.32)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand-violet-950)] transition hover:bg-[rgba(214,166,75,0.2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-500)]"
+                        className="min-h-7 shrink-0 rounded-md border border-[rgba(94,58,146,0.28)] px-2.5 py-1 text-[11px] font-semibold leading-none text-[var(--brand-violet-950)] transition hover:bg-[rgba(214,166,75,0.2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-500)]"
                       >
                         {copiedField === "cvu" ? "Copiado" : "Copiar"}
                       </button>
                     </div>
-                    <div className="flex items-start justify-between gap-2">
-                      <p>
-                        <span className="font-semibold">Alias:</span> {BANK_TRANSFER_INFO.alias}
-                      </p>
+
+                    <div className="grid grid-cols-[3.75rem_minmax(0,1fr)_auto] items-center gap-2 py-1.5">
+                      <dt className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--brand-violet-950)]/58">
+                        Alias
+                      </dt>
+                      <dd className="min-w-0 break-words font-semibold leading-tight text-[var(--brand-violet-950)]/88">
+                        {BANK_TRANSFER_INFO.alias}
+                      </dd>
                       <button
                         type="button"
                         onClick={() => void copyBankValue(BANK_TRANSFER_INFO.alias, "alias")}
-                        className="shrink-0 rounded border border-[rgba(94,58,146,0.32)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand-violet-950)] transition hover:bg-[rgba(214,166,75,0.2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-500)]"
+                        className="min-h-7 shrink-0 rounded-md border border-[rgba(94,58,146,0.28)] px-2.5 py-1 text-[11px] font-semibold leading-none text-[var(--brand-violet-950)] transition hover:bg-[rgba(214,166,75,0.2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-500)]"
                       >
                         {copiedField === "alias" ? "Copiado" : "Copiar"}
                       </button>
                     </div>
-                  </div>
+                  </dl>
                 </div>
               ) : null}
             </div>
 
-            <label className="block w-full cursor-pointer rounded-2xl border border-[rgba(218,189,236,0.45)] bg-[rgba(207,178,227,0.18)] p-3 transition hover:border-[rgba(248,227,176,0.7)]">
+            <label
+              className={`block w-full cursor-pointer rounded-2xl border p-3 transition hover:border-[rgba(248,227,176,0.7)] ${
+                paymentMethod === "mercadopago"
+                  ? "border-[rgba(248,227,176,0.62)] bg-[rgba(116,79,154,0.38)] shadow-[inset_0_0_0_1px_rgba(248,227,176,0.1)]"
+                  : "border-[rgba(218,189,236,0.45)] bg-[rgba(207,178,227,0.18)]"
+              }`}
+            >
               <div className="flex items-start gap-3">
                 <input
                   type="radio"
@@ -1101,9 +1130,6 @@ export default function CheckoutSteps({
           </span>
         </button>
 
-        <p className="mt-2 text-xs text-[var(--brand-cream)]/70">
-          Metodo seleccionado: {paymentMethodLabel(paymentMethod)}. Total estimado: {formatMoney(displayedTotal)}
-        </p>
       </section>
     </div>
   );

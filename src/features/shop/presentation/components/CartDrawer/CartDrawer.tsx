@@ -2,7 +2,8 @@
 /* eslint-disable @next/next/no-img-element */
 import "@/src/core/presentation/styles/tokens.css";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 import {
   canIncreaseCartItem,
@@ -18,7 +19,16 @@ const formatMoney = (value: number) =>
     maximumFractionDigits: 0,
   }).format(value);
 
-export default function CartDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+export default function CartDrawer({
+  open,
+  onClose,
+  onNavigate,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onNavigate?: () => void;
+}) {
+  const router = useRouter();
   const { items, updateQty, removeItem, clear, syncStockFromProducts } = useCart();
   const { products, loadProducts } = useProductsStore();
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
@@ -63,6 +73,19 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
     clear();
     setConfirmClearOpen(false);
   };
+
+  const handleCheckoutNavigation = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>) => {
+      event.preventDefault();
+      if (onNavigate) {
+        onNavigate();
+      } else {
+        handleClose();
+      }
+      router.push("/tienda/checkout");
+    },
+    [handleClose, onNavigate, router]
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -233,7 +256,7 @@ export default function CartDrawer({ open, onClose }: { open: boolean; onClose: 
             {items.length > 0 ? (
               <Link
                 href="/tienda/checkout"
-                onClick={handleClose}
+                onClick={handleCheckoutNavigation}
                 className="flex-1 rounded bg-[var(--brand-gold-300)] py-2 text-center text-black shadow-[0_10px_20px_rgba(18,8,35,0.25)] transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-950)]"
               >
                 Continuar al pago
