@@ -65,13 +65,6 @@ function ProductCard({
       className: "bg-slate-800 text-white",
     });
   }
-  if (isLastUnit) {
-    badges.push({
-      key: "last-unit",
-      label: "ÚLTIMA",
-      className: "bg-gradient-to-r from-amber-200 to-rose-200 text-[var(--brand-violet-950)]",
-    });
-  }
   if (product.is_new) {
     badges.push({
       key: "new",

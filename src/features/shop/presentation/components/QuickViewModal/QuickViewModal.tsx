@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import { formatProductCategories } from "@/src/features/shop/domain/productCategories";
 import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 import {
   getStockLabel,
@@ -72,6 +73,14 @@ export default function QuickViewModal({
           maximumFractionDigits: 0,
         }).format(product.price)
       : "Consultar";
+  const discountedPrice =
+    typeof product?.price === "number" && Number.isFinite(product.price)
+      ? new Intl.NumberFormat("es-AR", {
+          style: "currency",
+          currency: product?.currency || "ARS",
+          maximumFractionDigits: 0,
+        }).format(Math.round(product.price * 0.9))
+      : null;
 
   useBodyScrollLock(open);
 
@@ -153,39 +162,47 @@ export default function QuickViewModal({
               />
             </div>
 
-          <div className="flex flex-col gap-4 p-5 sm:p-7 text-[var(--brand-violet-950)]">
-            <div>
-              <h3 className="text-3xl font-bold uppercase leading-tight tracking-[0.02em] text-[var(--brand-violet-950)] sm:text-[2.2rem]">
-                {product.name}
-              </h3>
-              <p className="mt-4 border-b border-[var(--brand-violet-700)]/25 pb-4 text-3xl font-extrabold text-[var(--brand-violet-950)] sm:text-[3rem]">
-                {formattedPrice}
+          <div className="flex flex-col gap-4 p-5 pr-14 sm:p-7 sm:pr-16 text-[var(--brand-violet-950)]">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--brand-violet-700)]">
+                {formatProductCategories(product)}
               </p>
               <div
-                className={`mt-4 inline-flex w-fit items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-bold leading-none shadow-sm ${
+                className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold leading-none shadow-sm ${
                   !canBuy
                     ? "border-rose-300 bg-rose-100 text-rose-700"
                     : isLastUnit
-                    ? "border-amber-300 bg-gradient-to-r from-amber-100 to-rose-100 text-[var(--brand-violet-950)] shadow-[0_8px_18px_rgba(180,83,9,0.16)]"
+                    ? "border-amber-300 bg-amber-100 text-[var(--brand-violet-950)]"
                     : product.stock_status === "preorder"
                     ? "border-amber-200 bg-amber-50 text-amber-700"
                     : "border-emerald-200 bg-emerald-50 text-emerald-700"
                 }`}
               >
                 {isLastUnit && (
-                  <span className="h-2 w-2 rounded-full bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.85)]" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]" />
                 )}
                 {stockLabel}
               </div>
             </div>
 
-            {shortDescription.length > 0 && (
-              <div className="whitespace-pre-line text-sm leading-relaxed text-[var(--brand-violet-950)]/90">
-                {shortDescription}
+            <div className="space-y-2">
+              <h3 className="text-3xl font-bold uppercase leading-tight tracking-[0.02em] text-[var(--brand-violet-950)] sm:text-[2.2rem]">
+                {product.name}
+              </h3>
+              <div className="space-y-2 border-b border-[var(--brand-violet-700)]/25 pb-4">
+                <p className="text-3xl font-extrabold leading-none text-[var(--brand-violet-950)] sm:text-[3rem]">
+                  {formattedPrice}
+                </p>
+                {discountedPrice && (
+                  <p className="text-sm font-medium leading-tight text-emerald-700">
+                    <span className="font-bold">Efectivo/transf.</span>{" "}
+                    {discountedPrice} <span className="text-[var(--brand-gold-600)]">· 10% OFF</span>
+                  </p>
+                )}
               </div>
-            )}
+            </div>
 
-            <div className="mt-auto flex flex-col gap-4 pt-4">
+            <div className="flex flex-col gap-4 pt-2">
               <div className="flex flex-nowrap items-center justify-between gap-3 w-full">
                 <div className="inline-flex items-center rounded-2xl bg-[var(--brand-violet-950)]/10 border border-[var(--brand-violet-950)]/15 p-1 backdrop-blur-sm">
                   <button
@@ -249,18 +266,15 @@ export default function QuickViewModal({
                 </button>
               </div>
 
-              <div className="mt-5 rounded-2xl bg-[var(--brand-violet-950)]/5 border border-[var(--brand-violet-950)]/15 p-4 text-[var(--brand-violet-950)]/95">
-                <ul className="space-y-2 text-sm">
-                  <li className="flex items-center gap-2">
-                    <span className="text-lg">🚚</span>
-                    <span>Entrega en Rosario</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <span className="text-lg">💳</span>
-                    <span>Pago por transferencia o efectivo</span>
-                  </li>
-                </ul>
-              </div>
+              <p className="text-xs font-medium text-[var(--brand-violet-950)]/70">
+                Entrega disponible en Rosario.
+              </p>
+
+              {shortDescription.length > 0 && (
+                <div className="whitespace-pre-line text-sm leading-relaxed text-[var(--brand-violet-950)]/90">
+                  {shortDescription}
+                </div>
+              )}
 
               <Link
                 href={`/tienda/producto/${product.slug || encodeURIComponent(String(product.id))}`}
