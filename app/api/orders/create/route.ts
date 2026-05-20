@@ -138,6 +138,7 @@ export async function POST(request: NextRequest) {
   return NextResponse.json(
     {
       externalReference: order.externalReference,
+      summaryToken: order.summaryToken,
       total: order.total,
       currency: order.currency,
       paymentMethod: order.paymentMethod,

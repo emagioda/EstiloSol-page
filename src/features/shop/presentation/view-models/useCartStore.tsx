@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Product, StockStatus } from "@/src/features/shop/domain/entities/Product";
 
 export type CartItem = {
@@ -35,6 +35,7 @@ type CartContextValue = {
 };
 
 const STORAGE_KEY = "es_sol_cart_v1";
+export const CART_UPDATED_EVENT = "es:cart-updated";
 const MAX_ITEM_QTY = 50;
 
 const normalizeQty = (value: unknown): number => {
@@ -66,6 +67,17 @@ const normalizeStockStatus = (value: unknown): StockStatus | undefined => {
   }
 
   return undefined;
+};
+
+const normalizeStoredUnitPrice = (item: Record<string, unknown>): number => {
+  const candidates = [item.unitPrice, item.unit_price, item.price, item.precio];
+
+  for (const candidate of candidates) {
+    const price = normalizePrice(candidate);
+    if (price > 0) return price;
+  }
+
+  return normalizePrice(candidates[0]);
 };
 
 export const getCartItemMaxQty = (item: Pick<CartItem, "stockStatus" | "stockQty">): number | null => {
@@ -105,13 +117,15 @@ const readItemsFromStorage = (): CartItem[] => {
       .map((it) => ({
         productId: String(it.productId),
         name: it.name ? String(it.name) : "",
-        unitPrice: normalizePrice(it.unitPrice),
+        unitPrice: normalizeStoredUnitPrice(it),
         qty: normalizeQty(it.qty),
         image: it.image ? String(it.image) : undefined,
         stockStatus: normalizeStockStatus(it.stockStatus ?? it.stock_status),
         stockQty: normalizeStockQty(it.stockQty ?? it.stock_qty) ?? null,
       }))
       .filter((it) => it.qty > 0);
+
+    return sanitized;
 
     return sanitized;
   } catch {
@@ -135,22 +149,68 @@ const cartItemsSignature = (items: CartItem[]) =>
     .sort()
     .join("~");
 
+export const getCartSnapshotFromItems = (
+  items: Array<Pick<CartItem, "qty" | "unitPrice">>
+) => ({
+  count: items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0),
+  total: items.reduce(
+    (sum, item) => sum + normalizePrice(item.unitPrice) * normalizeQty(item.qty),
+    0
+  ),
+});
+
+export const readCartSnapshotFromStorage = () => getCartSnapshotFromItems(readItemsFromStorage());
+
+const emitCartUpdated = (items: CartItem[]) => {
+  if (typeof window === "undefined") return;
+
+  try {
+    const snapshot = getCartSnapshotFromItems(items);
+    window.dispatchEvent(
+      new CustomEvent(CART_UPDATED_EVENT, {
+        detail: snapshot,
+      })
+    );
+  } catch {
+    try {
+      window.dispatchEvent(new CustomEvent(CART_UPDATED_EVENT));
+    } catch {}
+  }
+};
+
 export const CartProvider = ({ children }: { children: React.ReactNode }) => {
-  const [items, setItems] = useState<CartItem[]>(() => readItemsFromStorage());
+  const [items, setItems] = useState<CartItem[]>(() =>
+    typeof window !== "undefined" ? readItemsFromStorage() : []
+  );
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("mercadopago");
-  const itemsSignatureRef = useRef(cartItemsSignature(items));
+  const [storageHydrated, setStorageHydrated] = useState(false);
+  const itemsSignatureRef = useRef(cartItemsSignature([]));
 
   useEffect(() => {
     itemsSignatureRef.current = cartItemsSignature(items);
   }, [items]);
 
+  useLayoutEffect(() => {
+    const hydrateTimer = window.setTimeout(() => {
+      const storedItems = readItemsFromStorage();
+      itemsSignatureRef.current = cartItemsSignature(storedItems);
+      setItems(storedItems);
+      setStorageHydrated(true);
+    }, 0);
+
+    return () => window.clearTimeout(hydrateTimer);
+  }, []);
+
   useEffect(() => {
+    if (!storageHydrated) return;
+
     try {
       // Persist only valid items (qty > 0)
       const toPersist = items.filter((it) => it && typeof it.productId === "string" && Number(it.qty) > 0);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(toPersist));
+      emitCartUpdated(toPersist);
     } catch {}
-  }, [items]);
+  }, [items, storageHydrated]);
 
   const refreshItemsFromStorage = useCallback(() => {
     const storedItems = readItemsFromStorage();

@@ -26,7 +26,7 @@ describe("/api/catalog", () => {
       ),
     );
 
-    const response = await GET(new Request("http://localhost:3000/api/catalog"));
+    const response = await GET();
     const body = (await response.json()) as Array<Record<string, unknown>>;
 
     expect(response.status).toBe(200);
@@ -40,6 +40,24 @@ describe("/api/catalog", () => {
 
     const requestedUrl = String(fetchMock.mock.calls[0][0]);
     expect(requestedUrl).toContain("token=catalog-token");
+    expect(requestedUrl).toContain("sheet=products");
+  });
+
+  it("ignores public force=1 and keeps the cached catalog path", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("public, s-maxage=180, stale-while-revalidate=600");
+
+    const requestedUrl = String(fetchMock.mock.calls[0][0]);
+    expect(requestedUrl).not.toContain("force=1");
     expect(requestedUrl).toContain("sheet=products");
   });
 });

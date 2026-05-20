@@ -3,6 +3,7 @@ import type { OrderItem } from "@/src/server/orders/types";
 type BuildUrlsInput = {
   appBaseUrl: string;
   externalReference: string;
+  summaryToken?: string;
   successUrl?: string;
   failureUrl?: string;
   pendingUrl?: string;
@@ -11,7 +12,11 @@ type BuildUrlsInput = {
 
 const EXTERNAL_REFERENCE_PATTERNS = [/\{EXTERNAL_REFERENCE\}/g, /\{external_reference\}/g];
 
-const applyExternalReference = (url: string, externalReference: string) => {
+const applyExternalReference = (
+  url: string,
+  externalReference: string,
+  summaryToken?: string
+) => {
   const replaced = EXTERNAL_REFERENCE_PATTERNS.reduce(
     (acc, pattern) => acc.replace(pattern, externalReference),
     url
@@ -21,6 +26,9 @@ const applyExternalReference = (url: string, externalReference: string) => {
     const parsed = new URL(replaced);
     if (!parsed.searchParams.has("ref") && !parsed.searchParams.has("external_reference")) {
       parsed.searchParams.set("ref", externalReference);
+    }
+    if (summaryToken && !parsed.searchParams.has("summaryToken")) {
+      parsed.searchParams.set("summaryToken", summaryToken);
     }
     return parsed.toString();
   } catch {
@@ -51,7 +59,9 @@ const normalizeLocalhostUrl = (url: string) => {
 export const buildPreferenceUrls = (input: BuildUrlsInput) => {
   const appBaseUrl = normalizeLocalhostUrl(input.appBaseUrl).replace(/\/$/, "");
   const rawSuccess = input.successUrl || `${appBaseUrl}/tienda/success`;
-  const success = normalizeLocalhostUrl(applyExternalReference(rawSuccess, input.externalReference));
+  const success = normalizeLocalhostUrl(
+    applyExternalReference(rawSuccess, input.externalReference, input.summaryToken)
+  );
 
   const failure = normalizeLocalhostUrl(input.failureUrl || `${appBaseUrl}/tienda`);
   const pending = normalizeLocalhostUrl(input.pendingUrl || `${appBaseUrl}/tienda`);

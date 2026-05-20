@@ -759,6 +759,22 @@ function handleAppendOrderAndDecrementStock(payload) {
   };
 }
 
+function logInternalError_(context, err) {
+  const detail = err && err.stack ? err.stack : String(err && err.message ? err.message : err);
+  console.error(context + ": " + detail);
+}
+
+function publicErrorMessage_(err) {
+  const message = String(err && err.message ? err.message : err);
+  if (message === "Unauthorized") return "Unauthorized";
+  if (message === "Unsupported action") return "Invalid request";
+  if (message.indexOf("not allowed") !== -1) return "Invalid request";
+  if (message.indexOf("missing") !== -1 || message.indexOf("Misconfigured") !== -1) {
+    return "Server misconfigured";
+  }
+  return "Request failed";
+}
+
 function doGet(e) {
   try {
     const params = (e && e.parameter) ? e.parameter : {};
@@ -782,7 +798,8 @@ function doGet(e) {
 
     return jsonOutput(payloadObj.items || []);
   } catch (err) {
-    return jsonOutput({ ok: false, error: String(err && err.message ? err.message : err) });
+    logInternalError_("doGet", err);
+    return jsonOutput({ ok: false, error: publicErrorMessage_(err) });
   }
 }
 
@@ -802,7 +819,8 @@ function doPost(e) {
     if (action === "append_order_and_decrement_stock" || action === "appendorderanddecrementstock") return jsonOutput(handleAppendOrderAndDecrementStock(payload));
     throw new Error("Unsupported action");
   } catch (err) {
-    return jsonOutput({ ok: false, error: String(err && err.message ? err.message : err) });
+    logInternalError_("doPost", err);
+    return jsonOutput({ ok: false, error: publicErrorMessage_(err) });
   } finally {
     if (lock) lock.releaseLock();
   }

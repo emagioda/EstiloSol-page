@@ -58,10 +58,15 @@ describe("orders create manual payment flow", () => {
     });
 
     const response = await POST(request);
-    const body = (await response.json()) as { externalReference?: string; total?: number };
+    const body = (await response.json()) as {
+      externalReference?: string;
+      summaryToken?: string;
+      total?: number;
+    };
 
     expect(response.status).toBe(200);
     expect(body.externalReference?.startsWith("es-")).toBe(true);
+    expect(body.summaryToken).toMatch(/^[a-f0-9]{32}$/);
     expect(body.total).toBe(2000);
     expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();

@@ -17,7 +17,6 @@ type FetchProductsOptions = {
 
 const withCacheBust = (endpoint: string) => {
   const url = new URL(endpoint, window.location.origin);
-  url.searchParams.set("force", "1");
   url.searchParams.set("_ts", String(Date.now()));
   return `${url.pathname}${url.search}`;
 };

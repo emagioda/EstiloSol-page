@@ -70,6 +70,19 @@ describe("preferencePayload", () => {
     expect(urls.success).toBe("https://example.com/tienda/success?ref=es-456");
   });
 
+  it("injects summaryToken only into the success url", () => {
+    const urls = buildPreferenceUrls({
+      appBaseUrl: "https://example.com",
+      externalReference: "es-456",
+      summaryToken: "summary-token",
+    });
+
+    expect(urls.success).toBe("https://example.com/tienda/success?ref=es-456&summaryToken=summary-token");
+    expect(urls.failure).toBe("https://example.com/tienda");
+    expect(urls.pending).toBe("https://example.com/tienda");
+    expect(urls.webhook).toBe("https://example.com/api/mp/webhook");
+  });
+
   it("replaces lowercase external reference placeholder", () => {
     const urls = buildPreferenceUrls({
       appBaseUrl: "https://example.com",

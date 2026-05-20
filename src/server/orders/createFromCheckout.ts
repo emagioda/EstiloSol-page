@@ -43,6 +43,8 @@ const buildExternalReference = () => {
   return `es-${year}${month}${day}-${hour}${minute}${second}-${entropy}`;
 };
 
+const buildSummaryToken = () => randomBytes(16).toString("hex");
+
 export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult => {
   const orderItems: OrderItem[] = [];
   const invalidProducts: InvalidCheckoutProduct[] = [];
@@ -81,6 +83,7 @@ export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult
 
   const order: Order = {
     externalReference: buildExternalReference(),
+    summaryToken: buildSummaryToken(),
     status: input.status ?? "created",
     paymentStatus: "pending",
     shippingStatus: "in_process",

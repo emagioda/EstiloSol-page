@@ -117,6 +117,7 @@ export async function POST(request: NextRequest) {
   const urls = buildPreferenceUrls({
     appBaseUrl,
     externalReference: order.externalReference,
+    summaryToken: order.summaryToken,
     successUrl: env.getOptionalServer("MP_SUCCESS_URL"),
     failureUrl: env.getOptionalServer("MP_FAILURE_URL"),
     pendingUrl: env.getOptionalServer("MP_PENDING_URL"),
@@ -188,6 +189,7 @@ export async function POST(request: NextRequest) {
       initPoint: data.init_point,
       sandboxInitPoint: data.sandbox_init_point,
       externalReference: order.externalReference,
+      summaryToken: order.summaryToken,
     },
     { status: 200 }
   );

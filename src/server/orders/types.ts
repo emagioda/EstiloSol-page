@@ -23,6 +23,7 @@ export type OrderItem = {
 
 export type Order = {
   externalReference: string;
+  summaryToken?: string;
   status: OrderStatus;
   paymentStatus: OrderPaymentStatus;
   shippingStatus: OrderShippingStatus;

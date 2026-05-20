@@ -391,4 +391,78 @@ describe("CheckoutSteps Auto-Advance", () => {
     expect(localStorage.getItem("es_sol_checkout_draft")).toBeNull();
     expect(screen.getAllByText(/Pedido registrado/i).length).toBeGreaterThan(0);
   });
+
+  it("uses POST while polling Mercado Pago from the success page", async () => {
+    const clear = vi.fn();
+    const ref = "es-20260101-000000-successpost";
+    const summaryToken = "summary-token";
+
+    window.history.pushState(
+      {},
+      "",
+      `/tienda/success?ref=${ref}&summaryToken=${summaryToken}&status=approved&payment_id=123456`
+    );
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/mp/verify-payment") {
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(String(init?.body || "{}"))).toMatchObject({
+          ref,
+          paymentId: "123456",
+        });
+        return {
+          ok: true,
+          json: async () => ({
+            approved: true,
+            paymentId: "123456",
+            externalReference: ref,
+            date: "01/01/2026, 10:00:00",
+          }),
+        };
+      }
+
+      if (String(input).startsWith("http://localhost:3000/api/orders/")) {
+        const url = new URL(String(input));
+        expect(url.searchParams.get("summaryToken")).toBe(summaryToken);
+        return {
+          ok: true,
+          json: async () => ({
+            externalReference: ref,
+            total: 1000,
+            currency: "ARS",
+            createdAt: Date.now(),
+            items: [],
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected fetch url: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockUseCart.mockReturnValue({
+      items: [],
+      paymentMethod: "mercadopago",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts: vi.fn(),
+      clear,
+      getTotal: () => 0,
+      getDiscountedTotal: () => 0,
+    });
+
+    render(<SuccessPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Pago confirmado/i)).toBeInTheDocument();
+    });
+
+    expect(clear).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/mp/verify-payment",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
 });

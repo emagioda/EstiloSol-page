@@ -149,9 +149,14 @@ export default function SuccessPage() {
 
     let cancelled = false;
 
-    const fetchOrderSummary = async (ref: string) => {
+    const fetchOrderSummary = async (ref: string, summaryToken: string | null) => {
+      if (!summaryToken) return;
+
       try {
-        const res = await fetch(`/api/orders/${encodeURIComponent(ref)}`, {
+        const url = new URL(`/api/orders/${encodeURIComponent(ref)}`, window.location.origin);
+        url.searchParams.set("summaryToken", summaryToken);
+
+        const res = await fetch(url.toString(), {
           cache: "no-store",
         });
         const data = (await res.json().catch(() => null)) as OrderSummaryData | null;
@@ -185,13 +190,15 @@ export default function SuccessPage() {
         if (delay > 0) await wait(delay);
 
         try {
-          const verifyUrl = new URL("/api/mp/verify-payment", window.location.origin);
-          verifyUrl.searchParams.set("ref", ref);
-          if (paymentId) {
-            verifyUrl.searchParams.set("payment_id", paymentId);
-          }
-
-          const res = await fetch(verifyUrl.toString(), {
+          const res = await fetch("/api/mp/verify-payment", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              ref,
+              ...(paymentId ? { paymentId } : {}),
+            }),
             cache: "no-store",
           });
           const data = (await res.json().catch(() => null)) as PaymentData | null;
@@ -239,6 +246,7 @@ export default function SuccessPage() {
     const start = async () => {
       const params = new URLSearchParams(window.location.search);
       const ref = params.get("ref") || params.get("external_reference");
+      const summaryToken = params.get("summaryToken");
       const isManualCheckout = params.get("manual") === "1";
       const manualPaymentMethodLabel = parseManualPaymentMethodLabel(params.get("pm"));
       const paymentId = params.get("payment_id") || params.get("collection_id");
@@ -265,7 +273,7 @@ export default function SuccessPage() {
           date: formatDateTime24h(),
           paymentMethodLabel: manualPaymentMethodLabel,
         });
-        await fetchOrderSummary(ref);
+        await fetchOrderSummary(ref, summaryToken);
         return;
       }
 
@@ -283,7 +291,7 @@ export default function SuccessPage() {
       }
 
       await verifyWithPolling(ref, paymentId);
-      await fetchOrderSummary(ref);
+      await fetchOrderSummary(ref, summaryToken);
     };
 
     void start();

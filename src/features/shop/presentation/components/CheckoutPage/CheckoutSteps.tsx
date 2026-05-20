@@ -614,6 +614,7 @@ export default function CheckoutSteps({
       const data = (await response.json().catch(() => null)) as
         | {
             externalReference?: string;
+            summaryToken?: string;
             error?: string;
             invalidProducts?: Array<{ productId?: string; name?: string }>;
           }
@@ -643,6 +644,10 @@ export default function CheckoutSteps({
         pm: paymentMethod,
         ref: externalReference,
       });
+      const summaryToken = typeof data?.summaryToken === "string" ? data.summaryToken : "";
+      if (summaryToken) {
+        successParams.set("summaryToken", summaryToken);
+      }
 
       await finishCheckoutProgress();
       window.location.assign(`/tienda/success?${successParams.toString()}`);
@@ -968,50 +973,56 @@ export default function CheckoutSteps({
               </button>
 
               {transferInfoOpen ? (
-                <div className="mt-2 rounded-lg border border-[rgba(242,199,119,0.42)] bg-[rgba(250,242,255,0.94)] px-3 py-2 text-[var(--brand-violet-950)] shadow-sm">
-                  <dl className="divide-y divide-[rgba(94,58,146,0.14)] text-xs sm:text-sm">
-                    <div className="grid grid-cols-[3.75rem_minmax(0,1fr)] items-center gap-2 py-1.5">
-                      <dt className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--brand-violet-950)]/58">
-                        Banco
-                      </dt>
-                      <dd className="min-w-0 font-semibold leading-snug">
-                        {BANK_TRANSFER_INFO.bankName}
-                      </dd>
-                    </div>
+                <dl className="mt-3 divide-y divide-[rgba(255,255,255,0.18)] text-sm text-white">
+                  <div className="grid grid-cols-[2.75rem_minmax(0,1fr)] items-center gap-2 py-1.5">
+                    <dt className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/75">
+                      Banco
+                    </dt>
+                    <dd className="min-w-0 font-sans text-sm font-semibold leading-tight text-white">
+                      {BANK_TRANSFER_INFO.bankName}
+                    </dd>
+                  </div>
 
-                    <div className="grid grid-cols-[3.75rem_minmax(0,1fr)_auto] items-center gap-2 py-1.5">
-                      <dt className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--brand-violet-950)]/58">
-                        CVU
-                      </dt>
-                      <dd className="min-w-0 break-all font-mono text-[12px] font-semibold leading-tight tabular-nums text-[var(--brand-violet-950)]/88 sm:text-[13px]">
-                        {BANK_TRANSFER_INFO.cvu}
-                      </dd>
-                      <button
-                        type="button"
-                        onClick={() => void copyBankValue(BANK_TRANSFER_INFO.cvu, "cvu")}
-                        className="min-h-7 shrink-0 rounded-md border border-[rgba(94,58,146,0.28)] px-2.5 py-1 text-[11px] font-semibold leading-none text-[var(--brand-violet-950)] transition hover:bg-[rgba(214,166,75,0.2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-500)]"
-                      >
-                        {copiedField === "cvu" ? "Copiado" : "Copiar"}
-                      </button>
-                    </div>
+                  <div className="grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-2 py-1.5">
+                    <dt className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/75">
+                      CVU
+                    </dt>
+                    <dd className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-sans text-sm font-semibold leading-tight tracking-tight tabular-nums text-white">
+                      {BANK_TRANSFER_INFO.cvu}
+                    </dd>
+                    <button
+                      type="button"
+                      onClick={() => void copyBankValue(BANK_TRANSFER_INFO.cvu, "cvu")}
+                      aria-label={copiedField === "cvu" ? "CVU copiado" : "Copiar CVU"}
+                      className="justify-self-end inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/20 bg-transparent text-white transition hover:bg-[rgba(255,255,255,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(255,255,255,0.3)]"
+                    >
+                      <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-4 w-4 stroke-current">
+                        <rect x="6" y="4" width="10" height="12" rx="2" strokeWidth="1.5" />
+                        <path d="M6 7H4a2 2 0 0 0-2 2v7" strokeWidth="1.5" />
+                      </svg>
+                    </button>
+                  </div>
 
-                    <div className="grid grid-cols-[3.75rem_minmax(0,1fr)_auto] items-center gap-2 py-1.5">
-                      <dt className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--brand-violet-950)]/58">
-                        Alias
-                      </dt>
-                      <dd className="min-w-0 break-words font-semibold leading-tight text-[var(--brand-violet-950)]/88">
-                        {BANK_TRANSFER_INFO.alias}
-                      </dd>
-                      <button
-                        type="button"
-                        onClick={() => void copyBankValue(BANK_TRANSFER_INFO.alias, "alias")}
-                        className="min-h-7 shrink-0 rounded-md border border-[rgba(94,58,146,0.28)] px-2.5 py-1 text-[11px] font-semibold leading-none text-[var(--brand-violet-950)] transition hover:bg-[rgba(214,166,75,0.2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-500)]"
-                      >
-                        {copiedField === "alias" ? "Copiado" : "Copiar"}
-                      </button>
-                    </div>
-                  </dl>
-                </div>
+                  <div className="grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-2 py-1.5">
+                    <dt className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/75">
+                      Alias
+                    </dt>
+                    <dd className="min-w-0 break-words font-sans text-sm font-semibold leading-tight text-white">
+                      {BANK_TRANSFER_INFO.alias}
+                    </dd>
+                    <button
+                      type="button"
+                      onClick={() => void copyBankValue(BANK_TRANSFER_INFO.alias, "alias")}
+                      aria-label={copiedField === "alias" ? "Alias copiado" : "Copiar Alias"}
+                      className="justify-self-end inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/20 bg-transparent text-white transition hover:bg-[rgba(255,255,255,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(255,255,255,0.3)]"
+                    >
+                      <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-4 w-4 stroke-current">
+                        <rect x="6" y="4" width="10" height="12" rx="2" strokeWidth="1.5" />
+                        <path d="M6 7H4a2 2 0 0 0-2 2v7" strokeWidth="1.5" />
+                      </svg>
+                    </button>
+                  </div>
+                </dl>
               ) : null}
             </div>
 

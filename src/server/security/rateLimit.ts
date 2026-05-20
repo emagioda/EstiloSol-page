@@ -32,29 +32,46 @@ const hashString = (value: string) => {
   return hash.toString(16);
 };
 
-const getClientFingerprint = (request: NextRequest) => {
-  const forwarded = normalizeForwardedIp(request.headers.get("x-forwarded-for"));
-  const realIp = normalizeForwardedIp(request.headers.get("x-real-ip"));
+const isProductionRuntime = () => process.env.NODE_ENV === "production";
+
+export const getRateLimitFingerprint = (request: NextRequest) => {
   const vercelForwarded = normalizeForwardedIp(request.headers.get("x-vercel-forwarded-for"));
   const requestIp = (request as NextRequest & { ip?: unknown }).ip;
   const fromRequestIp = typeof requestIp === "string" && isValidIp(requestIp) ? requestIp : null;
 
-  const ip = forwarded || vercelForwarded || realIp || fromRequestIp;
+  if (isProductionRuntime()) {
+    const trustedIp = vercelForwarded || fromRequestIp;
+
+    if (trustedIp) return `ip:${trustedIp}`;
+
+    const userAgent = request.headers.get("user-agent")?.slice(0, 200) || "unknown";
+    return `ua:${hashString(userAgent)}`;
+  }
+
+  const forwarded = normalizeForwardedIp(request.headers.get("x-forwarded-for"));
+  const realIp = normalizeForwardedIp(request.headers.get("x-real-ip"));
+  const ip = vercelForwarded || fromRequestIp || realIp || forwarded;
+
   if (ip) return `ip:${ip}`;
 
   const userAgent = request.headers.get("user-agent")?.slice(0, 200) || "unknown";
   return `ua:${hashString(userAgent)}`;
 };
 
-export async function checkRateLimit(
-  request: NextRequest,
-  input: { keyPrefix: string; max: number; windowSeconds: number }
-): Promise<boolean> {
+const normalizeLimitInput = (input: { max: number; windowSeconds: number }) => {
   const max = Number.isFinite(input.max) ? Math.max(1, Math.trunc(input.max)) : 1;
   const windowSeconds = Number.isFinite(input.windowSeconds)
     ? Math.max(1, Math.trunc(input.windowSeconds))
     : 60;
-  const fingerprint = getClientFingerprint(request);
+
+  return { max, windowSeconds };
+};
+
+const incrementRateLimit = async (
+  input: { keyPrefix: string; max: number; windowSeconds: number },
+  fingerprint: string
+) => {
+  const { max, windowSeconds } = normalizeLimitInput(input);
   const bucket = Math.floor(Date.now() / (windowSeconds * 1000));
   const key = `${input.keyPrefix}:${fingerprint}:${bucket}`;
   const count = await kv.incr(key);
@@ -64,4 +81,23 @@ export async function checkRateLimit(
   }
 
   return count <= max;
+};
+
+export async function checkRateLimit(
+  request: NextRequest,
+  input: { keyPrefix: string; max: number; windowSeconds: number }
+): Promise<boolean> {
+  return incrementRateLimit(input, getRateLimitFingerprint(request));
+}
+
+export async function checkRateLimitByKey(input: {
+  keyPrefix: string;
+  key: string;
+  max: number;
+  windowSeconds: number;
+}): Promise<boolean> {
+  const normalizedKey = input.key.trim().toLowerCase();
+  const fingerprint = `key:${hashString(normalizedKey)}`;
+
+  return incrementRateLimit(input, fingerprint);
 }

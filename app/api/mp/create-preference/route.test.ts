@@ -78,6 +78,7 @@ describe("create-preference local development flow", () => {
       initPoint?: string;
       sandboxInitPoint?: string;
       externalReference?: string;
+      summaryToken?: string;
     };
 
     expect(response.status).toBe(200);
@@ -85,12 +86,15 @@ describe("create-preference local development flow", () => {
     expect(body.initPoint).toBe("https://mp.test/init");
     expect(body.sandboxInitPoint).toBe("https://mp.test/sandbox");
     expect(typeof body.externalReference).toBe("string");
+    expect(typeof body.summaryToken).toBe("string");
 
     expect(mpBodies).toHaveLength(1);
     expect(mpBodies[0]).not.toHaveProperty("auto_return");
 
     const backUrls = mpBodies[0].back_urls as { success?: string } | undefined;
     expect(backUrls?.success?.startsWith("http://localhost:3000/tienda/success?ref=es-")).toBe(true);
+    const successUrl = new URL(backUrls?.success || "");
+    expect(successUrl.searchParams.get("summaryToken")).toBe(body.summaryToken);
 
     fetchMock.mockRestore();
   });

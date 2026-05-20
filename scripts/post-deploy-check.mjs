@@ -43,10 +43,17 @@ const checkHealth = async () => {
 };
 
 const checkVerifyValidation = async () => {
-  const response = await fetch(`${baseUrl}/api/mp/verify-payment`, { cache: "no-store" });
+  const response = await fetch(`${baseUrl}/api/mp/verify-payment`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+    cache: "no-store",
+  });
   const body = await safeJson(response);
   const ok = response.status === 400 && typeof body?.error === "string";
-  print("Verify-payment validation", ok, `status=${response.status}`);
+  print("Verify-payment POST validation", ok, `status=${response.status}`);
   return ok;
 };
 

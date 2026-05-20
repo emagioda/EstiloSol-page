@@ -4,10 +4,10 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import brandConfig from "@/src/config/brand";
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
-import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
+import { CART_UPDATED_EVENT, readCartSnapshotFromStorage } from "@/src/features/shop/presentation/view-models/useCartStore";
 import CartBadge from "@/src/features/shop/presentation/components/CartBadge/CartBadge";
 import TopInfoTicker from "@/src/core/presentation/components/TopInfoTicker/TopInfoTicker";
 
@@ -20,7 +20,6 @@ export default function Navbar() {
   const { brandName, logo } = brandConfig;
 
   const { open: isCartOpen, setOpen: setCartOpen } = useCartDrawer();
-  const { items } = useCart();
   const pathname = usePathname();
   const pathnameSegments = (pathname ?? "").split("/").filter(Boolean);
   const isAdmin = pathnameSegments[0] === "admin";
@@ -37,13 +36,55 @@ export default function Navbar() {
   const [navMenuOpen, setNavMenuOpen] = useState(false);
   const [navDrawerMounted, setNavDrawerMounted] = useState(false);
   const [pendingAdminHref, setPendingAdminHref] = useState<string | null>(null);
-  const cartCount = items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
-  const cartTotal = items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0);
+  const [storedCartSnapshot, setStoredCartSnapshot] = useState<{ count: number; total: number }>(
+    () => ({ count: 0, total: 0 })
+  );
+  const cartSnapshot =
+    typeof window !== "undefined"
+      ? readCartSnapshotFromStorage()
+      : storedCartSnapshot;
+  const cartCount = cartSnapshot.count;
+  const cartTotal = cartSnapshot.total;
   const formattedTotal = new Intl.NumberFormat("es-AR", {
     style: "currency",
     currency: "ARS",
     maximumFractionDigits: 0,
   }).format(cartTotal);
+
+  useLayoutEffect(() => {
+    const syncStoredCartSnapshot = () => setStoredCartSnapshot(readCartSnapshotFromStorage());
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key && event.key !== "es_sol_cart_v1") return;
+      syncStoredCartSnapshot();
+    };
+
+    const handleCartUpdated = (event: Event) => {
+      try {
+        const custom = event as CustomEvent<typeof storedCartSnapshot>;
+        if (custom?.detail && typeof custom.detail === "object") {
+          setStoredCartSnapshot(custom.detail as typeof storedCartSnapshot);
+          return;
+        }
+      } catch {
+        // ignore
+      }
+      syncStoredCartSnapshot();
+    };
+
+    syncStoredCartSnapshot();
+    window.addEventListener(CART_UPDATED_EVENT, handleCartUpdated as EventListener);
+    window.addEventListener("pageshow", syncStoredCartSnapshot);
+    window.addEventListener("focus", syncStoredCartSnapshot);
+    window.addEventListener("storage", handleStorage);
+
+    return () => {
+      window.removeEventListener(CART_UPDATED_EVENT, handleCartUpdated as EventListener);
+      window.removeEventListener("pageshow", syncStoredCartSnapshot);
+      window.removeEventListener("focus", syncStoredCartSnapshot);
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -266,8 +307,8 @@ export default function Navbar() {
                         <path d="M3 4h2l2.3 10.1a1 1 0 0 0 .97.78h8.85a1 1 0 0 0 .97-.76L20 7H7.4" />
                       </svg>
                       <span className="flex min-w-[7.25rem] flex-col items-start text-left normal-case tracking-normal leading-tight">
-                        <span suppressHydrationWarning className="text-xs font-semibold text-[var(--brand-cream)]">Carrito ({cartCount})</span>
-                        <span suppressHydrationWarning className="text-[11px] text-[var(--brand-gold-300)]">{formattedTotal}</span>
+                        <span className="text-xs font-semibold text-[var(--brand-cream)]">Carrito ({cartCount})</span>
+                        <span className="text-[11px] text-[var(--brand-gold-300)]">{formattedTotal}</span>
                       </span>
                     </button>
                   </div>

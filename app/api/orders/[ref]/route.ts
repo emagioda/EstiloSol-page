@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getOrder } from "@/src/server/orders/store";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
@@ -7,6 +8,17 @@ export const runtime = "nodejs";
 
 type RouteParams = {
   params: Promise<{ ref: string }>;
+};
+
+const matchesSummaryToken = (provided: string | null, expected: string | undefined) => {
+  if (!provided || !expected) return false;
+
+  const providedBuffer = Buffer.from(provided, "utf8");
+  const expectedBuffer = Buffer.from(expected, "utf8");
+
+  if (providedBuffer.length !== expectedBuffer.length) return false;
+
+  return timingSafeEqual(providedBuffer, expectedBuffer);
 };
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
@@ -27,7 +39,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 
   const order = await getOrder(parsedRef.value);
-  if (!order) {
+  if (!order || !matchesSummaryToken(request.nextUrl.searchParams.get("summaryToken"), order.summaryToken)) {
     return NextResponse.json({ error: "Pedido no encontrado" }, { status: 404 });
   }
 

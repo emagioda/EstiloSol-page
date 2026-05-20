@@ -259,7 +259,7 @@ export const sendOrderReceiptEmail = async (
     return {
       sent: false,
       reason: "send_failed",
-      detail: await resendResponse.text().catch(() => undefined),
+      detail: `resend_status_${resendResponse.status}`,
     };
   }
 

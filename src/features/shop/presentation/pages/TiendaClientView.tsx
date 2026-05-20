@@ -29,6 +29,7 @@ import {
 } from "@/src/features/shop/presentation/lib/shopScrollRestoration";
 import { useCartBadgeVisibility } from "@/src/features/shop/presentation/view-models/useCartBadgeVisibility";
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
+import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 
 const QuickViewModal = dynamic(
@@ -89,6 +90,7 @@ export default function TiendaClientView({
   const effectiveInitialDepartament = (rubroFromQuery ?? initialDepartament) as Departament;
   const {
     products,
+    allProducts,
     loading,
     status,
     errorMessage,
@@ -141,6 +143,7 @@ export default function TiendaClientView({
   const previousRubroFromQueryRef = useRef<string | null | undefined>(undefined);
   const { setSuppressBadge, setSuppressFloatingCart } = useCartBadgeVisibility();
   const { setOpen } = useCartDrawer();
+  const { syncStockFromProducts } = useCart();
   useBodyScrollLock(sortShouldRender);
 
   const availableCategories = categories;
@@ -329,6 +332,11 @@ export default function TiendaClientView({
       void loadProducts();
     }
   }, [hasInitialCatalog, loadProducts, pathname, router, searchParams, shouldRefreshCatalog, status]);
+
+  useEffect(() => {
+    if (allProducts.length === 0) return;
+    syncStockFromProducts(allProducts);
+  }, [allProducts, syncStockFromProducts]);
 
   useEffect(() => {
     setSuppressBadge(isQuickViewOpen);

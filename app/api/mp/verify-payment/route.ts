@@ -4,13 +4,13 @@ import { scheduleAfterResponse } from "@/src/server/http/afterResponse";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { getOrder, markApproved, markTerminalPaymentState, updateOrder } from "@/src/server/orders/store";
+import type { Order } from "@/src/server/orders/types";
+import { formatDateTime24h, sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
 import { fetchPaymentByIdFromMp, searchPaymentsByExternalReference } from "@/src/server/payments/mpClient";
 import { amountMatches, terminalOrderStatusFromMpStatus } from "@/src/server/payments/shared";
 import type { MpPaymentResponse, MpSearchPayment, MpSearchResponse } from "@/src/server/payments/shared";
-import { checkRateLimit } from "@/src/server/security/rateLimit";
+import { checkRateLimit, checkRateLimitByKey } from "@/src/server/security/rateLimit";
 import { parseExternalReference } from "@/src/server/validation/payments";
-import type { Order } from "@/src/server/orders/types";
-import { formatDateTime24h, sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
 
 export const runtime = "nodejs";
 
@@ -20,6 +20,9 @@ const parsePaymentId = (value: string | null): string | null => {
   if (!/^\d{5,30}$/.test(trimmed)) return null;
   return trimmed;
 };
+
+const buildPendingResponse = () =>
+  NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
 
 const buildApprovedResponse = (
   externalReference: string,
@@ -125,37 +128,40 @@ const getTerminalPaymentOrderStatus = (payment: MpPaymentLike, externalReference
   return orderStatus;
 };
 
-export async function GET(request: NextRequest) {
-  const envStatus = env.validatePaymentsServerEnv();
-  if (!envStatus.ok) {
-    logEvent("error", "payments.env_missing", { route: "verify-payment", missing: envStatus.missing });
-    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
-  }
-  const accessToken = env.getRequiredServer("MP_ACCESS_TOKEN");
-
+const checkVerifyPaymentRateLimit = async (request: NextRequest) => {
   const allowed = await checkRateLimit(request, {
     keyPrefix: "es:rl:verifypayment",
     max: 40,
     windowSeconds: 60,
   });
-  if (!allowed) {
-    logEvent("warn", "payments.rate_limited", { route: "verify-payment" });
-    await trackBusinessEvent("payment.verify.rate_limited", { route: "verify-payment" });
-    return NextResponse.json({ error: "Demasiadas solicitudes. Intentá nuevamente en un minuto." }, { status: 429 });
+
+  if (allowed) return null;
+
+  logEvent("warn", "payments.rate_limited", { route: "verify-payment" });
+  await trackBusinessEvent("payment.verify.rate_limited", { route: "verify-payment" });
+  return NextResponse.json({ error: "Demasiadas solicitudes. Intenta nuevamente en un minuto." }, { status: 429 });
+};
+
+const parseVerifyPaymentBody = async (request: NextRequest) => {
+  const body = await request.json().catch(() => null);
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ref: null, paymentId: null };
   }
 
-  const parsedRef = parseExternalReference(request.nextUrl.searchParams.get("ref"));
-  if (!parsedRef.ok) {
-    await trackBusinessEvent("payment.verify.invalid_ref", { route: "verify-payment" });
-    return NextResponse.json({ error: parsedRef.message }, { status: 400 });
-  }
-  const ref = parsedRef.value;
-  const paymentId = parsePaymentId(
-    request.nextUrl.searchParams.get("payment_id") ||
-      request.nextUrl.searchParams.get("paymentId") ||
-      request.nextUrl.searchParams.get("collection_id")
-  );
+  const data = body as Record<string, unknown>;
+  const ref = typeof data.ref === "string" ? data.ref : null;
+  const paymentId =
+    typeof data.paymentId === "string"
+      ? data.paymentId
+      : typeof data.payment_id === "string"
+        ? data.payment_id
+        : null;
 
+  return { ref, paymentId };
+};
+
+const confirmPayment = async (ref: string, paymentId: string | null, accessToken: string) => {
   const order = await getOrder(ref);
 
   if (!order) {
@@ -220,7 +226,7 @@ export async function GET(request: NextRequest) {
       return buildCachedApprovedResponse(order);
     }
     await updateOrder(ref, { status: "pending" });
-    return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
+    return buildPendingResponse();
   }
 
   if (!response.ok) {
@@ -230,7 +236,7 @@ export async function GET(request: NextRequest) {
       return buildCachedApprovedResponse(order);
     }
     await updateOrder(ref, { status: "pending" });
-    return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
+    return buildPendingResponse();
   }
 
   const approvedPayment = data?.results?.find((payment) =>
@@ -267,7 +273,7 @@ export async function GET(request: NextRequest) {
     const terminalOrderStatus = getTerminalPaymentOrderStatus(terminalPayment, order.externalReference, order.total);
     if (!terminalOrderStatus) {
       await updateOrder(ref, { status: "pending" });
-      return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
+      return buildPendingResponse();
     }
 
     await markTerminalPaymentState(order.externalReference, {
@@ -286,7 +292,74 @@ export async function GET(request: NextRequest) {
   if (order.status === "approved") {
     return buildCachedApprovedResponse(order);
   }
+
   await updateOrder(ref, { status: "pending" });
   await trackBusinessEvent("payment.verify.pending", { externalReference: ref });
-  return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
+  return buildPendingResponse();
+};
+
+export async function GET(request: NextRequest) {
+  const rateLimitedResponse = await checkVerifyPaymentRateLimit(request);
+  if (rateLimitedResponse) return rateLimitedResponse;
+
+  const parsedRef = parseExternalReference(request.nextUrl.searchParams.get("ref"));
+  if (!parsedRef.ok) {
+    await trackBusinessEvent("payment.verify.invalid_ref", { route: "verify-payment" });
+    return NextResponse.json({ error: parsedRef.message }, { status: 400 });
+  }
+
+  const ref = parsedRef.value;
+  const order = await getOrder(ref);
+
+  if (!order) {
+    await trackBusinessEvent("payment.verify.not_found", { externalReference: ref });
+    return NextResponse.json({ approved: false, message: "Pago no encontrado" }, { status: 200 });
+  }
+
+  if (order.status === "approved") {
+    return buildCachedApprovedResponse(order);
+  }
+
+  const terminalStatus =
+    terminalOrderStatusFromMpStatus(order.status) || terminalOrderStatusFromMpStatus(order.mpStatus || "");
+  if (terminalStatus) {
+    return buildTerminalResponse(order.externalReference, terminalStatus);
+  }
+
+  await trackBusinessEvent("payment.verify.pending", { externalReference: ref, mode: "read_only" });
+  return buildPendingResponse();
+}
+
+export async function POST(request: NextRequest) {
+  const envStatus = env.validatePaymentsServerEnv();
+  if (!envStatus.ok) {
+    logEvent("error", "payments.env_missing", { route: "verify-payment", missing: envStatus.missing });
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+  }
+  const accessToken = env.getRequiredServer("MP_ACCESS_TOKEN");
+
+  const rateLimitedResponse = await checkVerifyPaymentRateLimit(request);
+  if (rateLimitedResponse) return rateLimitedResponse;
+
+  const body = await parseVerifyPaymentBody(request);
+  const parsedRef = parseExternalReference(body.ref);
+  if (!parsedRef.ok) {
+    await trackBusinessEvent("payment.verify.invalid_ref", { route: "verify-payment" });
+    return NextResponse.json({ error: parsedRef.message }, { status: 400 });
+  }
+
+  const ref = parsedRef.value;
+  const refAllowed = await checkRateLimitByKey({
+    keyPrefix: "es:rl:verifypayment-ref",
+    key: ref,
+    max: 20,
+    windowSeconds: 60,
+  });
+  if (!refAllowed) {
+    logEvent("warn", "payments.ref_rate_limited", { route: "verify-payment", externalReference: ref });
+    await trackBusinessEvent("payment.verify.rate_limited", { externalReference: ref, scope: "externalReference" });
+    return NextResponse.json({ error: "Demasiadas solicitudes. Intenta nuevamente en un minuto." }, { status: 429 });
+  }
+
+  return confirmPayment(ref, parsePaymentId(body.paymentId), accessToken);
 }
