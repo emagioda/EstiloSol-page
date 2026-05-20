@@ -176,8 +176,7 @@ export default function SuccessPage() {
 
     const verifyWithPolling = async (
       ref: string,
-      paymentId?: string | null,
-      approvedHint?: boolean
+      paymentId?: string | null
     ) => {
       const delays = [0, 1000, 2000, 3000, 5000, 8000, 8000, 8000, 8000, 8000, 8000];
 
@@ -223,24 +222,15 @@ export default function SuccessPage() {
             return;
           }
 
-          if (!approvedHint) {
-            setStatus("loading");
-            setMessage("Procesando tu pago...");
-          }
+          setStatus("loading");
+          setMessage("Estamos validando tu pago con Mercado Pago...");
         } catch {
-          if (!approvedHint) {
-            setStatus("loading");
-            setMessage("Procesando tu pago...");
-          }
+          setStatus("loading");
+          setMessage("Estamos validando tu pago con Mercado Pago...");
         }
       }
 
       if (!cancelled) {
-        if (approvedHint) {
-          setStatus("approved");
-          setMessage("Pago recibido. Estamos terminando de validar el comprobante.");
-          return;
-        }
         setStatus("error");
         setMessage("No pudimos confirmar el pago todavia. Intenta de nuevo en unos minutos.");
       }
@@ -280,15 +270,11 @@ export default function SuccessPage() {
       }
 
       if (approvedHint) {
-        clearRef.current();
-        if (typeof window !== "undefined") {
-          localStorage.removeItem("es_sol_checkout_draft");
-        }
-        setStatus("approved");
-        setMessage("Pago recibido. Estamos validando el comprobante...");
+        setStatus("loading");
+        setMessage("Pago recibido por Mercado Pago. Estamos validando la confirmacion...");
         setPaymentData((previous) =>
           previous ?? {
-            approved: true,
+            approved: false,
             paymentId: paymentId ?? undefined,
             externalReference: ref,
             date: formatDateTime24h(),
@@ -296,7 +282,7 @@ export default function SuccessPage() {
         );
       }
 
-      await verifyWithPolling(ref, paymentId, approvedHint);
+      await verifyWithPolling(ref, paymentId);
       await fetchOrderSummary(ref);
     };
 

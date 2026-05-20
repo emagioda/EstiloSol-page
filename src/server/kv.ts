@@ -96,6 +96,10 @@ const memoryKv: KvClient = {
 
 export const kv: KvClient = hasRedisEnv ? createRedisClient() : memoryKv;
 
+if (!hasRedisEnv && process.env.NODE_ENV === "production") {
+  throw new Error("Persistent KV is required in production");
+}
+
 if (!hasRedisEnv && process.env.NODE_ENV !== "production") {
   console.warn("[kv] Using in-memory KV fallback. Configure KV_REST_API_* or UPSTASH_REDIS_REST_* env vars to use persistent storage.");
 }

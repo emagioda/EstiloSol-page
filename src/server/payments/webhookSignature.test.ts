@@ -23,7 +23,8 @@ describe("webhookSignature", () => {
     const secret = "my-secret";
     const dataIdLower = "12345";
     const xRequestId = "req-1";
-    const ts = "1700000000";
+    const nowMs = Date.now();
+    const ts = String(nowMs);
     const manifest = `id:${dataIdLower};request-id:${xRequestId};ts:${ts};`;
     const v1 = createHmac("sha256", secret).update(manifest).digest("hex");
 
@@ -32,6 +33,7 @@ describe("webhookSignature", () => {
       dataIdLower,
       xRequestId,
       xSignatureHeader: `ts=${ts},v1=${v1}`,
+      nowMs,
     });
 
     expect(result).toEqual({ ok: true });
@@ -51,10 +53,26 @@ describe("webhookSignature", () => {
       secret: "secret",
       dataIdLower: "123",
       xRequestId: "req",
-      xSignatureHeader: "ts=1700000000,v1=deadbeef",
+      xSignatureHeader: `ts=${Date.now()},v1=deadbeef`,
     });
 
     expect(invalid).toEqual({ ok: false, reason: "invalid_signature" });
+  });
+
+  it("rejects stale timestamps", () => {
+    const staleTs = "1700000000";
+    const manifest = `id:123;request-id:req;ts:${staleTs};`;
+    const v1 = createHmac("sha256", "secret").update(manifest).digest("hex");
+
+    expect(
+      isValidWebhookSignature({
+        secret: "secret",
+        dataIdLower: "123",
+        xRequestId: "req",
+        xSignatureHeader: `ts=${staleTs},v1=${v1}`,
+        nowMs: Date.now(),
+      })
+    ).toEqual({ ok: false, reason: "stale_timestamp" });
   });
 
   it("extracts webhook data id preferring query params", () => {

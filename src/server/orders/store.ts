@@ -3,7 +3,6 @@ import { invalidateProductsCatalogCache } from "@/src/server/catalog/getProducts
 import { logEvent } from "@/src/server/observability/log";
 import { privacyPolicy } from "@/src/server/privacy/policy";
 import {
-  appendOrderAndDecrementStockInSheet,
   appendOrderToSalesSheet,
   decrementProductsStockInSheet,
   updateOrderRowInSalesSheet,
@@ -26,7 +25,9 @@ type UpdateOrderOptions = {
 
 const statusToPaymentStatus = (status: OrderStatus): OrderPaymentStatus => {
   if (status === "approved") return "confirmed";
-  if (status === "rejected") return "cancelled";
+  if (status === "refunded") return "refunded";
+  if (status === "charged_back") return "charged_back";
+  if (status === "rejected" || status === "cancelled") return "cancelled";
   return "pending";
 };
 
@@ -35,9 +36,6 @@ const ensureOrderDefaults = (order: StoredOrder): Order => ({
   paymentStatus: order.paymentStatus ?? statusToPaymentStatus(order.status),
   shippingStatus: order.shippingStatus ?? "in_process",
 });
-
-const shouldDeductStockOnCreate = (order: Order) =>
-  order.paymentMethod === "cash" || order.paymentMethod === "transfer";
 
 async function deductStockForOrder(order: Order): Promise<number | null> {
   if (order.stockDeductedAt) return order.stockDeductedAt;
@@ -65,24 +63,11 @@ export async function createOrder(order: Order): Promise<void> {
     throw new Error(`Order with external reference ${normalizedOrder.externalReference} already exists`);
   }
 
-  const stockDeductedAt = shouldDeductStockOnCreate(normalizedOrder) ? Date.now() : null;
-  const orderToPersist: Order = stockDeductedAt
-    ? {
-        ...normalizedOrder,
-        stockDeductedAt,
-      }
-    : normalizedOrder;
-
   try {
-    if (stockDeductedAt) {
-      await appendOrderAndDecrementStockInSheet(orderToPersist, stockDeductedAt);
-      await invalidateProductsCatalogCache();
-    } else {
-      await appendOrderToSalesSheet(orderToPersist);
-    }
+    await appendOrderToSalesSheet(normalizedOrder);
   } catch (error) {
     logEvent("error", "orders.sync_sheet_create_failed", {
-      externalReference: orderToPersist.externalReference,
+      externalReference: normalizedOrder.externalReference,
       error,
     });
     throw error;
@@ -90,8 +75,8 @@ export async function createOrder(order: Order): Promise<void> {
 
   await setJson(
     key,
-    orderToPersist,
-    privacyPolicy.ttlSecondsForStatus(orderToPersist.status)
+    normalizedOrder,
+    privacyPolicy.ttlSecondsForStatus(normalizedOrder.status)
   );
 }
 
@@ -179,13 +164,65 @@ export async function markRejected(
   externalReference: string,
   input: { paymentId?: string; mpStatus: string }
 ): Promise<Order | null> {
-  return updateOrder(externalReference, {
+  return markTerminalPaymentState(externalReference, {
     status: "rejected",
-    paymentStatus: "cancelled",
+    paymentId: input.paymentId,
+    mpStatus: input.mpStatus,
+  });
+}
+
+export async function markTerminalPaymentState(
+  externalReference: string,
+  input: {
+    status: Extract<OrderStatus, "rejected" | "cancelled" | "refunded" | "charged_back">;
+    paymentId?: string;
+    mpStatus: string;
+  }
+): Promise<Order | null> {
+  return updateOrder(externalReference, {
+    status: input.status,
+    paymentStatus: statusToPaymentStatus(input.status),
     ...(input.paymentId ? { mpPaymentId: input.paymentId } : {}),
     mpStatus: input.mpStatus,
     notes: undefined,
   });
+}
+
+export async function markCancelled(
+  externalReference: string,
+  input: { paymentId?: string; mpStatus: string }
+): Promise<Order | null> {
+  return markTerminalPaymentState(externalReference, {
+    status: "cancelled",
+    paymentId: input.paymentId,
+    mpStatus: input.mpStatus,
+  });
+}
+
+export async function markRefunded(
+  externalReference: string,
+  input: { paymentId?: string; mpStatus: string }
+): Promise<Order | null> {
+  return markTerminalPaymentState(externalReference, {
+    status: "refunded",
+    paymentId: input.paymentId,
+    mpStatus: input.mpStatus,
+  });
+}
+
+export async function markChargedBack(
+  externalReference: string,
+  input: { paymentId?: string; mpStatus: string }
+): Promise<Order | null> {
+  return markTerminalPaymentState(externalReference, {
+    status: "charged_back",
+    paymentId: input.paymentId,
+    mpStatus: input.mpStatus,
+  });
+}
+
+export function paymentStatusFromOrderStatus(status: OrderStatus): OrderPaymentStatus {
+  return statusToPaymentStatus(status);
 }
 
 export async function markPreferenceCreated(

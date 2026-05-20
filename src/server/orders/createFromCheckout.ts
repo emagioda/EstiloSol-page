@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { CatalogProduct } from "@/src/server/catalog/getProducts";
 import type {
   Order,
@@ -39,7 +39,7 @@ const buildExternalReference = () => {
   const hour = String(now.getUTCHours()).padStart(2, "0");
   const minute = String(now.getUTCMinutes()).padStart(2, "0");
   const second = String(now.getUTCSeconds()).padStart(2, "0");
-  const entropy = randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
+  const entropy = randomBytes(8).toString("hex").toUpperCase();
   return `es-${year}${month}${day}-${hour}${minute}${second}-${entropy}`;
 };
 

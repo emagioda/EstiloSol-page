@@ -7,6 +7,7 @@ import {
   getProductCategories,
   productBelongsToCategory,
 } from "@/src/features/shop/domain/productCategories";
+import { logEvent } from "@/src/server/observability/log";
 import { fetchProductsFromCatalogSource } from "@/src/server/catalog/source";
 
 export const dynamicParams = true;
@@ -74,7 +75,7 @@ export async function generateStaticParams() {
       .filter(Boolean)
       .map((slug) => ({ slug }));
   } catch (error) {
-    console.error("Error generando rutas estaticas de productos:", error);
+    logEvent("warn", "catalog.static_params_failed", { error });
     return [];
   }
 }
@@ -134,7 +135,10 @@ export default async function ProductDetailRoute({ params }: Props) {
     product = context.product;
     similarProducts = context.similarProducts;
   } catch (error) {
-    console.error("Error obteniendo producto:", error);
+    logEvent("warn", "catalog.product_load_failed", {
+      slug: resolvedParams.slug,
+      error,
+    });
   }
 
   if (!product) {

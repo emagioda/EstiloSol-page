@@ -3,19 +3,39 @@
 import { revalidatePath, revalidateTag } from "next/cache";
 import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
+import { env } from "@/src/config/env";
 import { isAdminEmail } from "@/src/server/auth/adminEmail";
 import { authOptions } from "@/src/server/auth/options";
+import { invalidateProductsCatalogCache } from "@/src/server/catalog/getProducts";
 import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
-import { getOrder, markApproved, updateOrder } from "@/src/server/orders/store";
-import type { Order, OrderItem, OrderPaymentStatus, OrderShippingStatus } from "@/src/server/orders/types";
+import { getOrder, markApproved, markTerminalPaymentState, updateOrder } from "@/src/server/orders/store";
+import type { Order, OrderItem, OrderPaymentStatus, OrderShippingStatus, OrderStatus } from "@/src/server/orders/types";
 import {
+  fetchPaymentByIdFromMp,
+  searchPaymentsByExternalReference,
+} from "@/src/server/payments/mpClient";
+import {
+  amountMatches,
+  terminalOrderStatusFromMpStatus,
+  type MpPaymentResponse,
+  type MpSearchPayment,
+} from "@/src/server/payments/shared";
+import {
+  type AdminOrderSheetRow,
+  decrementProductsStockInSheet,
   getOrderRowById,
   updateOrderRowInSalesSheet,
   updateProductRowInSheet,
 } from "@/src/server/sheets/repository";
 
 const parsePaymentStatus = (value: FormDataEntryValue | null): OrderPaymentStatus | null => {
-  if (value === "pending" || value === "confirmed" || value === "cancelled") {
+  if (
+    value === "pending" ||
+    value === "confirmed" ||
+    value === "cancelled" ||
+    value === "refunded" ||
+    value === "charged_back"
+  ) {
     return value;
   }
   return null;
@@ -29,7 +49,11 @@ const parseShippingStatus = (value: FormDataEntryValue | null): OrderShippingSta
 };
 
 const isPaymentStatus = (value: string): value is OrderPaymentStatus =>
-  value === "pending" || value === "confirmed" || value === "cancelled";
+  value === "pending" ||
+  value === "confirmed" ||
+  value === "cancelled" ||
+  value === "refunded" ||
+  value === "charged_back";
 
 const isShippingStatus = (value: string): value is OrderShippingStatus =>
   value === "in_process" || value === "completed";
@@ -71,6 +95,135 @@ const resolveAdminRedirectPath = (
     return path;
   }
   return fallback;
+};
+
+const orderStatusFromPaymentStatus = (paymentStatus: OrderPaymentStatus): OrderStatus => {
+  if (paymentStatus === "confirmed") return "approved";
+  if (paymentStatus === "cancelled") return "cancelled";
+  if (paymentStatus === "refunded") return "refunded";
+  if (paymentStatus === "charged_back") return "charged_back";
+  return "pending";
+};
+
+const terminalOrderStatusFromPaymentStatus = (
+  paymentStatus: OrderPaymentStatus
+): Extract<OrderStatus, "cancelled" | "refunded" | "charged_back"> | null => {
+  if (paymentStatus === "cancelled") return "cancelled";
+  if (paymentStatus === "refunded") return "refunded";
+  if (paymentStatus === "charged_back") return "charged_back";
+  return null;
+};
+
+const rawStringValue = (raw: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return "";
+};
+
+const sheetOrderHasStockDeducted = (sheetOrder: AdminOrderSheetRow) => {
+  const raw = sheetOrder.raw as Record<string, unknown>;
+  return Boolean(
+    rawStringValue(raw, [
+      "stock_deducted_at",
+      "stockDeductedAt",
+      "stock_descontado_en",
+      "stock_discounted_at",
+    ])
+  );
+};
+
+type MpPaymentForValidation = MpPaymentResponse | MpSearchPayment;
+
+const isApprovedMpPaymentForOrder = (
+  payment: MpPaymentForValidation | null,
+  externalReference: string,
+  expectedTotal: number
+) => {
+  if (!payment) return false;
+  const status = String(payment.status || "").trim().toLowerCase();
+  const paymentRef = String(payment.external_reference || "").trim();
+  const currency = String(payment.currency_id || "").trim().toUpperCase();
+  const amount = Number(payment.transaction_amount);
+
+  return (
+    status === "approved" &&
+    paymentRef === externalReference &&
+    currency === "ARS" &&
+    Number.isFinite(amount) &&
+    amountMatches(amount, expectedTotal)
+  );
+};
+
+const assertMercadoPagoApproval = async (
+  externalReference: string,
+  expectedTotal: number,
+  paymentId?: string
+): Promise<{ paymentId: string; mpStatus: string }> => {
+  const accessToken = env.getRequiredServer("MP_ACCESS_TOKEN");
+  const normalizedPaymentId = String(paymentId || "").trim();
+
+  if (normalizedPaymentId && /^\d+$/.test(normalizedPaymentId)) {
+    const { response, data } = await fetchPaymentByIdFromMp(normalizedPaymentId, accessToken);
+    if (!response.ok || !data) {
+      throw new Error("No se pudo verificar el pago en Mercado Pago.");
+    }
+    const mpStatus = String(data.status || "").trim().toLowerCase();
+    const terminalStatus = terminalOrderStatusFromMpStatus(mpStatus);
+    if (terminalStatus) {
+      throw new Error(`Mercado Pago informa estado final no aprobable: ${mpStatus}.`);
+    }
+    if (isApprovedMpPaymentForOrder(data, externalReference, expectedTotal)) {
+      return { paymentId: String(data.id || normalizedPaymentId), mpStatus };
+    }
+  }
+
+  const { response, data } = await searchPaymentsByExternalReference(externalReference, accessToken);
+  if (!response.ok || !data) {
+    throw new Error("No se pudo buscar el pago en Mercado Pago.");
+  }
+
+  const approvedPayment = (data.results || []).find((payment) =>
+    isApprovedMpPaymentForOrder(payment, externalReference, expectedTotal)
+  );
+  if (approvedPayment) {
+    return {
+      paymentId: String(approvedPayment.id || normalizedPaymentId),
+      mpStatus: String(approvedPayment.status || "approved").trim().toLowerCase(),
+    };
+  }
+
+  const terminalPayment = (data.results || []).find((payment) =>
+    terminalOrderStatusFromMpStatus(String(payment.status || ""))
+  );
+  if (terminalPayment) {
+    throw new Error(
+      `Mercado Pago informa estado final no aprobable: ${String(terminalPayment.status || "desconocido")}.`
+    );
+  }
+
+  throw new Error("Mercado Pago no confirma un pago aprobado para esta orden.");
+};
+
+const decrementFallbackOrderStockIfNeeded = async (
+  sheetOrder: AdminOrderSheetRow,
+  order: Order
+): Promise<number | null> => {
+  if (sheetOrderHasStockDeducted(sheetOrder)) return null;
+
+  const stockDeductedAt = Date.now();
+  await decrementProductsStockInSheet(
+    order.externalReference,
+    order.items.map((item) => ({
+      productId: item.productId,
+      qty: item.qty,
+      title: item.title,
+    }))
+  );
+  await invalidateProductsCatalogCache();
+  return stockDeductedAt;
 };
 
 const parseOrderItemsFromSheetRaw = (raw: Record<string, unknown>): OrderItem[] => {
@@ -132,12 +285,16 @@ const buildFallbackOrderFromSheet = async (
       : paymentStatus === "confirmed"
       ? "approved"
       : paymentStatus === "cancelled"
-      ? "rejected"
+      ? "cancelled"
+      : paymentStatus === "refunded"
+      ? "refunded"
+      : paymentStatus === "charged_back"
+      ? "charged_back"
       : "pending";
 
   return {
     externalReference: sheetOrder.orderId,
-    status: paymentStatus === "confirmed" ? "approved" : paymentStatus === "cancelled" ? "rejected" : "pending",
+    status: orderStatusFromPaymentStatus(paymentStatus),
     paymentStatus,
     shippingStatus,
     paymentMethod: sheetOrder.paymentMethod,
@@ -169,18 +326,51 @@ const applyOrderStatusesUpdate = async ({
   const currentOrder = await getOrder(orderId);
 
   if (!currentOrder) {
+    const sheetOrder = await getOrderRowById(orderId);
+    if (!sheetOrder) {
+      throw new Error("Pedido no encontrado.");
+    }
+
+    const fallbackOrder = await buildFallbackOrderFromSheet(orderId, paymentStatus, shippingStatus);
+    if (!fallbackOrder) {
+      throw new Error("No se pudo reconstruir el pedido desde Google Sheets.");
+    }
+
+    let verifiedPaymentId = fallbackOrder.mpPaymentId;
+    let verifiedMpStatus = fallbackOrder.mpStatus;
+    let stockDeductedAt: number | null = null;
+
+    if (paymentStatus === "confirmed") {
+      if (fallbackOrder.paymentMethod === "mercadopago") {
+        const verified = await assertMercadoPagoApproval(
+          fallbackOrder.externalReference,
+          fallbackOrder.total,
+          fallbackOrder.mpPaymentId
+        );
+        verifiedPaymentId = verified.paymentId;
+        verifiedMpStatus = verified.mpStatus;
+      } else {
+        stockDeductedAt = await decrementFallbackOrderStockIfNeeded(sheetOrder, fallbackOrder);
+      }
+    }
+
     await updateOrderRowInSalesSheet(orderId, {
       paymentStatus,
       shippingStatus,
-      orderStatus: paymentStatus === "confirmed" ? "approved" : paymentStatus === "cancelled" ? "rejected" : "pending",
+      orderStatus: orderStatusFromPaymentStatus(paymentStatus),
+      ...(verifiedMpStatus ? { mpStatus: verifiedMpStatus } : {}),
+      ...(verifiedPaymentId ? { mpPaymentId: verifiedPaymentId } : {}),
+      ...(stockDeductedAt ? { stockDeductedAt } : {}),
       updatedAt: Date.now(),
     });
 
-    if (paymentStatus === "confirmed") {
-      const fallbackOrder = await buildFallbackOrderFromSheet(orderId, paymentStatus, shippingStatus);
-      if (fallbackOrder?.customer?.email) {
-        const approvedAt = Date.now();
-        const paymentId = fallbackOrder.mpPaymentId || `manual-${approvedAt}`;
+    if (paymentStatus === "confirmed" && fallbackOrder.customer?.email && !sheetOrder.receiptEmailSentAt) {
+      const approvedAt = Date.now();
+      const paymentId =
+        fallbackOrder.paymentMethod === "mercadopago"
+          ? verifiedPaymentId
+          : verifiedPaymentId || `manual-${approvedAt}`;
+      if (paymentId) {
         const emailResult = await sendOrderReceiptEmail({
           order: fallbackOrder,
           paymentId,
@@ -198,10 +388,25 @@ const applyOrderStatusesUpdate = async ({
 
   if (paymentStatus === "confirmed") {
     const approvedAt = currentOrder.approvedAt ?? Date.now();
-    const paymentId = currentOrder.mpPaymentId || `manual-${approvedAt}`;
+    let paymentId = currentOrder.mpPaymentId || `manual-${approvedAt}`;
+    let mpStatus = currentOrder.mpStatus || "manual_confirmed";
+
+    if (
+      currentOrder.paymentMethod === "mercadopago" &&
+      (!wasConfirmed || !currentOrder.mpPaymentId || currentOrder.mpPaymentId.startsWith("manual-"))
+    ) {
+      const verified = await assertMercadoPagoApproval(
+        currentOrder.externalReference,
+        currentOrder.total,
+        currentOrder.mpPaymentId
+      );
+      paymentId = verified.paymentId;
+      mpStatus = verified.mpStatus;
+    }
+
     await markApproved(orderId, {
       paymentId,
-      mpStatus: currentOrder.mpStatus || "approved",
+      mpStatus,
       approvedAt,
     });
 
@@ -219,14 +424,28 @@ const applyOrderStatusesUpdate = async ({
         await updateOrder(orderId, { receiptEmailSentAt: Date.now() });
       }
     }
-  } else {
-    await updateOrder(orderId, {
-      paymentStatus,
-      shippingStatus,
-      status: paymentStatus === "cancelled" ? "rejected" : "pending",
-      ...(paymentStatus === "pending" ? { mpStatus: "pending" } : {}),
-    });
+    return;
   }
+
+  const terminalStatus = terminalOrderStatusFromPaymentStatus(paymentStatus);
+  if (terminalStatus) {
+    await markTerminalPaymentState(orderId, {
+      status: terminalStatus,
+      paymentId: currentOrder.mpPaymentId,
+      mpStatus: currentOrder.mpStatus || terminalStatus,
+    });
+    if (shippingStatus !== currentOrder.shippingStatus) {
+      await updateOrder(orderId, { shippingStatus });
+    }
+    return;
+  }
+
+  await updateOrder(orderId, {
+    paymentStatus,
+    shippingStatus,
+    status: "pending",
+    mpStatus: "pending",
+  });
 };
 
 export async function updateOrderStatusesAction(formData: FormData) {

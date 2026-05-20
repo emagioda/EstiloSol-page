@@ -1,5 +1,6 @@
 import { env } from "@/src/config/env";
 import { fetchWithPolicy } from "@/src/server/http/fetchWithPolicy";
+import { getSheetsToken, type SheetsTokenPurpose } from "@/src/server/sheets/tokens";
 import type {
   Order,
   OrderDeliveryMethod,
@@ -175,17 +176,12 @@ const getSheetsEndpoint = () => {
   return endpoint;
 };
 
-const getSheetsApiToken = () => {
-  const token = env.getOptionalServer("SHEETS_API_TOKEN");
-  if (!token) {
-    throw new Error("SHEETS_API_TOKEN is missing");
-  }
-  return token;
-};
-
-const buildUrlWithParams = (params: Record<string, string | number | undefined>) => {
+const buildUrlWithParams = (
+  params: Record<string, string | number | undefined>,
+  tokenPurpose: SheetsTokenPurpose
+) => {
   const url = new URL(getSheetsEndpoint());
-  url.searchParams.set("token", getSheetsApiToken());
+  url.searchParams.set("token", getSheetsToken(tokenPurpose));
   for (const [key, rawValue] of Object.entries(params)) {
     if (rawValue === undefined) continue;
     const value = String(rawValue).trim();
@@ -275,6 +271,8 @@ const parseStockStatus = (value: unknown, stockQty: number | null): StockStatus 
 
 export const parsePaymentStatus = (value: unknown): OrderPaymentStatus => {
   const token = normalizeToken(value);
+  if (token.includes("contracargo") || token.includes("charge")) return "charged_back";
+  if (token.includes("reintegr") || token.includes("devol") || token.includes("refund")) return "refunded";
   if (token.includes("confirm") || token.includes("aprobad")) return "confirmed";
   if (token.includes("cancel") || token.includes("rechaz")) return "cancelled";
   return "pending";
@@ -288,6 +286,8 @@ export const parseShippingStatus = (value: unknown): OrderShippingStatus => {
 
 export const paymentStatusToLabel = (status: OrderPaymentStatus) => {
   if (status === "confirmed") return "Confirmado";
+  if (status === "refunded") return "Reintegrado";
+  if (status === "charged_back") return "Contracargo";
   if (status === "cancelled") return "Cancelado";
   return "Pendiente";
 };
@@ -334,7 +334,10 @@ const buildOrderItemsSummary = (order: Order) =>
     .map((item) => `${item.qty}x ${item.title}`)
     .join(" | ");
 
-async function postMutation(payload: Record<string, unknown>): Promise<SheetsMutationResponse> {
+async function postMutation(
+  payload: Record<string, unknown>,
+  tokenPurpose: SheetsTokenPurpose = "write"
+): Promise<SheetsMutationResponse> {
   const response = await fetchWithPolicy(
     getSheetsEndpoint(),
     {
@@ -345,7 +348,7 @@ async function postMutation(payload: Record<string, unknown>): Promise<SheetsMut
       cache: "no-store",
       body: JSON.stringify({
         ...payload,
-        token: getSheetsApiToken(),
+        token: getSheetsToken(tokenPurpose),
       }),
     },
     DEFAULT_MUTATION_POLICY
@@ -363,11 +366,15 @@ async function postMutation(payload: Record<string, unknown>): Promise<SheetsMut
   return data;
 }
 
-async function fetchRows(sheetName: string, options: GetSheetRowsOptions = {}): Promise<SheetRow[]> {
+async function fetchRows(
+  sheetName: string,
+  options: GetSheetRowsOptions = {},
+  tokenPurpose: SheetsTokenPurpose = "admin"
+): Promise<SheetRow[]> {
   const url = buildUrlWithParams({
     sheet: sheetName,
     includeInactive: options.includeInactive ? 1 : undefined,
-  });
+  }, tokenPurpose);
 
   const response = await fetchWithPolicy(
     url,
@@ -454,7 +461,7 @@ export async function appendOrderToSalesSheet(order: Order): Promise<void> {
     action: "appendRow",
     sheet: SALES_SHEET_NAME,
     row: buildSalesSheetRow(order),
-  });
+  }, "write");
 }
 
 export async function appendOrderAndDecrementStockInSheet(
@@ -475,7 +482,7 @@ export async function appendOrderAndDecrementStockInSheet(
       qty: item.qty,
       title: item.title,
     })),
-  });
+  }, "write");
 }
 
 export async function updateOrderRowInSalesSheet(
@@ -534,14 +541,14 @@ export async function updateOrderRowInSalesSheet(
         value: orderId,
       },
       updates: payload,
-    });
+    }, "write");
   } catch {
     await postMutation({
       action: "updateRow",
       sheet: SALES_SHEET_NAME,
       orderId,
       updates: payload,
-    });
+    }, "write");
   }
 }
 
@@ -602,7 +609,7 @@ export async function updateProductRowInSheet(
     sheet: PRODUCTS_SHEET_NAME,
     productId,
     updates: payload,
-  });
+  }, "admin");
 }
 
 export async function decrementProductsStockInSheet(
@@ -628,7 +635,7 @@ export async function decrementProductsStockInSheet(
     sheet: PRODUCTS_SHEET_NAME,
     orderId,
     items: normalizedItems,
-  });
+  }, "write");
 }
 
 const parseOrderItemsSummary = (value: unknown): AdminOrderItem[] => {

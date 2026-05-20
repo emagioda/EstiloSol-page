@@ -1,5 +1,6 @@
 import { env } from "@/src/config/env";
 import { logEvent } from "@/src/server/observability/log";
+import { getMissingProductionSheetsTokens } from "@/src/server/sheets/tokens";
 
 type StartupCheckReport = {
   ok: boolean;
@@ -29,6 +30,14 @@ const dateAgeInDays = (date: Date) => {
   return Math.floor(diffMs / (24 * 3600 * 1000));
 };
 
+const hasProductionKvConfig = () => {
+  const hasVercelKv = Boolean(env.getOptionalServer("KV_REST_API_URL") && env.getOptionalServer("KV_REST_API_TOKEN"));
+  const hasUpstashKv = Boolean(
+    env.getOptionalServer("UPSTASH_REDIS_REST_URL") && env.getOptionalServer("UPSTASH_REDIS_REST_TOKEN")
+  );
+  return hasVercelKv || hasUpstashKv;
+};
+
 const run = (): StartupCheckReport => {
   const warnings: string[] = [];
   const missingCritical: string[] = [];
@@ -51,6 +60,14 @@ const run = (): StartupCheckReport => {
   const webhookSecret = env.getOptionalServer("MP_WEBHOOK_SECRET");
   if (process.env.NODE_ENV === "production" && !webhookSecret) {
     missingCritical.push("MP_WEBHOOK_SECRET");
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    missingCritical.push(...getMissingProductionSheetsTokens());
+
+    if (!hasProductionKvConfig()) {
+      missingCritical.push("KV_REST_API_URL/KV_REST_API_TOKEN or UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN");
+    }
   }
 
   const metricsToken = env.getOptionalServer("OPS_METRICS_TOKEN");

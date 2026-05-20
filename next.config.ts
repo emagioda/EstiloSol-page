@@ -1,8 +1,15 @@
 import type { NextConfig } from "next";
 
+const scriptSrc = [
+  "'self'",
+  "'unsafe-inline'",
+  ...(process.env.NODE_ENV !== "production" ? ["'unsafe-eval'"] : []),
+  "https://sdk.mercadopago.com",
+].join(" ");
+
 const contentSecurityPolicy = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://sdk.mercadopago.com",
+  `script-src ${scriptSrc}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://i.ibb.co https://via.placeholder.com https://res.cloudinary.com",
   "font-src 'self' data:",

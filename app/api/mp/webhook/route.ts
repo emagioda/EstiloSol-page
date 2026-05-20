@@ -7,7 +7,7 @@ import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import {
   fetchPaymentByIdFromMp,
 } from "@/src/server/payments/mpClient";
-import { REJECTED_PAYMENT_STATUSES, amountMatches } from "@/src/server/payments/shared";
+import { amountMatches, terminalOrderStatusFromMpStatus } from "@/src/server/payments/shared";
 import type { MpPaymentResponse } from "@/src/server/payments/shared";
 import {
   extractWebhookDataId,
@@ -17,7 +17,7 @@ import {
   WEBHOOK_DEDUPE_TTL_SECONDS,
   getOrder,
   markApproved,
-  markRejected,
+  markTerminalPaymentState,
   paymentDedupeKey,
   updateOrder,
   webhookDedupeKey,
@@ -118,20 +118,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing webhook signature headers" }, { status: 401 });
     }
 
-    if (!signatureCheck.ok && signatureCheck.reason === "invalid_signature") {
+    if (
+      !signatureCheck.ok &&
+      (signatureCheck.reason === "invalid_signature" ||
+        signatureCheck.reason === "invalid_timestamp" ||
+        signatureCheck.reason === "stale_timestamp")
+    ) {
       await trackBusinessEvent("payment.webhook.invalid_signature", { eventId: dataIdLower });
       return NextResponse.json({ error: "Invalid webhook signature" }, { status: 401 });
     }
   }
-
-  const dedupeKey = webhookDedupeKey(dataIdLower);
-  const alreadyProcessed = await getJson<string>(dedupeKey);
-  if (alreadyProcessed) {
-    logEvent("info", "payments.webhook_deduped", { eventId: dataIdLower });
-    await trackBusinessEvent("payment.webhook.deduped", { eventId: dataIdLower });
-    return NextResponse.json({ received: true }, { status: 200 });
-  }
-  await setJson(dedupeKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
 
   const paymentId = /^\d+$/.test(dataIdLower) ? dataIdLower : body.data?.id ? String(body.data.id) : "";
   if (!paymentId) {
@@ -147,13 +143,13 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     logEvent("error", "payments.webhook_payment_network_error", { paymentId, error });
     await trackBusinessEvent("payment.webhook.payment_lookup_failed", { paymentId });
-    return NextResponse.json({ received: true }, { status: 200 });
+    return NextResponse.json({ error: "Payment lookup failed" }, { status: 503 });
   }
 
   if (!paymentResponse.ok || !paymentInfo) {
     logEvent("error", "payments.webhook_payment_fetch_failed", { paymentId, status: paymentResponse.status });
     await trackBusinessEvent("payment.webhook.payment_lookup_failed", { paymentId });
-    return NextResponse.json({ received: true }, { status: 200 });
+    return NextResponse.json({ error: "Payment lookup failed" }, { status: 503 });
   }
 
   const externalReference = String(paymentInfo.external_reference || "").trim();
@@ -168,9 +164,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ received: true }, { status: 200 });
   }
 
-  const status = String(paymentInfo.status || "");
+  const status = String(paymentInfo.status || "").trim().toLowerCase();
   const amount = Number(paymentInfo.transaction_amount);
   const currency = String(paymentInfo.currency_id || "").toUpperCase();
+  const resolvedPaymentId = String(paymentInfo.id || paymentId);
+  const dedupeKey = webhookDedupeKey(`${resolvedPaymentId}:${status || "unknown"}`);
+  const alreadyProcessed = await getJson<string>(dedupeKey);
+  if (alreadyProcessed) {
+    logEvent("info", "payments.webhook_deduped", { eventId: dataIdLower, paymentId: resolvedPaymentId, status });
+    await trackBusinessEvent("payment.webhook.deduped", {
+      eventId: dataIdLower,
+      paymentId: resolvedPaymentId,
+      mpStatus: status,
+    });
+    return NextResponse.json({ received: true }, { status: 200 });
+  }
 
   if (
     status === "approved" &&
@@ -179,37 +187,43 @@ export async function POST(request: NextRequest) {
     order.currency === "ARS" &&
     amountMatches(amount, order.total)
   ) {
-    const paymentKey = paymentDedupeKey(String(paymentInfo.id || paymentId));
+    const paymentKey = paymentDedupeKey(resolvedPaymentId);
     const paymentProcessed = await getJson<string>(paymentKey);
     if (!paymentProcessed) {
       const approvedAt = Date.now();
       await markApproved(externalReference, {
-        paymentId: String(paymentInfo.id || paymentId),
+        paymentId: resolvedPaymentId,
         mpStatus: status,
         approvedAt,
       });
-      scheduleAfterResponse(() => trySendReceiptEmail(order, String(paymentInfo.id || paymentId), approvedAt));
+      scheduleAfterResponse(() => trySendReceiptEmail(order, resolvedPaymentId, approvedAt));
       await setJson(paymentKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
       logEvent("info", "payments.approved_from_webhook", {
         externalReference,
-        paymentId: String(paymentInfo.id || paymentId),
+        paymentId: resolvedPaymentId,
         amount,
       });
       await trackBusinessEvent("payment.webhook.approved", {
         externalReference,
-        paymentId: String(paymentInfo.id || paymentId),
+        paymentId: resolvedPaymentId,
       });
     }
+    await setJson(dedupeKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
+    return NextResponse.json({ received: true }, { status: 200 });
   }
 
-  if (REJECTED_PAYMENT_STATUSES.has(status)) {
-    await markRejected(externalReference, {
-      paymentId: String(paymentInfo.id || paymentId),
+  const terminalStatus = terminalOrderStatusFromMpStatus(status);
+  if (terminalStatus) {
+    await markTerminalPaymentState(externalReference, {
+      status: terminalStatus,
+      paymentId: resolvedPaymentId,
       mpStatus: status,
     });
-    await trackBusinessEvent("payment.webhook.rejected", {
+    await setJson(dedupeKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
+    await trackBusinessEvent("payment.webhook.terminal_status", {
       externalReference,
       mpStatus: status,
+      orderStatus: terminalStatus,
     });
   }
 

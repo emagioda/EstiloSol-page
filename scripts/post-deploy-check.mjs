@@ -17,11 +17,20 @@ const safeJson = async (response) => {
 };
 
 const checkHealth = async () => {
-  const response = await fetch(`${baseUrl}/api/health`, { cache: "no-store" });
+  const response = await fetch(`${baseUrl}/api/health`, {
+    headers: opsToken ? { "x-ops-token": opsToken } : undefined,
+    cache: "no-store",
+  });
   const body = await safeJson(response);
   const ok = response.ok && body?.ok !== undefined;
   print("Health endpoint", ok, `status=${response.status}`);
   if (!ok) return false;
+
+  if (!opsToken) {
+    print("Startup checks", true, "details skipped (OPS_METRICS_TOKEN not set)");
+    print("Ops level", true, "details skipped (OPS_METRICS_TOKEN not set)");
+    return Boolean(body.ok);
+  }
 
   if (body?.startup?.ok === false) {
     print("Startup checks", false, `missing=${(body?.startup?.missingCritical || []).join(",") || "unknown"}`);

@@ -61,6 +61,7 @@ export const BUSINESS_METRIC_NAMES = [
   "payment.webhook.order_not_found",
   "payment.webhook.approved",
   "payment.webhook.rejected",
+  "payment.webhook.terminal_status",
 ] as const;
 
 export type BusinessMetricName = (typeof BUSINESS_METRIC_NAMES)[number];

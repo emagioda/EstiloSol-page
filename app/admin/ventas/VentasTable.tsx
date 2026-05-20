@@ -83,6 +83,8 @@ const paymentBadgeClass = {
   pending: "border-amber-300/65 bg-amber-100 text-amber-900",
   confirmed: "border-emerald-300/65 bg-emerald-100 text-emerald-900",
   cancelled: "border-rose-300/65 bg-rose-100 text-rose-900",
+  refunded: "border-slate-300/65 bg-slate-100 text-slate-900",
+  charged_back: "border-red-400/70 bg-red-100 text-red-950",
 } as const;
 
 const shippingBadgeClass = {
@@ -94,6 +96,8 @@ const paymentOptionClass = {
   pending: "bg-amber-100 text-amber-900",
   confirmed: "bg-emerald-100 text-emerald-900",
   cancelled: "bg-rose-100 text-rose-900",
+  refunded: "bg-slate-100 text-slate-900",
+  charged_back: "bg-red-100 text-red-950",
 } as const;
 
 const shippingOptionClass = {
@@ -105,6 +109,8 @@ const paymentStatusButtonClass = {
   pending: "border-amber-300/65 bg-amber-100 text-amber-900",
   confirmed: "border-emerald-300/65 bg-emerald-100 text-emerald-900",
   cancelled: "border-rose-300/65 bg-rose-100 text-rose-900",
+  refunded: "border-slate-300/65 bg-slate-100 text-slate-900",
+  charged_back: "border-red-400/70 bg-red-100 text-red-950",
 } as const;
 
 const shippingStatusButtonClass = {
@@ -116,6 +122,8 @@ const paymentStatusLabel: Record<PaymentStatus, string> = {
   pending: "Pendiente",
   confirmed: "Confirmado",
   cancelled: "Cancelado",
+  refunded: "Reintegrado",
+  charged_back: "Contracargo",
 };
 
 const shippingStatusLabel: Record<ShippingStatus, string> = {
@@ -127,6 +135,8 @@ const paymentStatusOptions: Array<{ value: PaymentStatus; label: string }> = [
   { value: "pending", label: "Pendiente" },
   { value: "confirmed", label: "Confirmado" },
   { value: "cancelled", label: "Cancelado" },
+  { value: "refunded", label: "Reintegrado" },
+  { value: "charged_back", label: "Contracargo" },
 ];
 
 const shippingStatusOptions: Array<{ value: ShippingStatus; label: string }> = [
@@ -139,6 +149,8 @@ const paymentFilterOptions: Array<FilterOption<PaymentFilter>> = [
   { value: "pending", label: "Pendiente" },
   { value: "confirmed", label: "Confirmado" },
   { value: "cancelled", label: "Cancelado" },
+  { value: "refunded", label: "Reintegrado" },
+  { value: "charged_back", label: "Contracargo" },
 ];
 
 const shippingFilterOptions: Array<FilterOption<ShippingFilter>> = [
@@ -311,7 +323,13 @@ const buildDraftMap = (orders: AdminOrderSheetRow[]) =>
   ) as Record<string, OrderDraft>;
 
 const toPaymentStatus = (value: FormDataEntryValue | null): PaymentStatus | null => {
-  if (value === "pending" || value === "confirmed" || value === "cancelled") {
+  if (
+    value === "pending" ||
+    value === "confirmed" ||
+    value === "cancelled" ||
+    value === "refunded" ||
+    value === "charged_back"
+  ) {
     return value;
   }
   return null;
@@ -879,6 +897,12 @@ export default function VentasTable({ orders }: VentasTableProps) {
                         </option>
                         <option value="cancelled" className={paymentOptionClass.cancelled}>
                           Cancelado
+                        </option>
+                        <option value="refunded" className={paymentOptionClass.refunded}>
+                          Reintegrado
+                        </option>
+                        <option value="charged_back" className={paymentOptionClass.charged_back}>
+                          Contracargo
                         </option>
                       </select>
                       <span

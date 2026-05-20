@@ -6,6 +6,8 @@ type ParsedSignature = {
   v1: string;
 };
 
+const MAX_SIGNATURE_AGE_MS = 10 * 60 * 1000;
+
 export const parseWebhookSignature = (headerValue: string | null): ParsedSignature | null => {
   if (!headerValue) return null;
 
@@ -37,10 +39,22 @@ export const isValidWebhookSignature = (input: {
   dataIdLower: string;
   xRequestId: string | null;
   xSignatureHeader: string | null;
+  nowMs?: number;
 }) => {
   const parsed = parseWebhookSignature(input.xSignatureHeader);
   if (!parsed || !input.xRequestId) {
     return { ok: false as const, reason: "missing_headers" as const };
+  }
+
+  const timestampMs = Number(parsed.ts);
+  if (!Number.isFinite(timestampMs)) {
+    return { ok: false as const, reason: "invalid_timestamp" as const };
+  }
+
+  const normalizedTimestampMs = timestampMs > 10_000_000_000 ? timestampMs : timestampMs * 1000;
+  const nowMs = input.nowMs ?? Date.now();
+  if (Math.abs(nowMs - normalizedTimestampMs) > MAX_SIGNATURE_AGE_MS) {
+    return { ok: false as const, reason: "stale_timestamp" as const };
   }
 
   const manifest = `id:${input.dataIdLower};request-id:${input.xRequestId};ts:${parsed.ts};`;

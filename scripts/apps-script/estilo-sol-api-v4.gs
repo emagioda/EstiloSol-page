@@ -3,7 +3,9 @@
  *
  * Script Properties requeridas:
  * - SPREADSHEET_ID: id de la planilla.
- * - SHEETS_API_TOKEN: token compartido con el servidor Next.js.
+ * - SHEETS_READ_TOKEN: lectura server-side del catalogo publico.
+ * - SHEETS_WRITE_TOKEN: creacion/actualizacion operativa de ordenes y stock.
+ * - SHEETS_ADMIN_TOKEN: lectura/admin de ventas y edicion de productos.
  *
  * Cambios clave:
  * - doGet/doPost exigen token.
@@ -108,14 +110,63 @@ function jsonOutput(payload) {
   return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
 }
 
-function expectedToken_() {
-  return getScriptProperty_("SHEETS_API_TOKEN") || getScriptProperty_("API_TOKEN");
+function legacyFallbackToken_() {
+  const hasScopedToken =
+    getScriptProperty_("SHEETS_READ_TOKEN") ||
+    getScriptProperty_("SHEETS_WRITE_TOKEN") ||
+    getScriptProperty_("SHEETS_ADMIN_TOKEN");
+  return hasScopedToken ? "" : (getScriptProperty_("SHEETS_API_TOKEN") || getScriptProperty_("API_TOKEN"));
 }
 
-function requireToken_(token) {
-  const expected = expectedToken_();
-  if (!expected) throw new Error("SHEETS_API_TOKEN script property is missing");
-  if (!token || String(token) !== expected) throw new Error("Unauthorized");
+function expectedTokensForScope_(scope) {
+  const readToken = getScriptProperty_("SHEETS_READ_TOKEN");
+  const writeToken = getScriptProperty_("SHEETS_WRITE_TOKEN");
+  const adminToken = getScriptProperty_("SHEETS_ADMIN_TOKEN");
+  const legacyToken = legacyFallbackToken_();
+  const tokens = [];
+
+  if (scope === "read") {
+    if (readToken) tokens.push(readToken);
+    if (adminToken) tokens.push(adminToken);
+  } else if (scope === "write") {
+    if (writeToken) tokens.push(writeToken);
+    if (adminToken) tokens.push(adminToken);
+  } else if (scope === "admin") {
+    if (adminToken) tokens.push(adminToken);
+  }
+
+  if (legacyToken) tokens.push(legacyToken);
+  return tokens;
+}
+
+function requireTokenFor_(token, scope) {
+  const expected = expectedTokensForScope_(scope);
+  if (expected.length === 0) throw new Error("Token script property is missing for scope: " + scope);
+  if (!token || expected.indexOf(String(token)) === -1) throw new Error("Unauthorized");
+}
+
+function getScopeForGet_(sheetName, params) {
+  const normalized = normalizeKey(sheetName);
+  if (normalized === normalizeKey(SHEET_PRODUCTS)) {
+    return toBool(params.includeInactive) || toBool(params.include_inactive) ? "admin" : "read";
+  }
+  if (normalized === normalizeKey(SHEET_SALES)) return "admin";
+  throw new Error("Sheet not allowed");
+}
+
+function getPostScope_(payload, action) {
+  const sheetName = payload.sheet || payload.sheetName || (payload.orderId ? SHEET_SALES : payload.productId ? SHEET_PRODUCTS : "");
+  const normalizedSheet = normalizeKey(sheetName);
+  const isProductsMutation =
+    normalizedSheet === normalizeKey(SHEET_PRODUCTS) ||
+    Boolean(payload.productId || payload.product_id);
+
+  if (action === "decrement_stock" || action === "decrementstock") return "write";
+  if (action === "append_order_and_decrement_stock" || action === "appendorderanddecrementstock") return "write";
+  if ((action === "append_row" || action === "append") && isProductsMutation) return "admin";
+  if ((action === "update_row" || action === "update") && isProductsMutation) return "admin";
+  if (action === "append_row" || action === "append" || action === "update_row" || action === "update") return "write";
+  throw new Error("Unsupported action");
 }
 
 function assertAllowedSheet_(sheetName) {
@@ -711,10 +762,9 @@ function handleAppendOrderAndDecrementStock(payload) {
 function doGet(e) {
   try {
     const params = (e && e.parameter) ? e.parameter : {};
-    requireToken_(params.token);
-
     const requestedSheet = params.sheet ? String(params.sheet) : SHEET_PRODUCTS;
     assertAllowedSheet_(requestedSheet);
+    requireTokenFor_(params.token, getScopeForGet_(requestedSheet, params));
 
     if (normalizeKey(requestedSheet) !== normalizeKey(SHEET_PRODUCTS)) {
       const rows = readSheetAsObjects(requestedSheet);
@@ -740,12 +790,12 @@ function doPost(e) {
   let lock;
   try {
     const payload = parsePostBody(e);
-    requireToken_(payload.token);
+    const action = normalizeKey(payload.action || payload.type || payload.op || "");
+    requireTokenFor_(payload.token, getPostScope_(payload, action));
 
     lock = LockService.getScriptLock();
     lock.waitLock(30000);
 
-    const action = normalizeKey(payload.action || payload.type || payload.op || "");
     if (action === "append_row" || action === "append") return jsonOutput(handleAppendRow(payload));
     if (action === "update_row" || action === "update") return jsonOutput(handleUpdateRow(payload));
     if (action === "decrement_stock" || action === "decrementstock") return jsonOutput(handleDecrementStock(payload));

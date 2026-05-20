@@ -3,10 +3,10 @@ import { env } from "@/src/config/env";
 import { scheduleAfterResponse } from "@/src/server/http/afterResponse";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
-import { getOrder, markApproved, markRejected, updateOrder } from "@/src/server/orders/store";
+import { getOrder, markApproved, markTerminalPaymentState, updateOrder } from "@/src/server/orders/store";
 import { fetchPaymentByIdFromMp, searchPaymentsByExternalReference } from "@/src/server/payments/mpClient";
-import { REJECTED_PAYMENT_STATUSES, amountMatches } from "@/src/server/payments/shared";
-import type { MpPaymentResponse, MpSearchResponse } from "@/src/server/payments/shared";
+import { amountMatches, terminalOrderStatusFromMpStatus } from "@/src/server/payments/shared";
+import type { MpPaymentResponse, MpSearchPayment, MpSearchResponse } from "@/src/server/payments/shared";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { parseExternalReference } from "@/src/server/validation/payments";
 import type { Order } from "@/src/server/orders/types";
@@ -34,6 +34,30 @@ const buildApprovedResponse = (
       externalReference,
       timestamp,
       date: formatDateTime24h(timestamp),
+    },
+    { status: 200 }
+  );
+
+const buildCachedApprovedResponse = async (order: Order) => {
+  await trackBusinessEvent("payment.verify.cached_approved", { externalReference: order.externalReference });
+  const timestamp = order.approvedAt || order.updatedAt;
+  return buildApprovedResponse(order.externalReference, order.mpPaymentId, timestamp);
+};
+
+const terminalPaymentMessage = (status: string) => {
+  if (status === "refunded") return "Pago reintegrado";
+  if (status === "charged_back") return "Pago con contracargo";
+  if (status === "cancelled") return "Pago cancelado";
+  return "Pago rechazado";
+};
+
+const buildTerminalResponse = (externalReference: string, status: string) =>
+  NextResponse.json(
+    {
+      approved: false,
+      message: terminalPaymentMessage(status),
+      externalReference,
+      status,
     },
     { status: 200 }
   );
@@ -72,27 +96,33 @@ const trySendReceiptEmail = async (
   });
 };
 
-const isApprovedPaymentMatch = (
-  payment: MpPaymentResponse | undefined,
+type MpPaymentLike = MpPaymentResponse | MpSearchPayment | undefined;
+
+const isPaymentForOrder = (
+  payment: MpPaymentLike,
   externalReference: string,
-  expectedTotal?: number
+  expectedTotal: number
 ) => {
   if (!payment) return false;
 
-  const status = String(payment.status || "");
   const ref = String(payment.external_reference || "");
   const amount = Number(payment.transaction_amount);
   const currency = String(payment.currency_id || "").toUpperCase();
 
-  if (status !== "approved" || ref !== externalReference || currency !== "ARS" || !Number.isFinite(amount)) {
+  if (ref !== externalReference || currency !== "ARS" || !Number.isFinite(amount)) {
     return false;
   }
 
-  if (typeof expectedTotal === "number") {
-    return amountMatches(amount, expectedTotal);
-  }
+  return amountMatches(amount, expectedTotal);
+};
 
-  return true;
+const isApprovedPaymentMatch = (payment: MpPaymentLike, externalReference: string, expectedTotal: number) =>
+  String(payment?.status || "") === "approved" && isPaymentForOrder(payment, externalReference, expectedTotal);
+
+const getTerminalPaymentOrderStatus = (payment: MpPaymentLike, externalReference: string, expectedTotal: number) => {
+  const orderStatus = terminalOrderStatusFromMpStatus(String(payment?.status || ""));
+  if (!orderStatus || !isPaymentForOrder(payment, externalReference, expectedTotal)) return null;
+  return orderStatus;
 };
 
 export async function GET(request: NextRequest) {
@@ -129,35 +159,8 @@ export async function GET(request: NextRequest) {
   const order = await getOrder(ref);
 
   if (!order) {
-    if (paymentId) {
-      try {
-        const paymentById = await fetchPaymentByIdFromMp(paymentId, accessToken);
-        if (paymentById.response.ok && isApprovedPaymentMatch(paymentById.data || undefined, ref)) {
-          const approvedAt = Date.now();
-          await trackBusinessEvent("payment.verify.approved", { externalReference: ref, paymentId });
-          logEvent("info", "payments.approved_from_verify_without_order", {
-            externalReference: ref,
-            paymentId,
-          });
-          return buildApprovedResponse(ref, paymentId, approvedAt);
-        }
-      } catch (error) {
-        logEvent("warn", "payments.verify_payment_id_lookup_failed", {
-          externalReference: ref,
-          paymentId,
-          error,
-        });
-      }
-    }
-
     await trackBusinessEvent("payment.verify.not_found", { externalReference: ref });
     return NextResponse.json({ approved: false, message: "Pago no encontrado" }, { status: 200 });
-  }
-
-  if (order.status === "approved") {
-    await trackBusinessEvent("payment.verify.cached_approved", { externalReference: order.externalReference });
-    const timestamp = order.approvedAt || order.updatedAt;
-    return buildApprovedResponse(order.externalReference, order.mpPaymentId, timestamp);
   }
 
   if (paymentId) {
@@ -181,6 +184,20 @@ export async function GET(request: NextRequest) {
         });
         return buildApprovedResponse(order.externalReference, paymentId, approvedAt);
       }
+
+      const terminalOrderStatus = getTerminalPaymentOrderStatus(paymentById.data || undefined, ref, order.total);
+      if (paymentById.response.ok && terminalOrderStatus) {
+        await markTerminalPaymentState(order.externalReference, {
+          status: terminalOrderStatus,
+          paymentId,
+          mpStatus: String(paymentById.data?.status || terminalOrderStatus),
+        });
+        await trackBusinessEvent("payment.verify.rejected", {
+          externalReference: order.externalReference,
+          mpStatus: String(paymentById.data?.status || terminalOrderStatus),
+        });
+        return buildTerminalResponse(order.externalReference, terminalOrderStatus);
+      }
     } catch (error) {
       logEvent("warn", "payments.verify_payment_id_lookup_failed", {
         externalReference: ref,
@@ -199,6 +216,9 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     logEvent("error", "payments.verify_search_network_error", { externalReference: ref, error });
     await trackBusinessEvent("payment.verify.network_error", { externalReference: ref });
+    if (order.status === "approved") {
+      return buildCachedApprovedResponse(order);
+    }
     await updateOrder(ref, { status: "pending" });
     return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
   }
@@ -206,30 +226,20 @@ export async function GET(request: NextRequest) {
   if (!response.ok) {
     logEvent("warn", "payments.search_non_ok", { externalReference: ref, status: response.status });
     await trackBusinessEvent("payment.verify.search_non_ok", { externalReference: ref, status: response.status });
+    if (order.status === "approved") {
+      return buildCachedApprovedResponse(order);
+    }
     await updateOrder(ref, { status: "pending" });
     return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
   }
 
-  const approvedPayment = data?.results?.find((payment) => {
-    const status = String(payment.status || "");
-    const externalReference = String(payment.external_reference || "");
-    const amount = Number(payment.transaction_amount);
-    const currency = String(payment.currency_id || "").toUpperCase();
+  const approvedPayment = data?.results?.find((payment) =>
+    isApprovedPaymentMatch(payment, order.externalReference, order.total)
+  );
 
-    return (
-      status === "approved" &&
-      externalReference === order.externalReference &&
-      currency === "ARS" &&
-      Number.isFinite(amount) &&
-      amountMatches(amount, order.total)
-    );
-  });
-
-  const rejectedPayment = data?.results?.find((payment) => {
-    const status = String(payment.status || "");
-    const externalReference = String(payment.external_reference || "");
-    return REJECTED_PAYMENT_STATUSES.has(status) && externalReference === order.externalReference;
-  });
+  const terminalPayment = data?.results?.find((payment) =>
+    Boolean(getTerminalPaymentOrderStatus(payment, order.externalReference, order.total))
+  );
 
   if (approvedPayment) {
     const approvedAt = Date.now();
@@ -253,26 +263,29 @@ export async function GET(request: NextRequest) {
     return buildApprovedResponse(order.externalReference, approvedPayment.id, approvedAt);
   }
 
-  if (rejectedPayment) {
-    await markRejected(order.externalReference, {
-      paymentId: String(rejectedPayment.id || ""),
-      mpStatus: String(rejectedPayment.status || "rejected"),
+  if (terminalPayment) {
+    const terminalOrderStatus = getTerminalPaymentOrderStatus(terminalPayment, order.externalReference, order.total);
+    if (!terminalOrderStatus) {
+      await updateOrder(ref, { status: "pending" });
+      return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });
+    }
+
+    await markTerminalPaymentState(order.externalReference, {
+      status: terminalOrderStatus,
+      paymentId: String(terminalPayment.id || ""),
+      mpStatus: String(terminalPayment.status || terminalOrderStatus),
     });
     await trackBusinessEvent("payment.verify.rejected", {
       externalReference: order.externalReference,
-      mpStatus: String(rejectedPayment.status || "rejected"),
+      mpStatus: String(terminalPayment.status || terminalOrderStatus),
     });
 
-    return NextResponse.json(
-      {
-        approved: false,
-        message: "Pago rechazado",
-        externalReference: order.externalReference,
-      },
-      { status: 200 }
-    );
+    return buildTerminalResponse(order.externalReference, terminalOrderStatus);
   }
 
+  if (order.status === "approved") {
+    return buildCachedApprovedResponse(order);
+  }
   await updateOrder(ref, { status: "pending" });
   await trackBusinessEvent("payment.verify.pending", { externalReference: ref });
   return NextResponse.json({ approved: false, message: "Pago pendiente / procesando" }, { status: 200 });

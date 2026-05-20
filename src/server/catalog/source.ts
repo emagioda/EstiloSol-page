@@ -3,6 +3,7 @@ import "server-only";
 import { env } from "@/src/config/env";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import { adaptSheetRowsToProducts } from "@/src/features/shop/infrastructure/data/productAdapter";
+import { getSheetsToken } from "@/src/server/sheets/tokens";
 
 type FetchCatalogSourceOptions = {
   includeInactive?: boolean;
@@ -16,14 +17,9 @@ const buildSheetsUrl = (options: Required<Pick<FetchCatalogSourceOptions, "inclu
   const endpoint = env.getOptionalServer("SHEETS_ENDPOINT");
   if (!endpoint) return null;
 
-  const token = env.getOptionalServer("SHEETS_API_TOKEN");
-  if (!token) {
-    throw new Error("SHEETS_API_TOKEN missing");
-  }
-
   const url = new URL(endpoint);
   url.searchParams.set("sheet", PRODUCTS_SHEET);
-  url.searchParams.set("token", token);
+  url.searchParams.set("token", getSheetsToken("read"));
 
   if (options.includeInactive) {
     url.searchParams.set("includeInactive", "1");

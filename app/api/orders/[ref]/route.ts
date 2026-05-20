@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrder } from "@/src/server/orders/store";
+import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { parseExternalReference } from "@/src/server/validation/payments";
 
 export const runtime = "nodejs";
@@ -8,7 +9,16 @@ type RouteParams = {
   params: Promise<{ ref: string }>;
 };
 
-export async function GET(_request: NextRequest, { params }: RouteParams) {
+export async function GET(request: NextRequest, { params }: RouteParams) {
+  const allowed = await checkRateLimit(request, {
+    keyPrefix: "es:rl:order-summary",
+    max: 45,
+    windowSeconds: 60,
+  });
+  if (!allowed) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
+
   const { ref } = await params;
   const parsedRef = parseExternalReference(ref);
 
