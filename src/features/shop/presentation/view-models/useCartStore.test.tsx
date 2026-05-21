@@ -1,4 +1,4 @@
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { CartProvider, useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 
@@ -113,6 +113,35 @@ describe("cart flow", () => {
       qty: 2,
     });
     expect(result.current.getTotal()).toBe(5000);
+  });
+
+  it("refreshes cart items from storage when returning to the page", async () => {
+    const { result } = renderHook(() => useCart(), { wrapper });
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+
+    expect(result.current.items).toHaveLength(0);
+
+    window.localStorage.setItem(
+      "es_sol_cart_v1",
+      JSON.stringify([
+        {
+          productId: "p1",
+          name: "Producto 1",
+          unitPrice: 1000,
+          qty: 2,
+        },
+      ])
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event("pageshow"));
+    });
+
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+    expect(result.current.getTotal()).toBe(2000);
   });
 
   it("syncs product stock without removing or shrinking existing cart items", () => {

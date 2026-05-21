@@ -243,7 +243,7 @@ const parsePaymentMethod = (value: unknown): OrderPaymentMethod | undefined => {
 
 const parseDeliveryMethod = (value: unknown): OrderDeliveryMethod | undefined => {
   const token = normalizeToken(value);
-  if (token.includes("retiro") || token.includes("pickup")) return "pickup";
+  if (token.includes("retiro") || token.includes("pickup") || token.includes("encuentro")) return "pickup";
   if (token.includes("delivery") || token.includes("domicilio")) return "delivery";
   return undefined;
 };
@@ -305,8 +305,8 @@ const paymentMethodToLabel = (method: OrderPaymentMethod | undefined) => {
 };
 
 const deliveryMethodToLabel = (method: OrderDeliveryMethod | undefined) => {
-  if (method === "pickup") return "Punto de retiro";
-  if (method === "delivery") return "Envio a domicilio";
+  if (method === "pickup") return "Punto de encuentro coordinado";
+  if (method === "delivery") return "Envío a domicilio";
   return "";
 };
 
@@ -406,6 +406,7 @@ export const buildSalesSheetRow = (order: Order): Record<string, unknown> => {
   const paymentMethodLabel = paymentMethodToLabel(order.paymentMethod);
   const deliveryMethodLabel = deliveryMethodToLabel(order.deliveryMethod);
   const orderItemsSummary = buildOrderItemsSummary(order);
+  const fulfillment = order.fulfillment;
 
   return {
     nro_de_compra: order.externalReference,
@@ -432,6 +433,23 @@ export const buildSalesSheetRow = (order: Order): Record<string, unknown> => {
     delivery_method_code: order.deliveryMethod || "",
     metodo_entrega: deliveryMethodLabel,
     total: order.total,
+    subtotal_productos: fulfillment?.subtotalProducts ?? order.total,
+    descuento: fulfillment?.discountAmount ?? 0,
+    costo_envio: fulfillment?.shippingFee ?? 0,
+    total_final: fulfillment?.finalTotal ?? order.total,
+    delivery_zone_id: fulfillment?.deliveryZone?.id ?? "",
+    delivery_zone_name: fulfillment?.deliveryZone?.name ?? "",
+    delivery_inside_zone_confirmed: fulfillment?.deliveryZone?.insideZoneConfirmed ? "TRUE" : "",
+    delivery_address_street: fulfillment?.deliveryAddress?.street ?? "",
+    delivery_address_number: fulfillment?.deliveryAddress?.number ?? "",
+    delivery_address_floor: fulfillment?.deliveryAddress?.floor ?? "",
+    delivery_address_between_streets: fulfillment?.deliveryAddress?.betweenStreets ?? "",
+    delivery_address_notes: fulfillment?.deliveryAddress?.notes ?? "",
+    pickup_point_id: fulfillment?.pickupPoint?.id ?? "",
+    pickup_point_name: fulfillment?.pickupPoint?.name ?? "",
+    pickup_point_address: fulfillment?.pickupPoint?.address ?? "",
+    pickup_point_reference: fulfillment?.pickupPoint?.reference ?? "",
+    fulfillment_summary: fulfillment?.summary ?? "",
     currency: order.currency,
     status: order.status,
     order_status: order.status,

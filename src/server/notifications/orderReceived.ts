@@ -48,7 +48,7 @@ const paymentMethodLabel = (method?: OrderPaymentMethod) => {
 };
 
 const deliveryMethodLabel = (method: Order["deliveryMethod"]) =>
-  method === "pickup" ? "Punto de retiro" : "Envio a domicilio";
+  method === "pickup" ? "Punto de encuentro coordinado" : "Envío a domicilio";
 
 const shortOrderCode = (externalReference: string) =>
   externalReference.split("-").filter(Boolean).at(-1) || externalReference;
@@ -79,7 +79,7 @@ export const sendOrderReceivedEmail = async (
     brandConfig.contactInfo.socialNetworks.find((network) => network.icon === "whatsapp")?.label || "";
   const orderDateText = RECEIVED_DATE_TIME_FORMATTER.format(new Date(input.order.createdAt));
   const paymentText = paymentMethodLabel(input.order.paymentMethod);
-  const deliveryText = deliveryMethodLabel(input.order.deliveryMethod);
+  const deliveryText = input.order.fulfillment?.summary || deliveryMethodLabel(input.order.deliveryMethod);
   const orderTotal = formatMoney(input.order.total);
   const appBaseUrl = env.getOptionalServer("APP_BASE_URL")?.replace(/\/$/, "");
   const orderDetailUrl = appBaseUrl

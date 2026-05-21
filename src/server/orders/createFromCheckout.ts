@@ -1,13 +1,15 @@
 import { randomBytes } from "node:crypto";
+import { DELIVERY_FEE, DELIVERY_ZONE, getPickupPointById } from "@/src/config/fulfillment";
 import type { CatalogProduct } from "@/src/server/catalog/getProducts";
 import type {
   Order,
   OrderDeliveryMethod,
+  OrderFulfillment,
   OrderItem,
   OrderPaymentMethod,
   OrderStatus,
 } from "@/src/server/orders/types";
-import type { ParsedCheckoutItem } from "@/src/server/validation/payments";
+import type { ParsedCheckoutFulfillment, ParsedCheckoutItem } from "@/src/server/validation/payments";
 import {
   dedupeInvalidProducts,
   type InvalidCheckoutProduct,
@@ -23,6 +25,7 @@ type BuildOrderInput = {
   notes: string;
   paymentMethod: OrderPaymentMethod;
   deliveryMethod: OrderDeliveryMethod;
+  fulfillment: ParsedCheckoutFulfillment;
   status?: OrderStatus;
 };
 
@@ -44,6 +47,75 @@ const buildExternalReference = () => {
 };
 
 const buildSummaryToken = () => randomBytes(16).toString("hex");
+
+export const getPaymentDiscountAmount = (subtotalProducts: number, paymentMethod: OrderPaymentMethod) => {
+  if (paymentMethod === "cash" || paymentMethod === "transfer") {
+    return Math.round(subtotalProducts * 0.1);
+  }
+  return 0;
+};
+
+const buildOrderFulfillment = ({
+  deliveryMethod,
+  fulfillment,
+  subtotalProducts,
+  discountAmount,
+  shippingFee,
+  finalTotal,
+}: {
+  deliveryMethod: OrderDeliveryMethod;
+  fulfillment: ParsedCheckoutFulfillment;
+  subtotalProducts: number;
+  discountAmount: number;
+  shippingFee: number;
+  finalTotal: number;
+}): OrderFulfillment | null => {
+  if (deliveryMethod === "delivery") {
+    const address = fulfillment.deliveryAddress;
+    if (!address?.street || !address.number || !address.betweenStreets || address.insideZoneConfirmed !== true) {
+      return null;
+    }
+
+    const floorSuffix = address.floor ? `, ${address.floor}` : "";
+
+    return {
+      subtotalProducts,
+      discountAmount,
+      shippingFee,
+      finalTotal,
+      deliveryZone: {
+        id: DELIVERY_ZONE.id,
+        name: DELIVERY_ZONE.name,
+        insideZoneConfirmed: true,
+      },
+      deliveryAddress: {
+        street: address.street,
+        number: address.number,
+        ...(address.floor ? { floor: address.floor } : {}),
+        betweenStreets: address.betweenStreets,
+        ...(address.notes ? { notes: address.notes } : {}),
+      },
+      summary: `Envío a domicilio: ${address.street} ${address.number}${floorSuffix}, entre ${address.betweenStreets}`,
+    };
+  }
+
+  const pickupPoint = getPickupPointById(fulfillment.pickupPointId || "");
+  if (!pickupPoint) return null;
+
+  return {
+    subtotalProducts,
+    discountAmount,
+    shippingFee,
+    finalTotal,
+    pickupPoint: {
+      id: pickupPoint.id,
+      name: pickupPoint.name,
+      address: pickupPoint.address,
+      reference: pickupPoint.reference,
+    },
+    summary: `Punto de encuentro: ${pickupPoint.name}`,
+  };
+};
 
 export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult => {
   const orderItems: OrderItem[] = [];
@@ -75,11 +147,29 @@ export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult
   }
 
   const now = Date.now();
-  const total = Number(
+  const subtotalProducts = Number(
     orderItems
       .reduce((sum, item) => sum + item.unitPrice * item.qty, 0)
       .toFixed(2)
   );
+  const discountAmount = getPaymentDiscountAmount(subtotalProducts, input.paymentMethod);
+  const shippingFee = input.deliveryMethod === "delivery" ? DELIVERY_FEE : 0;
+  const finalTotal = Number((subtotalProducts - discountAmount + shippingFee).toFixed(2));
+  const fulfillment = buildOrderFulfillment({
+    deliveryMethod: input.deliveryMethod,
+    fulfillment: input.fulfillment,
+    subtotalProducts,
+    discountAmount,
+    shippingFee,
+    finalTotal,
+  });
+
+  if (!fulfillment) {
+    return {
+      order: null,
+      invalidProducts: [],
+    };
+  }
 
   const order: Order = {
     externalReference: buildExternalReference(),
@@ -90,10 +180,11 @@ export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult
     paymentMethod: input.paymentMethod,
     deliveryMethod: input.deliveryMethod,
     items: orderItems,
-    total,
+    total: finalTotal,
     currency: "ARS",
     createdAt: now,
     updatedAt: now,
+    fulfillment,
     ...(input.customerName || input.customerPhone || input.customerEmail
       ? {
           customer: {

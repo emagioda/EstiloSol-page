@@ -1,4 +1,4 @@
-import type { OrderItem } from "@/src/server/orders/types";
+import type { OrderDeliveryMethod, OrderFulfillment, OrderItem } from "@/src/server/orders/types";
 
 type BuildUrlsInput = {
   appBaseUrl: string;
@@ -85,20 +85,33 @@ type BuildPreferencePayloadInput = {
   customerName: string;
   customerPhone: string;
   notes: string;
+  deliveryMethod?: OrderDeliveryMethod;
+  fulfillment?: OrderFulfillment;
   externalReference: string;
   urls: ReturnType<typeof buildPreferenceUrls>;
   includeAutoReturn: boolean;
 };
 
 export const buildPreferencePayload = (input: BuildPreferencePayloadInput) => {
+  const items = input.items.map((item) => ({
+    id: item.productId,
+    title: item.title,
+    quantity: item.qty,
+    unit_price: item.unitPrice,
+    currency_id: "ARS",
+  }));
+  const shippingFee = input.fulfillment?.shippingFee ?? 0;
+
   return {
-    items: input.items.map((item) => ({
-      id: item.productId,
-      title: item.title,
-      quantity: item.qty,
-      unit_price: item.unitPrice,
-      currency_id: "ARS",
-    })),
+    items,
+    ...(shippingFee > 0
+      ? {
+          shipments: {
+            cost: shippingFee,
+            mode: "not_specified" as const,
+          },
+        }
+      : {}),
     payer: {
       ...(input.customerName ? { name: input.customerName } : {}),
       ...(input.customerPhone ? { phone: { number: input.customerPhone } } : {}),
@@ -114,7 +127,9 @@ export const buildPreferencePayload = (input: BuildPreferencePayloadInput) => {
     external_reference: input.externalReference,
     metadata: {
       store: "estilo-sol",
-      ...(input.notes ? { notes: input.notes } : {}),
+      ...(input.deliveryMethod ? { delivery_method: input.deliveryMethod } : {}),
+      ...(input.fulfillment?.summary ? { fulfillment_summary: input.fulfillment.summary } : {}),
+      ...(input.fulfillment ? { shipping_fee: input.fulfillment.shippingFee } : {}),
     },
   };
 };

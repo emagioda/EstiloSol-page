@@ -8,7 +8,7 @@ type CheckoutLayoutProps = {
 
 export default function CheckoutLayout({ mobileSummary, desktopSummary, children }: CheckoutLayoutProps) {
   return (
-    <main className="w-full pb-10 pt-4 text-[var(--brand-cream)] sm:pb-14 sm:pt-6">
+    <main className="w-full pb-10 pt-8 text-[var(--brand-cream)] sm:pb-14 sm:pt-10 lg:pt-12">
       <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
         {mobileSummary}
 

@@ -8,6 +8,29 @@ vi.mock("../../view-models/useCartStore");
 
 const mockUseCart = useCart as ReturnType<typeof vi.fn>;
 
+const validDeliveryAddressDraft = {
+  street: "San Lorenzo",
+  number: "1234",
+  floor: "",
+  betweenStreets: "Mitre y Entre Rios",
+  notes: "",
+  insideZoneConfirmed: true,
+};
+
+const fillContactFields = async () => {
+  fireEvent.change(await screen.findByLabelText(/^Nombre$/i), { target: { value: "Jane" } });
+  fireEvent.change(screen.getByLabelText(/^Apellido$/i), { target: { value: "Smith" } });
+  fireEvent.change(screen.getByLabelText(/^WhatsApp$/i), { target: { value: "5491198765432" } });
+  fireEvent.change(screen.getByLabelText(/^Email$/i), { target: { value: "jane@example.com" } });
+};
+
+const fillDeliveryFields = () => {
+  fireEvent.click(screen.getByLabelText(/Confirmo que mi dirección está dentro/i));
+  fireEvent.change(screen.getByLabelText(/^Calle$/i), { target: { value: "San Lorenzo" } });
+  fireEvent.change(screen.getByLabelText(/Número/i), { target: { value: "1234" } });
+  fireEvent.change(screen.getByLabelText(/Entre calles/i), { target: { value: "Mitre y Entre Rios" } });
+};
+
 describe("CheckoutSteps Auto-Advance", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -44,6 +67,7 @@ describe("CheckoutSteps Auto-Advance", () => {
         whatsapp: "5491112345678",
         step1Completed: true,
         deliveryMethod: "delivery",
+        deliveryAddress: validDeliveryAddressDraft,
         paymentMethod: "mercadopago",
       })
     );
@@ -96,6 +120,7 @@ describe("CheckoutSteps Auto-Advance", () => {
       whatsapp: "5491198765432",
       step1Completed: false, // Not yet completed
       deliveryMethod: "pickup",
+      pickupPointId: "santa-fe-mitre",
       paymentMethod: "transfer",
     };
     localStorage.setItem("es_sol_checkout_draft", JSON.stringify(draft));
@@ -131,6 +156,7 @@ describe("CheckoutSteps Auto-Advance", () => {
         whatsapp: "5491198765432",
         step1Completed: true,
         deliveryMethod: "pickup",
+        pickupPointId: "santa-fe-mitre",
         paymentMethod: "transfer",
       })
     );
@@ -169,6 +195,7 @@ describe("CheckoutSteps Auto-Advance", () => {
         whatsapp: "5491198765432",
         step1Completed: true,
         deliveryMethod: "delivery",
+        deliveryAddress: validDeliveryAddressDraft,
         paymentMethod: "mercadopago",
       })
     );
@@ -212,15 +239,125 @@ describe("CheckoutSteps Auto-Advance", () => {
 
     render(<CheckoutSteps subtotal={100} discountedTotal={100} />);
 
-    fireEvent.change(await screen.findByLabelText(/Nombre/i), { target: { value: "Jane" } });
-    fireEvent.change(screen.getByLabelText(/Apellido/i), { target: { value: "Smith" } });
-    fireEvent.change(screen.getByLabelText(/WhatsApp/i), { target: { value: "5491198765432" } });
-    fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: "jane@example.com" } });
+    await fillContactFields();
+    fillDeliveryFields();
     fireEvent.click(screen.getByRole("button", { name: /Continuar al pago/i }));
 
     expect(await screen.findByText(/Cliente:/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Finalizar pedido/i })).toBeEnabled();
     expect(fetch).not.toHaveBeenCalledWith("/api/mp/validate-cart", expect.anything());
+  });
+
+  it("keeps delivery checkout blocked until address details are complete", async () => {
+    mockUseCart.mockReturnValue({
+      items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],
+      paymentMethod: "mercadopago",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts: vi.fn(),
+      clear: vi.fn(),
+      getTotal: () => 100,
+      getDiscountedTotal: () => 100,
+    });
+
+    render(<CheckoutSteps subtotal={100} discountedTotal={100} />);
+
+    await fillContactFields();
+
+    expect(screen.getByRole("button", { name: /Continuar al pago/i })).toBeDisabled();
+    expect(screen.queryByLabelText(/^Calle$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Ingresá la calle.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Confirmá que la dirección está dentro de la zona habilitada.")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText(/Confirmo que mi dirección está dentro/i));
+
+    expect(screen.getByText("Ingresá la calle.")).toBeInTheDocument();
+    expect(screen.getByText("Ingresá el número.")).toBeInTheDocument();
+    expect(screen.getByText("Ingresá las calles de referencia.")).toBeInTheDocument();
+  });
+
+  it("requires a pickup point before continuing", async () => {
+    mockUseCart.mockReturnValue({
+      items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],
+      paymentMethod: "mercadopago",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts: vi.fn(),
+      clear: vi.fn(),
+      getTotal: () => 100,
+      getDiscountedTotal: () => 100,
+    });
+
+    render(<CheckoutSteps subtotal={100} discountedTotal={100} />);
+
+    fireEvent.click(screen.getByText("Punto de encuentro"));
+    await fillContactFields();
+
+    expect(screen.getByRole("button", { name: /Continuar al pago/i })).toBeDisabled();
+    expect(screen.getByText("Seleccioná un punto de encuentro para continuar.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByText("Santa Fe y Mitre")[0]);
+    expect(screen.getByRole("button", { name: /Continuar al pago/i })).toBeEnabled();
+  });
+
+  it("sends fulfillment in the manual order payload", async () => {
+    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url) === "/api/mp/validate-cart") {
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+
+      if (String(url) === "/api/orders/create") {
+        return {
+          ok: true,
+          json: async () => ({
+            externalReference: "ORDER-123",
+            summaryToken: "summary-token",
+          }),
+        };
+      }
+
+      return { ok: true, json: async () => [] };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockUseCart.mockReturnValue({
+      items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],
+      paymentMethod: "cash",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts: vi.fn(),
+      clear: vi.fn(),
+      getTotal: () => 100,
+      getDiscountedTotal: () => 90,
+    });
+
+    render(<CheckoutSteps subtotal={100} discountedTotal={90} />);
+
+    fireEvent.click(screen.getByText("Punto de encuentro"));
+    fireEvent.click(screen.getAllByText("Santa Fe y Mitre")[0]);
+    await fillContactFields();
+    fireEvent.click(screen.getByRole("button", { name: /Continuar al pago/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Finalizar pedido/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/orders/create", expect.anything());
+    });
+
+    const createCall = fetchMock.mock.calls.find(([url]) => String(url) === "/api/orders/create") as unknown as
+      | [RequestInfo | URL, RequestInit | undefined]
+      | undefined;
+    const payload = JSON.parse(String(createCall?.[1]?.body || "{}")) as {
+      fulfillment?: { pickupPointId?: string };
+      shippingFee?: number;
+    };
+    expect(payload.fulfillment?.pickupPointId).toBe("santa-fe-mitre");
+    expect(payload.shippingFee).toBeUndefined();
   });
 
   it("validates cart stock before creating a manual order", async () => {
@@ -266,10 +403,8 @@ describe("CheckoutSteps Auto-Advance", () => {
 
     render(<CheckoutSteps subtotal={100} discountedTotal={90} />);
 
-    fireEvent.change(await screen.findByLabelText(/Nombre/i), { target: { value: "Jane" } });
-    fireEvent.change(screen.getByLabelText(/Apellido/i), { target: { value: "Smith" } });
-    fireEvent.change(screen.getByLabelText(/WhatsApp/i), { target: { value: "5491198765432" } });
-    fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: "jane@example.com" } });
+    await fillContactFields();
+    fillDeliveryFields();
     fireEvent.click(screen.getByRole("button", { name: /Continuar al pago/i }));
     fireEvent.click(await screen.findByRole("button", { name: /Finalizar pedido/i }));
 
@@ -336,10 +471,8 @@ describe("CheckoutSteps Auto-Advance", () => {
 
     render(<CheckoutSteps subtotal={22500} discountedTotal={20250} />);
 
-    fireEvent.change(await screen.findByLabelText(/Nombre/i), { target: { value: "Jane" } });
-    fireEvent.change(screen.getByLabelText(/Apellido/i), { target: { value: "Smith" } });
-    fireEvent.change(screen.getByLabelText(/WhatsApp/i), { target: { value: "5491198765432" } });
-    fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: "jane@example.com" } });
+    await fillContactFields();
+    fillDeliveryFields();
     fireEvent.click(screen.getByRole("button", { name: /Continuar al pago/i }));
     fireEvent.click(await screen.findByRole("button", { name: /Finalizar pedido/i }));
 

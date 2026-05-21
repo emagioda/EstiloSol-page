@@ -4,26 +4,34 @@
 import { useState } from "react";
 import type { CartItem } from "../../view-models/useCartStore";
 import type { CheckoutInvalidProduct } from "./CheckoutSteps";
-import { formatMoney } from "./checkoutUtils";
+import { deliveryMethodLabel, formatMoney, type DeliveryMethod } from "./checkoutUtils";
 
 type OrderSummaryMobileProps = {
   items: CartItem[];
   subtotal: number;
+  discountAmount: number;
+  shippingFee: number;
   finalTotal: number;
   hasDiscount: boolean;
+  deliveryMethod: DeliveryMethod;
   invalidProducts?: CheckoutInvalidProduct[];
 };
 
 export default function OrderSummaryMobile({
   items,
   subtotal,
+  discountAmount,
+  shippingFee,
   finalTotal,
   hasDiscount,
+  deliveryMethod,
   invalidProducts = [],
 }: OrderSummaryMobileProps) {
   const [open, setOpen] = useState(false);
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
   const invalidProductsById = new Map(invalidProducts.map((product) => [product.productId, product]));
+  const shippingLabel = deliveryMethod === "pickup" ? "Punto de encuentro" : deliveryMethodLabel(deliveryMethod);
+  const shouldShowFulfillmentLine = subtotal > 0 || items.length > 0;
 
   return (
     <section className="rounded-3xl border border-[rgba(122,89,177,0.36)] bg-[rgba(246,236,252,0.95)] p-4 shadow-[0_16px_32px_rgba(89,52,128,0.3)] lg:hidden">
@@ -108,16 +116,30 @@ export default function OrderSummaryMobile({
 
           <div className="mt-3 space-y-2 border-t border-[rgba(122,89,177,0.24)] pt-3">
             <div className="flex items-center justify-between text-sm text-[var(--brand-violet-500)]/85">
-              <span>Subtotal</span>
-              <span>{formatMoney(subtotal)}</span>
+              <span>Subtotal productos</span>
+              <span className="font-medium text-[var(--brand-violet-500)]">{formatMoney(subtotal)}</span>
             </div>
             {hasDiscount ? (
               <div className="flex items-center justify-between text-sm text-[var(--brand-violet-500)]/85">
                 <span>Descuento (10%)</span>
-                <span>- {formatMoney(subtotal - finalTotal)}</span>
+                <span className="font-medium text-[var(--brand-violet-500)]/78">- {formatMoney(discountAmount)}</span>
               </div>
             ) : null}
-            <div className="flex items-end justify-between border-t border-[rgba(122,89,177,0.24)] pt-2">
+            {shouldShowFulfillmentLine ? (
+              <div className="flex items-center justify-between text-sm text-[var(--brand-violet-500)]/85">
+                <span>{shippingLabel}</span>
+                <span
+                  className={
+                    shippingFee > 0
+                      ? "font-medium text-[var(--brand-violet-500)]"
+                      : "text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-violet-500)]/62"
+                  }
+                >
+                  {shippingFee > 0 ? formatMoney(shippingFee) : "Gratis"}
+                </span>
+              </div>
+            ) : null}
+            <div className="flex items-end justify-between rounded-2xl border border-[rgba(212,175,55,0.22)] bg-white/40 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.35)]">
               <span className="text-sm text-[var(--brand-violet-500)]/85">Total</span>
               <div className="text-right">
                 {hasDiscount ? (

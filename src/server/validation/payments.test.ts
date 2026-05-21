@@ -58,4 +58,78 @@ describe("payments validation", () => {
     if (result.ok) return;
     expect(result.message).toContain("email");
   });
+
+  it("rejects delivery checkout without required address fields", () => {
+    const result = parseCheckoutBody(
+      {
+        items: [{ productId: "abc-1", qty: 1 }],
+        deliveryMethod: "delivery",
+        fulfillment: {
+          deliveryAddress: {
+            street: "San Lorenzo",
+            number: "",
+            betweenStreets: "Mitre y Entre Rios",
+            insideZoneConfirmed: true,
+          },
+        },
+      },
+      { requireFulfillment: true }
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toBe("Ingresá el número.");
+  });
+
+  it("rejects delivery checkout without zone confirmation", () => {
+    const result = parseCheckoutBody(
+      {
+        items: [{ productId: "abc-1", qty: 1 }],
+        deliveryMethod: "delivery",
+        fulfillment: {
+          deliveryAddress: {
+            street: "San Lorenzo",
+            number: "1234",
+            betweenStreets: "Mitre y Entre Rios",
+            insideZoneConfirmed: false,
+          },
+        },
+      },
+      { requireFulfillment: true }
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toBe("Confirmá que la dirección está dentro de la zona habilitada.");
+  });
+
+  it("rejects checkout with invalid pickup point", () => {
+    const result = parseCheckoutBody(
+      {
+        items: [{ productId: "abc-1", qty: 1 }],
+        deliveryMethod: "pickup",
+        fulfillment: { pickupPointId: "inventado" },
+      },
+      { requireFulfillment: true }
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toBe("Punto de encuentro inválido.");
+  });
+
+  it("parses a valid pickup fulfillment", () => {
+    const result = parseCheckoutBody(
+      {
+        items: [{ productId: "abc-1", qty: 1 }],
+        deliveryMethod: "pickup",
+        fulfillment: { pickupPointId: "santa-fe-mitre" },
+      },
+      { requireFulfillment: true }
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.fulfillment).toEqual({ pickupPointId: "santa-fe-mitre" });
+  });
 });

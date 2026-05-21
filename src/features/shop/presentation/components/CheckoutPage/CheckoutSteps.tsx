@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { brandConfig } from "@/src/config/brand";
+import { DELIVERY_FEE, PICKUP_POINTS, getPickupPointById } from "@/src/config/fulfillment";
 import type { PaymentMethod } from "../../view-models/useCartStore";
 import { useCart } from "../../view-models/useCartStore";
 import { refreshProductsMemoryCacheFromSource } from "../../view-models/useProductsStore";
@@ -16,6 +17,7 @@ import {
   normalizePhoneDigits,
   sanitizeText,
   type CheckoutContactDraft,
+  type DeliveryAddress,
   type DeliveryMethod,
 } from "./checkoutUtils";
 
@@ -59,16 +61,39 @@ type CheckoutApiError = {
 type CheckoutStepsProps = {
   subtotal: number;
   discountedTotal: number;
+  onDeliveryMethodChange?: (deliveryMethod: DeliveryMethod) => void;
   onInvalidProductsChange?: (products: CheckoutInvalidProduct[]) => void;
 };
 
 type BankField = "cvu" | "alias";
 
 const inputBaseClassName =
-  "w-full rounded-2xl border border-transparent bg-[color-mix(in_srgb,var(--brand-violet-700)_24%,white_76%)] px-3.5 py-2.5 text-sm text-[var(--brand-violet-950)] placeholder:text-[var(--brand-violet-950)]/55 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-500)]";
+  "w-full rounded-2xl border border-white/10 bg-[rgba(255,255,255,0.9)] px-3.5 py-2.5 text-sm text-[var(--brand-violet-950)] placeholder:text-[var(--brand-violet-950)]/42 shadow-[inset_0_1px_0_rgba(255,255,255,0.5)] transition focus-visible:border-[rgba(248,227,176,0.68)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(248,227,176,0.5)]";
+const fieldLabelClassName =
+  "mb-1.5 block text-xs font-semibold uppercase tracking-[0.1em] text-[var(--brand-cream)]/76";
+const fieldErrorClassName = "mt-1.5 text-xs font-medium text-rose-100";
+const deliveryOptionBaseClassName =
+  "group relative block cursor-pointer rounded-2xl border px-3.5 py-3 text-left transition duration-200 focus-within:ring-2 focus-within:ring-[rgba(248,227,176,0.42)] sm:px-4";
+const unselectedDeliveryOptionClassName =
+  "border-white/12 bg-[rgba(255,255,255,0.1)] text-[var(--brand-cream)]/84 hover:border-[rgba(248,227,176,0.34)] hover:bg-[rgba(255,255,255,0.14)]";
+const selectedDeliveryOptionClassName =
+  "border-[rgba(248,227,176,0.72)] bg-[linear-gradient(135deg,rgba(248,227,176,0.16),rgba(255,255,255,0.13))] text-[var(--brand-cream)] shadow-[0_10px_20px_rgba(37,17,58,0.12)]";
+const pickupOptionBaseClassName =
+  "group relative block cursor-pointer rounded-2xl border px-4 py-3 text-sm transition duration-200 focus-within:ring-2 focus-within:ring-[rgba(248,227,176,0.42)]";
+const unselectedPickupOptionClassName =
+  "border-white/12 bg-[rgba(255,255,255,0.1)] text-[var(--brand-cream)]/84 hover:border-[rgba(248,227,176,0.34)] hover:bg-[rgba(255,255,255,0.14)]";
+const selectedPickupOptionClassName =
+  "border-[rgba(248,227,176,0.7)] bg-[rgba(248,227,176,0.14)] text-[var(--brand-cream)] shadow-[0_10px_20px_rgba(37,17,58,0.12)]";
+
+const pickupPointSubtitles: Record<string, string> = {
+  "santa-fe-mitre": "Zona centro",
+  "mercado-del-patio": "Cafferata / Córdoba",
+  "san-martin-segui": "Zona sur",
+  "alto-rosario-junin": "Entrada principal por Junín",
+};
 
 const getInputClassName = (hasError: boolean) =>
-  `${inputBaseClassName} ${hasError ? "ring-1 ring-red-400/70" : ""}`;
+  `${inputBaseClassName} ${hasError ? "border-rose-200/70 bg-rose-50/95 ring-1 ring-rose-200/45" : ""}`;
 
 const isPaymentMethod = (value: unknown): value is PaymentMethod =>
   value === "cash" || value === "transfer" || value === "mercadopago";
@@ -77,6 +102,19 @@ const isDeliveryMethod = (value: unknown): value is DeliveryMethod =>
   value === "delivery" || value === "pickup";
 
 const buildApiNotes = (notes: string) => sanitizeText(notes, 250);
+const sanitizeDeliveryAddress = (address: Partial<DeliveryAddress> | undefined): DeliveryAddress => ({
+  street: sanitizeText(address?.street, 80),
+  number: sanitizeText(address?.number, 20),
+  floor: sanitizeText(address?.floor, 30),
+  betweenStreets: sanitizeText(address?.betweenStreets, 120),
+  notes: sanitizeText(address?.notes, 180),
+  insideZoneConfirmed: address?.insideZoneConfirmed === true,
+});
+const isDeliveryAddressValid = (address: DeliveryAddress) =>
+  address.street.trim().length > 0 &&
+  address.number.trim().length > 0 &&
+  address.betweenStreets.trim().length > 0 &&
+  address.insideZoneConfirmed;
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 const parseInvalidProducts = (items: CheckoutApiError["invalidProducts"]) =>
@@ -140,6 +178,32 @@ const ButtonContent = ({ loading, children }: { loading: boolean; children: Reac
     <span>{children}</span>
   </span>
 );
+
+const DeliveryIcon = ({ type }: { type: DeliveryMethod }) => (
+  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-2xl border border-[rgba(248,227,176,0.32)] bg-[rgba(255,255,255,0.1)] text-[var(--brand-gold-300)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]">
+    {type === "delivery" ? (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-[18px] w-[18px]" fill="none">
+        <path d="M4 11.5 12 5l8 6.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M6.5 10.8V19h11v-8.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M10 19v-5h4v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ) : (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-[18px] w-[18px]" fill="none">
+        <path d="M12 21s6-5.2 6-11a6 6 0 1 0-12 0c0 5.8 6 11 6 11Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M12 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )}
+  </span>
+);
+
+const SelectedCheck = ({ selected }: { selected: boolean }) =>
+  selected ? (
+    <span className="absolute right-3 top-3 grid h-6 w-6 place-items-center rounded-full bg-[var(--brand-gold-300)] text-[var(--brand-violet-950)] shadow-[0_8px_16px_rgba(37,17,58,0.22)]">
+      <svg viewBox="0 0 20 20" aria-hidden="true" className="h-3.5 w-3.5" fill="none">
+        <path d="M5 10.4 8.2 13.5 15 6.5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
+  ) : null;
 
 const ProgressIcon = ({ status }: { status: "active" | "done" | "pending" }) => {
   if (status === "done") {
@@ -225,6 +289,7 @@ const CheckoutProgress = ({
 };
 
 export default function CheckoutSteps({
+  onDeliveryMethodChange,
   onInvalidProductsChange,
 }: CheckoutStepsProps) {
   const { items, paymentMethod, setPaymentMethod, removeItem, syncStockFromProducts } = useCart();
@@ -233,6 +298,13 @@ export default function CheckoutSteps({
   const [whatsapp, setWhatsapp] = useState("");
   const [email, setEmail] = useState("");
   const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod>("delivery");
+  const [deliveryAddressStreet, setDeliveryAddressStreet] = useState("");
+  const [deliveryAddressNumber, setDeliveryAddressNumber] = useState("");
+  const [deliveryAddressFloor, setDeliveryAddressFloor] = useState("");
+  const [deliveryAddressBetweenStreets, setDeliveryAddressBetweenStreets] = useState("");
+  const [deliveryAddressNotes, setDeliveryAddressNotes] = useState("");
+  const [deliveryInsideZoneConfirmed, setDeliveryInsideZoneConfirmed] = useState(false);
+  const [pickupPointId, setPickupPointId] = useState("");
   const [notes, setNotes] = useState("");
   const [isContactStepComplete, setIsContactStepComplete] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
@@ -246,6 +318,25 @@ export default function CheckoutSteps({
   const isTestPublicKey = (process.env.NEXT_PUBLIC_MP_PUBLIC_KEY || "").toUpperCase().startsWith("TEST-");
 
   const fullName = useMemo(() => `${firstName} ${lastName}`.replace(/\s+/g, " ").trim(), [firstName, lastName]);
+  const deliveryAddress = useMemo<DeliveryAddress>(
+    () => ({
+      street: deliveryAddressStreet,
+      number: deliveryAddressNumber,
+      floor: deliveryAddressFloor,
+      betweenStreets: deliveryAddressBetweenStreets,
+      notes: deliveryAddressNotes,
+      insideZoneConfirmed: deliveryInsideZoneConfirmed,
+    }),
+    [
+      deliveryAddressBetweenStreets,
+      deliveryAddressFloor,
+      deliveryAddressNotes,
+      deliveryAddressNumber,
+      deliveryAddressStreet,
+      deliveryInsideZoneConfirmed,
+    ]
+  );
+  const selectedPickupPoint = useMemo(() => getPickupPointById(pickupPointId), [pickupPointId]);
   const isDiscountMethod = isDiscountPaymentMethod(paymentMethod);
   const priceChangedProducts = useMemo(
     () => (error?.invalidProducts ?? []).filter(isPriceChangedProduct),
@@ -269,6 +360,20 @@ export default function CheckoutSteps({
     lastName.trim().length > 0 &&
     isValidWhatsapp(whatsapp) &&
     isValidEmail(email);
+  const isDeliveryDetailsValid =
+    deliveryMethod === "delivery" ? isDeliveryAddressValid(deliveryAddress) : Boolean(selectedPickupPoint);
+  const showFulfillmentValidation = showValidation || isContactFormValid;
+  const deliveryAddressFieldsVisible = deliveryMethod === "delivery" && deliveryInsideZoneConfirmed;
+  const deliveryStreetError =
+    showFulfillmentValidation && deliveryAddressFieldsVisible && !deliveryAddressStreet.trim();
+  const deliveryNumberError =
+    showFulfillmentValidation && deliveryAddressFieldsVisible && !deliveryAddressNumber.trim();
+  const deliveryBetweenStreetsError =
+    showFulfillmentValidation && deliveryAddressFieldsVisible && !deliveryAddressBetweenStreets.trim();
+  const deliveryInsideZoneError =
+    showFulfillmentValidation && deliveryMethod === "delivery" && !deliveryInsideZoneConfirmed;
+  const pickupPointError =
+    showFulfillmentValidation && deliveryMethod === "pickup" && !selectedPickupPoint;
 
   useEffect(() => {
     try {
@@ -289,16 +394,26 @@ export default function CheckoutSteps({
       const draftWhatsapp = sanitizeText(parsed.whatsapp, 30);
       const draftEmail = sanitizeText(parsed.email, 120);
       const draftNotes = sanitizeText(parsed.notes, 250);
+      const draftDeliveryMethod = isDeliveryMethod(parsed.deliveryMethod) ? parsed.deliveryMethod : "delivery";
+      const draftAddress = sanitizeDeliveryAddress(
+        parsed.deliveryAddress && typeof parsed.deliveryAddress === "object" ? parsed.deliveryAddress : undefined
+      );
+      const draftPickupPointId = sanitizeText(parsed.pickupPointId, 80);
+      const activePickupPointId = getPickupPointById(draftPickupPointId)?.id || "";
 
       setFirstName(draftFirstName);
       setLastName(draftLastName);
       setWhatsapp(draftWhatsapp);
       setEmail(draftEmail);
       setNotes(draftNotes);
-
-      if (isDeliveryMethod(parsed.deliveryMethod)) {
-        setDeliveryMethod(parsed.deliveryMethod);
-      }
+      setDeliveryMethod(draftDeliveryMethod);
+      setDeliveryAddressStreet(draftAddress.street);
+      setDeliveryAddressNumber(draftAddress.number);
+      setDeliveryAddressFloor(draftAddress.floor || "");
+      setDeliveryAddressBetweenStreets(draftAddress.betweenStreets);
+      setDeliveryAddressNotes(draftAddress.notes || "");
+      setDeliveryInsideZoneConfirmed(draftAddress.insideZoneConfirmed);
+      setPickupPointId(activePickupPointId);
       if (isPaymentMethod(parsed.paymentMethod)) {
         setPaymentMethod(parsed.paymentMethod);
       }
@@ -308,13 +423,19 @@ export default function CheckoutSteps({
         draftLastName.length > 0 &&
         isValidWhatsapp(draftWhatsapp) &&
         isValidEmail(draftEmail);
-      setIsContactStepComplete(Boolean(parsed.step1Completed) && hasValidDraftContact);
+      const hasValidDraftFulfillment =
+        draftDeliveryMethod === "delivery" ? isDeliveryAddressValid(draftAddress) : Boolean(activePickupPointId);
+      setIsContactStepComplete(Boolean(parsed.step1Completed) && hasValidDraftContact && hasValidDraftFulfillment);
     } catch {
       // ignore invalid draft payloads
     } finally {
       setIsDraftHydrated(true);
     }
   }, [setPaymentMethod]);
+
+  useEffect(() => {
+    onDeliveryMethodChange?.(deliveryMethod);
+  }, [deliveryMethod, onDeliveryMethodChange]);
 
   // Detect new purchase session: reset Step 1 when cart transitions from empty to filled
   useEffect(() => {
@@ -333,6 +454,14 @@ export default function CheckoutSteps({
       setWhatsapp("");
       setEmail("");
       setNotes("");
+      setDeliveryMethod("delivery");
+      setDeliveryAddressStreet("");
+      setDeliveryAddressNumber("");
+      setDeliveryAddressFloor("");
+      setDeliveryAddressBetweenStreets("");
+      setDeliveryAddressNotes("");
+      setDeliveryInsideZoneConfirmed(false);
+      setPickupPointId("");
     }
 
     prevItemsCountRef.current = items.length;
@@ -348,6 +477,8 @@ export default function CheckoutSteps({
       email: sanitizeText(email, 120),
       notes: sanitizeText(notes, 250),
       deliveryMethod,
+      deliveryAddress: sanitizeDeliveryAddress(deliveryAddress),
+      pickupPointId: getPickupPointById(pickupPointId)?.id || "",
       step1Completed: isContactStepComplete,
       paymentMethod,
     };
@@ -359,6 +490,8 @@ export default function CheckoutSteps({
     }
   }, [
     deliveryMethod,
+    deliveryAddress,
+    pickupPointId,
     email,
     firstName,
     isContactStepComplete,
@@ -410,6 +543,21 @@ export default function CheckoutSteps({
       name: item.name,
       unitPrice: item.unitPrice,
     }));
+
+  const checkoutFulfillmentPayload = () => ({
+    deliveryAddress:
+      deliveryMethod === "delivery"
+        ? {
+            street: sanitizeText(deliveryAddressStreet, 80),
+            number: sanitizeText(deliveryAddressNumber, 20),
+            floor: sanitizeText(deliveryAddressFloor, 30),
+            betweenStreets: sanitizeText(deliveryAddressBetweenStreets, 120),
+            notes: sanitizeText(deliveryAddressNotes, 180),
+            insideZoneConfirmed: deliveryInsideZoneConfirmed,
+          }
+        : undefined,
+    pickupPointId: deliveryMethod === "pickup" ? selectedPickupPoint?.id : undefined,
+  });
 
   const validateCartBeforeCheckout = async () => {
     const response = await fetch("/api/mp/validate-cart", {
@@ -477,7 +625,7 @@ export default function CheckoutSteps({
 
   const handleContinueToPayment = () => {
     setShowValidation(true);
-    if (!isContactFormValid) return;
+    if (!isContactFormValid || !isDeliveryDetailsValid) return;
 
     setError(null);
     setIsContactStepComplete(true);
@@ -502,10 +650,10 @@ export default function CheckoutSteps({
     if (paymentMethod !== "mercadopago") return;
     if (items.length === 0 || checkoutPhase !== "idle") return;
 
-    if (!isContactStepComplete || !isContactFormValid) {
+    if (!isContactStepComplete || !isContactFormValid || !isDeliveryDetailsValid) {
       setIsContactStepComplete(false);
       setShowValidation(true);
-      setError({ message: "Completa todos los datos de contacto para continuar." });
+      setError({ message: "Completa los datos de contacto y entrega para continuar." });
       return;
     }
 
@@ -529,6 +677,7 @@ export default function CheckoutSteps({
           items: checkoutItemsPayload(),
           paymentMethod,
           deliveryMethod,
+          fulfillment: checkoutFulfillmentPayload(),
           payer: {
             name: fullName,
             phone: normalizePhoneDigits(whatsapp),
@@ -575,10 +724,10 @@ export default function CheckoutSteps({
     if (!isDiscountMethod) return;
     if (items.length === 0 || checkoutPhase !== "idle") return;
 
-    if (!isContactStepComplete || !isContactFormValid) {
+    if (!isContactStepComplete || !isContactFormValid || !isDeliveryDetailsValid) {
       setIsContactStepComplete(false);
       setShowValidation(true);
-      setError({ message: "Completa todos los datos de contacto para continuar." });
+      setError({ message: "Completa los datos de contacto y entrega para continuar." });
       return;
     }
 
@@ -602,6 +751,7 @@ export default function CheckoutSteps({
           items: checkoutItemsPayload(),
           paymentMethod,
           deliveryMethod,
+          fulfillment: checkoutFulfillmentPayload(),
           payer: {
             name: fullName,
             phone: normalizePhoneDigits(whatsapp),
@@ -740,6 +890,24 @@ export default function CheckoutSteps({
               <p className="sm:col-span-2">
                 <span className="text-[var(--brand-cream)]/65">Entrega:</span> {deliveryMethodLabel(deliveryMethod)}
               </p>
+              {deliveryMethod === "delivery" ? (
+                <>
+                  <p className="sm:col-span-2">
+                    <span className="text-[var(--brand-cream)]/65">Dirección:</span>{" "}
+                    {deliveryAddressStreet} {deliveryAddressNumber}
+                    {deliveryAddressFloor ? `, ${deliveryAddressFloor}` : ""}
+                  </p>
+                  <p className="sm:col-span-2">
+                    <span className="text-[var(--brand-cream)]/65">Entre calles:</span>{" "}
+                    {deliveryAddressBetweenStreets}
+                  </p>
+                </>
+              ) : selectedPickupPoint ? (
+                <p className="sm:col-span-2">
+                  <span className="text-[var(--brand-cream)]/65">Punto:</span> {selectedPickupPoint.name} -{" "}
+                  {selectedPickupPoint.address}
+                </p>
+              ) : null}
             </div>
             <button
               type="button"
@@ -753,7 +921,7 @@ export default function CheckoutSteps({
           <div className="mt-4 space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <label htmlFor="checkout-first-name" className="mb-1.5 block text-xs uppercase tracking-[0.1em] text-[var(--brand-cream)]/75">
+                <label htmlFor="checkout-first-name" className={fieldLabelClassName}>
                   Nombre
                 </label>
                 <input
@@ -764,11 +932,11 @@ export default function CheckoutSteps({
                   className={getInputClassName(firstNameError)}
                   autoComplete="given-name"
                 />
-                {firstNameError ? <p className="mt-1 text-xs text-red-200">Ingresa tu nombre.</p> : null}
+                {firstNameError ? <p className={fieldErrorClassName}>Ingresa tu nombre.</p> : null}
               </div>
 
               <div>
-                <label htmlFor="checkout-last-name" className="mb-1.5 block text-xs uppercase tracking-[0.1em] text-[var(--brand-cream)]/75">
+                <label htmlFor="checkout-last-name" className={fieldLabelClassName}>
                   Apellido
                 </label>
                 <input
@@ -779,13 +947,13 @@ export default function CheckoutSteps({
                   className={getInputClassName(lastNameError)}
                   autoComplete="family-name"
                 />
-                {lastNameError ? <p className="mt-1 text-xs text-red-200">Ingresa tu apellido.</p> : null}
+                {lastNameError ? <p className={fieldErrorClassName}>Ingresa tu apellido.</p> : null}
               </div>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <label htmlFor="checkout-whatsapp" className="mb-1.5 block text-xs uppercase tracking-[0.1em] text-[var(--brand-cream)]/75">
+                <label htmlFor="checkout-whatsapp" className={fieldLabelClassName}>
                   WhatsApp
                 </label>
                 <input
@@ -797,12 +965,12 @@ export default function CheckoutSteps({
                   autoComplete="tel"
                 />
                 {whatsappError ? (
-                  <p className="mt-1 text-xs text-red-200">Ingresa un WhatsApp valido (10 a 15 digitos).</p>
+                  <p className={fieldErrorClassName}>Ingresa un WhatsApp valido (10 a 15 digitos).</p>
                 ) : null}
               </div>
 
               <div>
-                <label htmlFor="checkout-email" className="mb-1.5 block text-xs uppercase tracking-[0.1em] text-[var(--brand-cream)]/75">
+                <label htmlFor="checkout-email" className={fieldLabelClassName}>
                   Email
                 </label>
                 <input
@@ -813,18 +981,24 @@ export default function CheckoutSteps({
                   className={getInputClassName(emailError)}
                   autoComplete="email"
                 />
-                {emailError ? <p className="mt-1 text-xs text-red-200">Ingresa un email valido.</p> : null}
+                {emailError ? <p className={fieldErrorClassName}>Ingresa un email valido.</p> : null}
               </div>
             </div>
 
-            <div>
-              <p className="mb-2 text-xs uppercase tracking-[0.1em] text-[var(--brand-cream)]/75">Entrega</p>
-              <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-[1.5rem] border border-white/12 bg-[rgba(248,244,252,0.12)] p-4 sm:p-5">
+              <div className="mb-3.5">
+                <p className="[font-family:var(--font-brand-display)] text-xl leading-tight text-[var(--brand-cream)]">
+                  Elegí cómo recibir tu pedido
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-[var(--brand-cream)]/72">
+                  Podés elegir envío dentro de la zona habilitada o coordinar un punto de encuentro sin costo.
+                </p>
+              </div>
+
+              <div className="grid gap-x-3 gap-y-7 sm:grid-cols-2">
                 <label
-                  className={`block w-full cursor-pointer rounded-2xl border px-3.5 py-3 text-sm transition-all ${
-                    deliveryMethod === "delivery"
-                      ? "border-[rgba(248,227,176,0.8)] bg-[rgba(242,199,119,0.18)] text-[var(--brand-cream)]"
-                      : "border-[rgba(218,189,236,0.45)] bg-[rgba(207,178,227,0.18)] text-[var(--brand-cream)]/85 hover:border-[rgba(248,227,176,0.6)]"
+                  className={`${deliveryOptionBaseClassName} ${
+                    deliveryMethod === "delivery" ? selectedDeliveryOptionClassName : unselectedDeliveryOptionClassName
                   }`}
                 >
                   <input
@@ -834,13 +1008,24 @@ export default function CheckoutSteps({
                     checked={deliveryMethod === "delivery"}
                     onChange={() => setDeliveryMethod("delivery")}
                   />
-                  <span className="block font-medium">Envio a domicilio</span>
+                  <SelectedCheck selected={deliveryMethod === "delivery"} />
+                  <span className="flex items-center gap-3 pr-7">
+                    <DeliveryIcon type="delivery" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold leading-tight">Envío a domicilio</span>
+                      <span className="mt-1 block text-xs leading-relaxed text-[var(--brand-cream)]/66">
+                        Dentro de zona habilitada
+                      </span>
+                    </span>
+                  </span>
+                  <span className="pointer-events-none absolute bottom-0 left-1/2 inline-flex -translate-x-1/2 translate-y-[60%] rounded-full border border-[rgba(248,227,176,0.34)] bg-[rgba(216,188,229,0.92)] px-4 py-1 text-xs font-semibold text-[var(--brand-gold-300)] shadow-[0_8px_16px_rgba(37,17,58,0.16)]">
+                    {formatMoney(DELIVERY_FEE)}
+                  </span>
                 </label>
+
                 <label
-                  className={`block w-full cursor-pointer rounded-2xl border px-3.5 py-3 text-sm transition-all ${
-                    deliveryMethod === "pickup"
-                      ? "border-[rgba(248,227,176,0.8)] bg-[rgba(242,199,119,0.18)] text-[var(--brand-cream)]"
-                      : "border-[rgba(218,189,236,0.45)] bg-[rgba(207,178,227,0.18)] text-[var(--brand-cream)]/85 hover:border-[rgba(248,227,176,0.6)]"
+                  className={`${deliveryOptionBaseClassName} ${
+                    deliveryMethod === "pickup" ? selectedDeliveryOptionClassName : unselectedDeliveryOptionClassName
                   }`}
                 >
                   <input
@@ -850,19 +1035,180 @@ export default function CheckoutSteps({
                     checked={deliveryMethod === "pickup"}
                     onChange={() => setDeliveryMethod("pickup")}
                   />
-                  <span className="block font-medium">Punto de retiro</span>
+                  <SelectedCheck selected={deliveryMethod === "pickup"} />
+                  <span className="flex items-center gap-3 pr-7">
+                    <DeliveryIcon type="pickup" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold leading-tight">Punto de encuentro</span>
+                      <span className="mt-1 block text-xs leading-relaxed text-[var(--brand-cream)]/66">
+                        Coordinamos por WhatsApp.
+                      </span>
+                    </span>
+                  </span>
+                  <span className="pointer-events-none absolute bottom-0 left-1/2 inline-flex -translate-x-1/2 translate-y-[60%] rounded-full border border-[rgba(248,227,176,0.34)] bg-[rgba(216,188,229,0.92)] px-4 py-1 text-xs font-semibold text-[var(--brand-gold-300)] shadow-[0_8px_16px_rgba(37,17,58,0.16)]">
+                    Gratis
+                  </span>
                 </label>
               </div>
 
-              <div className="mt-2 rounded-xl bg-[rgba(224,200,239,0.2)] px-3 py-2 text-xs text-[var(--brand-cream)]/82 transition-all duration-300 ease-out">
-                {deliveryMethod === "delivery"
-                  ? "Coordinamos la entrega por WhatsApp despues de confirmar el pago."
-                  : "Te avisamos por WhatsApp cuando tu pedido este listo para retirar en el punto de retiro."}
-              </div>
+              {deliveryMethod === "delivery" ? (
+                <div className="mt-4 space-y-3">
+                  <div className="rounded-2xl bg-[rgba(255,255,255,0.12)] p-3.5 text-sm text-[var(--brand-cream)]">
+                    <div className="flex flex-wrap items-start justify-between gap-2.5">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--brand-gold-300)]">
+                          Zona habilitada
+                        </p>
+                        <p className="mt-1 text-sm leading-relaxed text-[var(--brand-cream)]/86">
+                          Av. San Martín · Av. Uriburu · Bv. Avellaneda · San Lorenzo
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <label
+                    className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-3.5 py-3 text-sm text-[var(--brand-cream)] transition ${
+                      deliveryInsideZoneError
+                        ? "border-rose-200/60 bg-rose-200/10"
+                        : "border-white/10 bg-[rgba(255,255,255,0.08)] hover:border-[rgba(248,227,176,0.22)]"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={deliveryInsideZoneConfirmed}
+                      onChange={(event) => setDeliveryInsideZoneConfirmed(event.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-white/30 accent-[var(--brand-gold-300)]"
+                    />
+                    <span className="leading-relaxed">
+                      Confirmo que mi dirección está dentro de la zona habilitada de envío.
+                    </span>
+                  </label>
+
+                  {deliveryAddressFieldsVisible ? (
+                    <div className="space-y-3 rounded-2xl bg-[rgba(255,255,255,0.08)] p-3.5 sm:p-4">
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
+                      <div>
+                        <label htmlFor="delivery-address-street" className={fieldLabelClassName}>
+                          Calle
+                        </label>
+                        <input
+                          id="delivery-address-street"
+                          value={deliveryAddressStreet}
+                          onChange={(event) => setDeliveryAddressStreet(event.target.value)}
+                          placeholder="Calle"
+                          className={getInputClassName(deliveryStreetError)}
+                          autoComplete="address-line1"
+                        />
+                        {deliveryStreetError ? <p className={fieldErrorClassName}>Ingresá la calle.</p> : null}
+                      </div>
+                      <div>
+                        <label htmlFor="delivery-address-number" className={fieldLabelClassName}>
+                          Número
+                        </label>
+                        <input
+                          id="delivery-address-number"
+                          value={deliveryAddressNumber}
+                          onChange={(event) => setDeliveryAddressNumber(event.target.value)}
+                          placeholder="1234"
+                          className={getInputClassName(deliveryNumberError)}
+                          autoComplete="address-line2"
+                        />
+                        {deliveryNumberError ? <p className={fieldErrorClassName}>Ingresá el número.</p> : null}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="delivery-address-floor" className={fieldLabelClassName}>
+                          Piso / Depto, opcional
+                        </label>
+                        <input
+                          id="delivery-address-floor"
+                          value={deliveryAddressFloor}
+                          onChange={(event) => setDeliveryAddressFloor(event.target.value)}
+                          placeholder="Piso, depto o timbre"
+                          className={inputBaseClassName}
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="delivery-address-between" className={fieldLabelClassName}>
+                          Entre calles
+                        </label>
+                        <input
+                          id="delivery-address-between"
+                          value={deliveryAddressBetweenStreets}
+                          onChange={(event) => setDeliveryAddressBetweenStreets(event.target.value)}
+                          placeholder="Ej: San Lorenzo y Rioja"
+                          className={getInputClassName(deliveryBetweenStreetsError)}
+                        />
+                        {deliveryBetweenStreetsError ? (
+                          <p className={fieldErrorClassName}>Ingresá las calles de referencia.</p>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label htmlFor="delivery-address-notes" className={fieldLabelClassName}>
+                        Aclaraciones de entrega, opcional
+                      </label>
+                      <textarea
+                        id="delivery-address-notes"
+                        value={deliveryAddressNotes}
+                        onChange={(event) => setDeliveryAddressNotes(event.target.value)}
+                        placeholder="Indicaciones para encontrar la dirección"
+                        className={`${inputBaseClassName} min-h-20 resize-y`}
+                      />
+                    </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  <div className="rounded-2xl bg-[rgba(255,255,255,0.12)] p-3.5">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--brand-gold-300)]">
+                      Sin costo
+                    </p>
+                    <p className="mt-1 text-sm leading-relaxed text-[var(--brand-cream)]/76">
+                      Coordinamos día y horario por WhatsApp después de confirmar el pago.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-2.5 sm:grid-cols-2">
+                    {PICKUP_POINTS.filter((point) => point.active).map((point) => {
+                      const checked = pickupPointId === point.id;
+                      const subtitle = pickupPointSubtitles[point.id] ?? point.address;
+                      return (
+                        <label
+                          key={point.id}
+                          className={`${pickupOptionBaseClassName} ${
+                            checked ? selectedPickupOptionClassName : unselectedPickupOptionClassName
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="pickup-point"
+                            className="sr-only"
+                            checked={checked}
+                            onChange={() => setPickupPointId(point.id)}
+                          />
+                          <SelectedCheck selected={checked} />
+                          <span className="block pr-7 font-semibold leading-snug">{point.name}</span>
+                          <span className="mt-1 block pr-7 text-xs leading-relaxed text-[var(--brand-cream)]/66">
+                            {subtitle}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {pickupPointError ? (
+                    <p className={fieldErrorClassName}>Seleccioná un punto de encuentro para continuar.</p>
+                  ) : null}
+                </div>
+              )}
             </div>
 
             <div>
-              <label htmlFor="checkout-notes" className="mb-1.5 block text-xs uppercase tracking-[0.1em] text-[var(--brand-cream)]/75">
+              <label htmlFor="checkout-notes" className={fieldLabelClassName}>
                 Notas (opcional)
               </label>
               <textarea
@@ -877,8 +1223,8 @@ export default function CheckoutSteps({
             <button
               type="button"
               onClick={handleContinueToPayment}
-              disabled={!isContactFormValid}
-              className="w-full rounded-2xl bg-[var(--brand-gold-300)] px-4 py-3 text-sm font-semibold text-black shadow-[0_10px_20px_rgba(18,8,35,0.16)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+              disabled={!isContactFormValid || !isDeliveryDetailsValid}
+              className="w-full rounded-2xl border border-[rgba(248,227,176,0.38)] bg-[linear-gradient(135deg,var(--brand-gold-300),#e8c984)] px-4 py-3 text-sm font-semibold text-[var(--brand-violet-950)] shadow-[0_14px_26px_rgba(37,17,58,0.2)] transition hover:brightness-105 hover:shadow-[0_18px_32px_rgba(37,17,58,0.24)] disabled:cursor-not-allowed disabled:border-[rgba(248,227,176,0.2)] disabled:bg-[linear-gradient(135deg,rgba(248,227,176,0.62),rgba(232,201,132,0.48))] disabled:text-[rgba(45,25,68,0.62)] disabled:shadow-none disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(248,227,176,0.68)]"
             >
               Continuar al pago
             </button>
@@ -898,7 +1244,7 @@ export default function CheckoutSteps({
 
         {!isContactStepComplete ? (
           <p className="mt-4 text-sm text-[var(--brand-cream)]/78">
-            Completa primero los datos de contacto para habilitar este paso.
+            Completa primero los datos de contacto y entrega para habilitar este paso.
           </p>
         ) : (
           <div className="mt-4 space-y-2.5">

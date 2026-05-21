@@ -1,4 +1,5 @@
 import type { OrderDeliveryMethod, OrderPaymentMethod } from "@/src/server/orders/types";
+import { getPickupPointById } from "@/src/config/fulfillment";
 
 type CheckoutItemInput = {
   productId?: unknown;
@@ -11,6 +12,7 @@ type CheckoutBodyInput = {
   items?: unknown;
   paymentMethod?: unknown;
   deliveryMethod?: unknown;
+  fulfillment?: unknown;
   payer?: {
     name?: unknown;
     phone?: unknown;
@@ -26,10 +28,25 @@ export type ParsedCheckoutItem = {
   unitPrice?: number;
 };
 
+export type ParsedDeliveryAddress = {
+  street: string;
+  number: string;
+  floor: string;
+  betweenStreets: string;
+  notes: string;
+  insideZoneConfirmed: boolean;
+};
+
+export type ParsedCheckoutFulfillment = {
+  deliveryAddress?: ParsedDeliveryAddress;
+  pickupPointId?: string;
+};
+
 export type ParsedCheckoutBody = {
   items: ParsedCheckoutItem[];
   paymentMethod: OrderPaymentMethod | null;
   deliveryMethod: OrderDeliveryMethod | null;
+  fulfillment: ParsedCheckoutFulfillment;
   payerName: string;
   payerPhone: string;
   payerEmail: string;
@@ -42,6 +59,7 @@ export type ValidationResult<T> =
 
 type ParseCheckoutOptions = {
   requirePayer?: boolean;
+  requireFulfillment?: boolean;
 };
 
 const MAX_ITEMS = 30;
@@ -88,6 +106,61 @@ const parseDeliveryMethod = (value: unknown): OrderDeliveryMethod | null => {
     return normalized;
   }
   return null;
+};
+
+const parseFulfillment = (
+  value: unknown,
+  deliveryMethod: OrderDeliveryMethod | null,
+  requireFulfillment: boolean
+): ValidationResult<ParsedCheckoutFulfillment> => {
+  const body = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+  if (!deliveryMethod) {
+    if (requireFulfillment) return { ok: false, message: "Metodo de entrega invalido" };
+    return { ok: true, value: {} };
+  }
+
+  if (deliveryMethod === "delivery") {
+    const rawAddress =
+      body.deliveryAddress && typeof body.deliveryAddress === "object" && !Array.isArray(body.deliveryAddress)
+        ? (body.deliveryAddress as Record<string, unknown>)
+        : {};
+
+    const deliveryAddress: ParsedDeliveryAddress = {
+      street: sanitizeText(rawAddress.street, 80),
+      number: sanitizeText(rawAddress.number, 20),
+      floor: sanitizeText(rawAddress.floor, 30),
+      betweenStreets: sanitizeText(rawAddress.betweenStreets, 120),
+      notes: sanitizeText(rawAddress.notes, 180),
+      insideZoneConfirmed: rawAddress.insideZoneConfirmed === true,
+    };
+
+    if (requireFulfillment) {
+      if (!deliveryAddress.street) return { ok: false, message: "Ingresá la calle." };
+      if (!deliveryAddress.number) return { ok: false, message: "Ingresá el número." };
+      if (!deliveryAddress.betweenStreets) return { ok: false, message: "Ingresá las calles de referencia." };
+      if (!deliveryAddress.insideZoneConfirmed) {
+        return { ok: false, message: "Confirmá que la dirección está dentro de la zona habilitada." };
+      }
+    }
+
+    return { ok: true, value: { deliveryAddress } };
+  }
+
+  const pickupPointId = sanitizeText(body.pickupPointId, 80);
+  if (!pickupPointId) {
+    return requireFulfillment
+      ? { ok: false, message: "Elegí un punto de encuentro." }
+      : { ok: true, value: {} };
+  }
+
+  if (!getPickupPointById(pickupPointId)) {
+    return { ok: false, message: "Punto de encuentro inválido." };
+  }
+
+  return { ok: true, value: { pickupPointId } };
 };
 
 export const parseExternalReference = (value: string | null): ValidationResult<string> => {
@@ -150,6 +223,15 @@ export const parseCheckoutBody = (
     return { ok: false, message: "Metodo de entrega invalido" };
   }
 
+  const parsedFulfillment = parseFulfillment(
+    body.fulfillment,
+    deliveryMethod,
+    Boolean(options.requireFulfillment)
+  );
+  if (!parsedFulfillment.ok) {
+    return { ok: false, message: parsedFulfillment.message };
+  }
+
   if (options.requirePayer && (!payerName || payerPhone.replace(/\D/g, "").length < 8)) {
     return { ok: false, message: "Completa nombre y WhatsApp para continuar" };
   }
@@ -164,6 +246,7 @@ export const parseCheckoutBody = (
       items: parsedItems,
       paymentMethod,
       deliveryMethod,
+      fulfillment: parsedFulfillment.value,
       payerName,
       payerPhone,
       payerEmail,

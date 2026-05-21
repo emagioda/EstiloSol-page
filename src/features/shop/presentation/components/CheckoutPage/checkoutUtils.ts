@@ -1,8 +1,23 @@
 "use client";
 
 import type { CartItem, PaymentMethod } from "../../view-models/useCartStore";
+import { getShippingFeeForDeliveryMethod } from "@/src/config/fulfillment";
 
 export type DeliveryMethod = "delivery" | "pickup";
+
+export type DeliveryAddress = {
+  street: string;
+  number: string;
+  floor?: string;
+  betweenStreets: string;
+  notes?: string;
+  insideZoneConfirmed: boolean;
+};
+
+export type CheckoutFulfillmentDraft = {
+  deliveryAddress?: DeliveryAddress;
+  pickupPointId?: string;
+};
 
 export type CheckoutContactDraft = {
   firstName: string;
@@ -11,6 +26,8 @@ export type CheckoutContactDraft = {
   email: string;
   notes: string;
   deliveryMethod: DeliveryMethod;
+  deliveryAddress?: DeliveryAddress;
+  pickupPointId?: string;
   step1Completed: boolean;
   paymentMethod: PaymentMethod;
 };
@@ -26,6 +43,33 @@ export const formatMoney = (value: number) =>
 
 export const isDiscountPaymentMethod = (paymentMethod: PaymentMethod) =>
   paymentMethod === "cash" || paymentMethod === "transfer";
+
+export const getPaymentDiscountAmount = (subtotalProducts: number, paymentMethod: PaymentMethod) => {
+  if (!isDiscountPaymentMethod(paymentMethod)) return 0;
+  return Math.round(subtotalProducts * 0.1);
+};
+
+export const getCheckoutTotals = ({
+  subtotalProducts,
+  paymentMethod,
+  deliveryMethod,
+}: {
+  subtotalProducts: number;
+  paymentMethod: PaymentMethod;
+  deliveryMethod: DeliveryMethod;
+}) => {
+  const discountAmount = getPaymentDiscountAmount(subtotalProducts, paymentMethod);
+  const shippingFee =
+    subtotalProducts > 0 ? getShippingFeeForDeliveryMethod(deliveryMethod) : 0;
+  const finalTotal = Math.max(0, subtotalProducts - discountAmount + shippingFee);
+
+  return {
+    subtotalProducts,
+    discountAmount,
+    shippingFee,
+    finalTotal,
+  };
+};
 
 export const sanitizeText = (value: unknown, maxLength: number) => {
   if (typeof value !== "string") return "";
@@ -53,7 +97,7 @@ export const paymentMethodLabel = (paymentMethod: PaymentMethod) => {
 };
 
 export const deliveryMethodLabel = (deliveryMethod: DeliveryMethod) =>
-  deliveryMethod === "delivery" ? "Envio a domicilio" : "Punto de retiro";
+  deliveryMethod === "delivery" ? "Envío a domicilio" : "Punto de encuentro coordinado";
 
 export const buildWhatsappMessage = ({
   items,

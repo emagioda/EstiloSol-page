@@ -214,8 +214,7 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
 
   const refreshItemsFromStorage = useCallback(() => {
     const storedItems = readItemsFromStorage();
-    const storedSignature = cartItemsSignature(storedItems);
-    if (storedSignature === itemsSignatureRef.current) return;
+    itemsSignatureRef.current = cartItemsSignature(storedItems);
     setItems(storedItems);
   }, []);
 

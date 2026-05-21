@@ -1,0 +1,34 @@
+import { describe, expect, it } from "vitest";
+import { getCheckoutTotals } from "./checkoutUtils";
+
+describe("getCheckoutTotals", () => {
+  it("does not add delivery shipping when the cart is empty", () => {
+    expect(
+      getCheckoutTotals({
+        subtotalProducts: 0,
+        paymentMethod: "mercadopago",
+        deliveryMethod: "delivery",
+      })
+    ).toMatchObject({
+      subtotalProducts: 0,
+      discountAmount: 0,
+      shippingFee: 0,
+      finalTotal: 0,
+    });
+  });
+
+  it("adds delivery shipping only when there are products", () => {
+    expect(
+      getCheckoutTotals({
+        subtotalProducts: 9000,
+        paymentMethod: "mercadopago",
+        deliveryMethod: "delivery",
+      })
+    ).toMatchObject({
+      subtotalProducts: 9000,
+      discountAmount: 0,
+      shippingFee: 4000,
+      finalTotal: 13000,
+    });
+  });
+});

@@ -21,6 +21,32 @@ export type OrderItem = {
   currency: "ARS";
 };
 
+export type OrderFulfillment = {
+  subtotalProducts: number;
+  discountAmount: number;
+  shippingFee: number;
+  finalTotal: number;
+  deliveryZone?: {
+    id: string;
+    name: string;
+    insideZoneConfirmed: boolean;
+  };
+  deliveryAddress?: {
+    street: string;
+    number: string;
+    floor?: string;
+    betweenStreets: string;
+    notes?: string;
+  };
+  pickupPoint?: {
+    id: string;
+    name: string;
+    address: string;
+    reference: string;
+  };
+  summary: string;
+};
+
 export type Order = {
   externalReference: string;
   summaryToken?: string;
@@ -41,5 +67,6 @@ export type Order = {
   stockDeductedAt?: number;
   customer?: { name?: string; phone?: string; email?: string };
   notes?: string;
+  fulfillment?: OrderFulfillment;
   receiptEmailSentAt?: number;
 };

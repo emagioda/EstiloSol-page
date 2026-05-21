@@ -1,16 +1,14 @@
 import { NextRequest } from "next/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRateLimitFingerprint } from "@/src/server/security/rateLimit";
-
-const originalNodeEnv = process.env.NODE_ENV;
 
 describe("rate limit fingerprint", () => {
   afterEach(() => {
-    process.env.NODE_ENV = originalNodeEnv;
+    vi.unstubAllEnvs();
   });
 
   it("prefers Vercel's trusted forwarded IP in production", () => {
-    process.env.NODE_ENV = "production";
+    vi.stubEnv("NODE_ENV", "production");
 
     const request = new NextRequest("http://localhost:3000/api/test", {
       headers: {
@@ -24,7 +22,7 @@ describe("rate limit fingerprint", () => {
   });
 
   it("does not trust generic x-forwarded-for in production", () => {
-    process.env.NODE_ENV = "production";
+    vi.stubEnv("NODE_ENV", "production");
 
     const request = new NextRequest("http://localhost:3000/api/test", {
       headers: {

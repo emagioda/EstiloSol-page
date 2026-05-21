@@ -104,6 +104,20 @@ describe("preferencePayload", () => {
       customerName: "Ana",
       customerPhone: "+5491112345678",
       notes: "Entregar por la tarde",
+      deliveryMethod: "pickup",
+      fulfillment: {
+        subtotalProducts: 2400,
+        discountAmount: 0,
+        shippingFee: 0,
+        finalTotal: 2400,
+        pickupPoint: {
+          id: "santa-fe-mitre",
+          name: "Santa Fe y Mitre",
+          address: "Santa Fe y Mitre",
+          reference: "Coordinamos día y horario por WhatsApp",
+        },
+        summary: "Punto de encuentro: Santa Fe y Mitre",
+      },
       externalReference: "es-123",
       urls,
       includeAutoReturn: true,
@@ -123,7 +137,9 @@ describe("preferencePayload", () => {
     expect(withAutoReturn.auto_return).toBe("approved");
     expect(withAutoReturn.metadata).toEqual({
       store: "estilo-sol",
-      notes: "Entregar por la tarde",
+      delivery_method: "pickup",
+      fulfillment_summary: "Punto de encuentro: Santa Fe y Mitre",
+      shipping_fee: 0,
     });
 
     const withoutAutoReturn = buildPreferencePayload({
@@ -139,5 +155,50 @@ describe("preferencePayload", () => {
     expect(withoutAutoReturn).not.toHaveProperty("auto_return");
     expect(withoutAutoReturn.payer).toEqual({});
     expect(withoutAutoReturn.metadata).toEqual({ store: "estilo-sol" });
+  });
+
+  it("sends shipping through Mercado Pago shipments", () => {
+    const urls = buildPreferenceUrls({
+      appBaseUrl: "https://example.com",
+      externalReference: "es-123",
+    });
+
+    const payload = buildPreferencePayload({
+      items,
+      customerName: "Ana",
+      customerPhone: "+5491112345678",
+      notes: "",
+      deliveryMethod: "delivery",
+      fulfillment: {
+        subtotalProducts: 2400,
+        discountAmount: 0,
+        shippingFee: 4000,
+        finalTotal: 6400,
+        deliveryZone: {
+          id: "rosario-zona-habilitada",
+          name: "Rosario zona habilitada",
+          insideZoneConfirmed: true,
+        },
+        deliveryAddress: {
+          street: "San Lorenzo",
+          number: "1234",
+          betweenStreets: "Mitre y Entre Rios",
+        },
+        summary: "Envío a domicilio: San Lorenzo 1234, entre Mitre y Entre Rios",
+      },
+      externalReference: "es-123",
+      urls,
+      includeAutoReturn: true,
+    });
+
+    expect(payload.items).toHaveLength(1);
+    expect(payload.shipments).toEqual({
+      cost: 4000,
+      mode: "not_specified",
+    });
+    expect(payload.metadata).toMatchObject({
+      delivery_method: "delivery",
+      shipping_fee: 4000,
+    });
   });
 });

@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
   }
 
   const rawBody = await request.json().catch(() => null);
-  const parsedBody = parseCheckoutBody(rawBody, { requirePayer: true });
+  const parsedBody = parseCheckoutBody(rawBody, { requirePayer: true, requireFulfillment: true });
   if (!parsedBody.ok) {
     await trackBusinessEvent("checkout.order_create.invalid_input", { route: "orders-create" });
     return NextResponse.json({ error: parsedBody.message }, { status: 400 });
@@ -38,6 +38,7 @@ export async function POST(request: NextRequest) {
     items,
     paymentMethod,
     deliveryMethod,
+    fulfillment,
     payerName: customerName,
     payerPhone: customerPhone,
     payerEmail: customerEmail,
@@ -49,6 +50,10 @@ export async function POST(request: NextRequest) {
       { error: "Este endpoint solo permite pedidos con pago en efectivo o transferencia." },
       { status: 400 }
     );
+  }
+
+  if (!deliveryMethod) {
+    return NextResponse.json({ error: "Metodo de entrega invalido" }, { status: 400 });
   }
 
   const catalog = await getProductsCatalog({ forceFresh: true }).catch((error) => {
@@ -72,7 +77,8 @@ export async function POST(request: NextRequest) {
     customerEmail,
     notes,
     paymentMethod,
-    deliveryMethod: deliveryMethod || "delivery",
+    deliveryMethod,
+    fulfillment,
     status: "pending",
   });
 
@@ -93,7 +99,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (!order) {
-    return NextResponse.json({ error: "No se pudo construir la orden" }, { status: 500 });
+    return NextResponse.json({ error: "No se pudo construir la orden con los datos de entrega." }, { status: 400 });
   }
 
   try {

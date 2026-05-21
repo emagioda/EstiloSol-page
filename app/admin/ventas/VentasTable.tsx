@@ -306,8 +306,8 @@ const paymentMethodLabel = (value: AdminOrderSheetRow["paymentMethod"]) => {
 };
 
 const deliveryMethodLabel = (value: AdminOrderSheetRow["deliveryMethod"]) => {
-  if (value === "delivery") return "Envio a domicilio";
-  if (value === "pickup") return "Punto de retiro";
+  if (value === "delivery") return "Envío a domicilio";
+  if (value === "pickup") return "Punto de encuentro coordinado";
   return "No informado";
 };
 

@@ -68,6 +68,9 @@ describe("create-preference local development flow", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         items: [{ productId: "p-1", qty: 1, name: "Producto 1" }],
+        paymentMethod: "mercadopago",
+        deliveryMethod: "pickup",
+        fulfillment: { pickupPointId: "mercado-del-patio" },
         payer: { name: "Ana", phone: "+5491112345678" },
       }),
     });
@@ -90,11 +93,101 @@ describe("create-preference local development flow", () => {
 
     expect(mpBodies).toHaveLength(1);
     expect(mpBodies[0]).not.toHaveProperty("auto_return");
+    expect(mpBodies[0].metadata).toMatchObject({
+      store: "estilo-sol",
+      delivery_method: "pickup",
+      shipping_fee: 0,
+    });
 
     const backUrls = mpBodies[0].back_urls as { success?: string } | undefined;
     expect(backUrls?.success?.startsWith("http://localhost:3000/tienda/success?ref=es-")).toBe(true);
     const successUrl = new URL(backUrls?.success || "");
     expect(successUrl.searchParams.get("summaryToken")).toBe(body.summaryToken);
+
+    fetchMock.mockRestore();
+  });
+
+  it("sends delivery shipping through Mercado Pago shipments", async () => {
+    const mpBodies: Array<Record<string, unknown>> = [];
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+
+      if (url.startsWith("https://sheets.example.test/catalog") && method === "GET") {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "p-1",
+              name: "Producto 1",
+              price: 1000,
+              currency: "ARS",
+              active: true,
+              stock_status: "in_stock",
+              stock_qty: 5,
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      if (url.startsWith("https://sheets.example.test/catalog") && method === "POST") {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (url === "https://api.mercadopago.com/checkout/preferences") {
+        mpBodies.push(JSON.parse(String(init?.body || "{}")) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({
+            id: "pref-1",
+            init_point: "https://mp.test/init",
+            sandbox_init_point: "https://mp.test/sandbox",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    });
+
+    const request = new NextRequest("http://localhost:3000/api/mp/create-preference", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: [{ productId: "p-1", qty: 2, name: "Producto 1", shippingFee: -4000 }],
+        paymentMethod: "mercadopago",
+        deliveryMethod: "delivery",
+        fulfillment: {
+          deliveryAddress: {
+            street: "San Lorenzo",
+            number: "1234",
+            betweenStreets: "Mitre y Entre Rios",
+            insideZoneConfirmed: true,
+          },
+          shippingFee: 0,
+        },
+        payer: { name: "Ana", phone: "+5491112345678" },
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(mpBodies).toHaveLength(1);
+    const items = mpBodies[0].items as Array<{ id?: string; unit_price?: number }>;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: "p-1", unit_price: 1000 });
+    expect(mpBodies[0].shipments).toEqual({
+      cost: 4000,
+      mode: "not_specified",
+    });
+    expect(mpBodies[0].metadata).toMatchObject({
+      delivery_method: "delivery",
+      shipping_fee: 4000,
+    });
 
     fetchMock.mockRestore();
   });

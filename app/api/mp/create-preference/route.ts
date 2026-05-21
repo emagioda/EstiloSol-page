@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
   }
 
   const rawBody = await request.json().catch(() => null);
-  const parsedBody = parseCheckoutBody(rawBody, { requirePayer: true });
+  const parsedBody = parseCheckoutBody(rawBody, { requirePayer: true, requireFulfillment: true });
   if (!parsedBody.ok) {
     await trackBusinessEvent("checkout.preference.invalid_input", { route: "create-preference" });
     return NextResponse.json({ error: parsedBody.message }, { status: 400 });
@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
     items: requestedItems,
     paymentMethod,
     deliveryMethod,
+    fulfillment,
     payerName: customerName,
     payerPhone: customerPhone,
     payerEmail: customerEmail,
@@ -57,7 +58,9 @@ export async function POST(request: NextRequest) {
   if (resolvedPaymentMethod !== "mercadopago") {
     return NextResponse.json({ error: "Metodo de pago invalido para esta operacion" }, { status: 400 });
   }
-  const resolvedDeliveryMethod = deliveryMethod || "delivery";
+  if (!deliveryMethod) {
+    return NextResponse.json({ error: "Metodo de entrega invalido" }, { status: 400 });
+  }
 
   const catalog = await getProductsCatalog({ forceFresh: true }).catch((error) => {
     logEvent("error", "payments.catalog_fetch_error", {
@@ -80,7 +83,8 @@ export async function POST(request: NextRequest) {
     customerEmail,
     notes,
     paymentMethod: resolvedPaymentMethod,
-    deliveryMethod: resolvedDeliveryMethod,
+    deliveryMethod,
+    fulfillment,
   });
 
   if (invalidProducts.length > 0) {
@@ -100,7 +104,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (!order) {
-    return NextResponse.json({ error: "No se pudo construir la orden" }, { status: 500 });
+    return NextResponse.json({ error: "No se pudo construir la orden con los datos de entrega." }, { status: 400 });
   }
 
   try {
@@ -129,6 +133,8 @@ export async function POST(request: NextRequest) {
     customerName,
     customerPhone,
     notes,
+    deliveryMethod: order.deliveryMethod,
+    fulfillment: order.fulfillment,
     externalReference: order.externalReference,
     urls,
     includeAutoReturn: urls.shouldUseAutoReturn,
