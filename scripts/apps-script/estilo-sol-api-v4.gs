@@ -16,9 +16,10 @@
 
 const SHEET_PRODUCTS = "products";
 const SHEET_SALES = "ventas";
+const SHEET_FULFILLMENT = "envios";
 const CACHE_PRODUCTS_KEY = "catalog:products:active:v4";
 const CACHE_PRODUCTS_TTL_SECONDS = 180;
-const ALLOWED_SHEETS = [SHEET_PRODUCTS, SHEET_SALES];
+const ALLOWED_SHEETS = [SHEET_PRODUCTS, SHEET_SALES, SHEET_FULFILLMENT];
 const ORDER_ID_KEYS = ["nro_de_compra", "order_id", "id_pedido", "orderid", "external_reference", "id"];
 
 const HEADER_ALIASES = {
@@ -150,6 +151,7 @@ function getScopeForGet_(sheetName, params) {
   if (normalized === normalizeKey(SHEET_PRODUCTS)) {
     return toBool(params.includeInactive) || toBool(params.include_inactive) ? "admin" : "read";
   }
+  if (normalized === normalizeKey(SHEET_FULFILLMENT)) return "read";
   if (normalized === normalizeKey(SHEET_SALES)) return "admin";
   throw new Error("Sheet not allowed");
 }

@@ -35,7 +35,7 @@ describe("buildSalesSheetRow", () => {
         finalTotal: 22000,
         deliveryZone: {
           id: "rosario-zona-habilitada",
-          name: "Rosario zona habilitada",
+          name: "Rosario - zona de envío",
           insideZoneConfirmed: true,
         },
         deliveryAddress: {

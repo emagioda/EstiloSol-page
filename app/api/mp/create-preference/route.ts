@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getActivePickupPointById } from "@/src/config/fulfillment";
 import { env } from "@/src/config/env";
 import { getProductsCatalog } from "@/src/server/catalog/getProducts";
+import { getFulfillmentConfig } from "@/src/server/fulfillment/source";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { buildOrderFromCheckout } from "@/src/server/orders/createFromCheckout";
@@ -62,6 +64,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Metodo de entrega invalido" }, { status: 400 });
   }
 
+  const fulfillmentConfig = await getFulfillmentConfig();
+  if (
+    deliveryMethod === "pickup" &&
+    !getActivePickupPointById(fulfillmentConfig, fulfillment.pickupPointId || "")
+  ) {
+    return NextResponse.json({ error: "Punto de encuentro inválido." }, { status: 400 });
+  }
+
   const catalog = await getProductsCatalog({ forceFresh: true }).catch((error) => {
     logEvent("error", "payments.catalog_fetch_error", {
       route: "create-preference",
@@ -85,6 +95,7 @@ export async function POST(request: NextRequest) {
     paymentMethod: resolvedPaymentMethod,
     deliveryMethod,
     fulfillment,
+    fulfillmentConfig,
   });
 
   if (invalidProducts.length > 0) {

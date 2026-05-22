@@ -24,6 +24,8 @@ export default function Navbar() {
   const pathnameSegments = (pathname ?? "").split("/").filter(Boolean);
   const isAdmin = pathnameSegments[0] === "admin";
   const isTienda = pathnameSegments.includes("tienda");
+  const isCheckout = pathname?.startsWith("/tienda/checkout") ?? false;
+  const canShowShopTicker = isTienda && !isCheckout;
   const isAdminVentas = pathname?.startsWith("/admin/ventas") || pathname === "/admin";
   const isAdminProductos = pathname?.startsWith("/admin/productos");
   const adminSections = [
@@ -89,7 +91,7 @@ export default function Navbar() {
   useEffect(() => {
     const root = document.documentElement;
 
-    if (isTienda && showTicker) {
+    if (canShowShopTicker && showTicker) {
       root.style.setProperty("--header-height-mobile", "calc(var(--header-height-mobile-base) + var(--safe-area-top) + var(--shop-ticker-height-mobile))");
       root.style.setProperty("--header-height-desktop", "calc(var(--header-height-desktop-base) + var(--shop-ticker-height-desktop))");
       return;
@@ -108,10 +110,10 @@ export default function Navbar() {
       root.style.setProperty("--header-height-mobile", "calc(var(--header-height-mobile-base) + var(--safe-area-top))");
       root.style.setProperty("--header-height-desktop", "var(--header-height-desktop-base)");
     };
-  }, [isAdmin, isTienda, showTicker]);
+  }, [canShowShopTicker, isAdmin, showTicker]);
 
   useEffect(() => {
-    if (!isTienda) {
+    if (!canShowShopTicker) {
       const resetTickerTimer = window.setTimeout(() => {
         setShowTicker(true);
       }, 0);
@@ -128,7 +130,7 @@ export default function Navbar() {
     return () => {
       window.removeEventListener("shop:ticker-visibility", handleTickerVisibility as EventListener);
     };
-  }, [isTienda]);
+  }, [canShowShopTicker]);
 
   const visiblePendingAdminHref =
     pendingAdminHref && pendingAdminHref !== pathname ? pendingAdminHref : null;
@@ -176,7 +178,7 @@ export default function Navbar() {
   return (
     <>
       <header id="main-navbar" className="fixed inset-x-0 top-0 z-[200] w-full bg-[var(--brand-violet-500)] pt-[var(--safe-area-top)]">
-        {isTienda && <TopInfoTicker messages={tickerMessages} durationSeconds={150} hidden={!showTicker} />}
+        {canShowShopTicker && <TopInfoTicker messages={tickerMessages} durationSeconds={150} hidden={!showTicker} />}
         <nav className="h-[var(--header-height-mobile-base)] border-b border-[var(--brand-gold-400)] md:h-[var(--header-height-desktop-base)]">
           <div className="mx-auto flex h-full w-full items-center justify-between gap-6 px-4 md:px-8">
 

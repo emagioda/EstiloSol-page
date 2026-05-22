@@ -1,50 +1,130 @@
-export const DELIVERY_FEE = 4000;
+export type FulfillmentSheetType = "delivery" | "pickup" | "pickup_point";
+
+export type DeliveryOptionConfig = {
+  id: "delivery";
+  type: "delivery";
+  name: string;
+  subtitle: string;
+  price: number;
+  image: string;
+  active: boolean;
+};
+
+export type PickupOptionConfig = {
+  id: "pickup";
+  type: "pickup";
+  name: string;
+  subtitle: string;
+  price: number;
+  active: boolean;
+};
+
+export type PickupPointConfig = {
+  id: string;
+  type: "pickup_point";
+  name: string;
+  subtitle: string;
+  price: number;
+  active: boolean;
+};
+
+export type FulfillmentConfig = {
+  delivery: DeliveryOptionConfig;
+  pickup: PickupOptionConfig;
+  pickupPoints: PickupPointConfig[];
+};
 
 export const DELIVERY_ZONE = {
   id: "rosario-zona-habilitada",
-  name: "Rosario zona habilitada",
-  description:
-    "Zona delimitada por Av. San Martín, Bv. Avellaneda, Av. Uriburu y San Lorenzo.",
-  boundaries: ["Av. San Martín", "Bv. Avellaneda", "Av. Uriburu", "San Lorenzo"],
+  name: "Rosario - zona de envio",
 } as const;
 
-export const PICKUP_POINTS = [
-  {
-    id: "santa-fe-mitre",
-    name: "Santa Fe y Mitre",
-    address: "Santa Fe y Mitre",
-    reference: "Coordinamos día y horario por WhatsApp",
-    active: true,
-  },
-  {
-    id: "mercado-del-patio",
-    name: "Mercado del Patio",
-    address: "Mercado del Patio",
-    reference: "Coordinamos día y horario por WhatsApp",
-    active: true,
-  },
-  {
-    id: "san-martin-segui",
-    name: "San Martín y Bv. Seguí",
-    address: "San Martín y Bv. Seguí",
-    reference: "Coordinamos día y horario por WhatsApp",
-    active: true,
-  },
-  {
-    id: "alto-rosario-junin",
-    name: "Shopping Alto Rosario",
-    address: "Entrada principal por Junín",
-    reference: "Coordinamos día y horario por WhatsApp",
-    active: true,
-  },
-] as const;
+const knownPickupPointIds: Record<string, string> = {
+  "santa fe y mitre": "santa-fe-mitre",
+  "mercado del patio": "mercado-del-patio",
+  "san martin y bv segui": "san-martin-segui",
+  "shopping alto rosario": "alto-rosario-junin",
+};
 
-export type PickupPointId = (typeof PICKUP_POINTS)[number]["id"];
+const normalizeIdSource = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 
-export function getPickupPointById(id: string) {
-  return PICKUP_POINTS.find((point) => point.id === id && point.active) ?? null;
-}
+export const buildFulfillmentId = (type: FulfillmentSheetType, name: string) => {
+  if (type === "delivery") return "delivery";
+  if (type === "pickup") return "pickup";
 
-export function getShippingFeeForDeliveryMethod(deliveryMethod: "delivery" | "pickup") {
-  return deliveryMethod === "delivery" ? DELIVERY_FEE : 0;
-}
+  const normalized = normalizeIdSource(name);
+  return (
+    knownPickupPointIds[normalized] ||
+    normalized
+      .replace(/\s+/g, "-")
+      .replace(/^-+|-+$/g, "")
+  );
+};
+
+export const fallbackFulfillmentConfig: FulfillmentConfig = {
+  delivery: {
+    id: "delivery",
+    type: "delivery",
+    name: "Envio a domicilio",
+    subtitle: "Dentro de la zona de envio",
+    price: 4000,
+    image: "",
+    active: true,
+  },
+  pickup: {
+    id: "pickup",
+    type: "pickup",
+    name: "Punto de encuentro",
+    subtitle: "Coordinamos por WhatsApp.",
+    price: 0,
+    active: true,
+  },
+  pickupPoints: [
+    {
+      id: "santa-fe-mitre",
+      type: "pickup_point",
+      name: "Santa Fe y Mitre",
+      subtitle: "Zona centro",
+      price: 0,
+      active: true,
+    },
+    {
+      id: "mercado-del-patio",
+      type: "pickup_point",
+      name: "Mercado del Patio",
+      subtitle: "Cafferata / Cordoba",
+      price: 0,
+      active: true,
+    },
+    {
+      id: "san-martin-segui",
+      type: "pickup_point",
+      name: "San Martin y Bv. Segui",
+      subtitle: "Zona sur",
+      price: 0,
+      active: true,
+    },
+    {
+      id: "alto-rosario-junin",
+      type: "pickup_point",
+      name: "Shopping Alto Rosario",
+      subtitle: "Entrada principal por Junin",
+      price: 0,
+      active: true,
+    },
+  ],
+};
+
+export const getActivePickupPointById = (config: FulfillmentConfig, id: string) =>
+  config.pickupPoints.find((point) => point.id === id && point.active) ?? null;
+
+export const getShippingFeeForDeliveryMethod = (
+  deliveryMethod: "delivery" | "pickup",
+  config: FulfillmentConfig = fallbackFulfillmentConfig
+) => (deliveryMethod === "delivery" ? config.delivery.price : config.pickup.price);

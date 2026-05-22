@@ -1,7 +1,7 @@
 "use client";
 
 import type { CartItem, PaymentMethod } from "../../view-models/useCartStore";
-import { getShippingFeeForDeliveryMethod } from "@/src/config/fulfillment";
+import { fallbackFulfillmentConfig, getShippingFeeForDeliveryMethod, type FulfillmentConfig } from "@/src/config/fulfillment";
 
 export type DeliveryMethod = "delivery" | "pickup";
 
@@ -53,14 +53,18 @@ export const getCheckoutTotals = ({
   subtotalProducts,
   paymentMethod,
   deliveryMethod,
+  fulfillmentConfig,
 }: {
   subtotalProducts: number;
   paymentMethod: PaymentMethod;
   deliveryMethod: DeliveryMethod;
+  fulfillmentConfig?: FulfillmentConfig;
 }) => {
   const discountAmount = getPaymentDiscountAmount(subtotalProducts, paymentMethod);
   const shippingFee =
-    subtotalProducts > 0 ? getShippingFeeForDeliveryMethod(deliveryMethod) : 0;
+    subtotalProducts > 0
+      ? getShippingFeeForDeliveryMethod(deliveryMethod, fulfillmentConfig ?? fallbackFulfillmentConfig)
+      : 0;
   const finalTotal = Math.max(0, subtotalProducts - discountAmount + shippingFee);
 
   return {

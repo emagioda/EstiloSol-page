@@ -334,6 +334,20 @@ const buildOrderItemsSummary = (order: Order) =>
     .map((item) => `${item.qty}x ${item.title}`)
     .join(" | ");
 
+const buildDeliveryAddressSummary = (order: Order) => {
+  const address = order.fulfillment?.deliveryAddress;
+  if (!address) return "";
+
+  return [
+    `${address.street} ${address.number}`.trim(),
+    address.floor || "",
+    address.betweenStreets ? `entre ${address.betweenStreets}` : "",
+    address.notes || "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+};
+
 async function postMutation(
   payload: Record<string, unknown>,
   tokenPurpose: SheetsTokenPurpose = "write"
@@ -407,6 +421,8 @@ export const buildSalesSheetRow = (order: Order): Record<string, unknown> => {
   const deliveryMethodLabel = deliveryMethodToLabel(order.deliveryMethod);
   const orderItemsSummary = buildOrderItemsSummary(order);
   const fulfillment = order.fulfillment;
+  const deliveryAddressSummary = buildDeliveryAddressSummary(order);
+  const pickupPointName = fulfillment?.pickupPoint?.name ?? "";
 
   return {
     nro_de_compra: order.externalReference,
@@ -432,6 +448,8 @@ export const buildSalesSheetRow = (order: Order): Record<string, unknown> => {
     delivery_method: deliveryMethodLabel,
     delivery_method_code: order.deliveryMethod || "",
     metodo_entrega: deliveryMethodLabel,
+    direccion_de_entrega: deliveryAddressSummary,
+    punto_de_encuentro: pickupPointName,
     total: order.total,
     subtotal_productos: fulfillment?.subtotalProducts ?? order.total,
     descuento: fulfillment?.discountAmount ?? 0,

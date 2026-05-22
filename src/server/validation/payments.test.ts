@@ -100,10 +100,10 @@ describe("payments validation", () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.message).toBe("Confirmá que la dirección está dentro de la zona habilitada.");
+    expect(result.message).toBe("Confirmá que la dirección está dentro de la zona de envío.");
   });
 
-  it("rejects checkout with invalid pickup point", () => {
+  it("parses pickup point id for fulfillment validation downstream", () => {
     const result = parseCheckoutBody(
       {
         items: [{ productId: "abc-1", qty: 1 }],
@@ -113,9 +113,9 @@ describe("payments validation", () => {
       { requireFulfillment: true }
     );
 
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.message).toBe("Punto de encuentro inválido.");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.fulfillment).toEqual({ pickupPointId: "inventado" });
   });
 
   it("parses a valid pickup fulfillment", () => {

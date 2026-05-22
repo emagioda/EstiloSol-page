@@ -176,7 +176,7 @@ describe("preferencePayload", () => {
         finalTotal: 6400,
         deliveryZone: {
           id: "rosario-zona-habilitada",
-          name: "Rosario zona habilitada",
+          name: "Rosario - zona de envío",
           insideZoneConfirmed: true,
         },
         deliveryAddress: {

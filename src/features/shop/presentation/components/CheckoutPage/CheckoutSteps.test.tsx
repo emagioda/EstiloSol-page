@@ -269,7 +269,7 @@ describe("CheckoutSteps Auto-Advance", () => {
     expect(screen.getByRole("button", { name: /Continuar al pago/i })).toBeDisabled();
     expect(screen.queryByLabelText(/^Calle$/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Ingresá la calle.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Confirmá que la dirección está dentro de la zona habilitada.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Confirmá que la dirección está dentro de la zona de envío.")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText(/Confirmo que mi dirección está dentro/i));
 

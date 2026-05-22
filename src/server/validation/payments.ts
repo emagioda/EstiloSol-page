@@ -1,6 +1,4 @@
 import type { OrderDeliveryMethod, OrderPaymentMethod } from "@/src/server/orders/types";
-import { getPickupPointById } from "@/src/config/fulfillment";
-
 type CheckoutItemInput = {
   productId?: unknown;
   qty?: unknown;
@@ -142,7 +140,7 @@ const parseFulfillment = (
       if (!deliveryAddress.number) return { ok: false, message: "Ingresá el número." };
       if (!deliveryAddress.betweenStreets) return { ok: false, message: "Ingresá las calles de referencia." };
       if (!deliveryAddress.insideZoneConfirmed) {
-        return { ok: false, message: "Confirmá que la dirección está dentro de la zona habilitada." };
+        return { ok: false, message: "Confirmá que la dirección está dentro de la zona de envío." };
       }
     }
 
@@ -154,10 +152,6 @@ const parseFulfillment = (
     return requireFulfillment
       ? { ok: false, message: "Elegí un punto de encuentro." }
       : { ok: true, value: {} };
-  }
-
-  if (!getPickupPointById(pickupPointId)) {
-    return { ok: false, message: "Punto de encuentro inválido." };
   }
 
   return { ok: true, value: { pickupPointId } };

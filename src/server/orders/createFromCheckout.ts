@@ -1,5 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { DELIVERY_FEE, DELIVERY_ZONE, getPickupPointById } from "@/src/config/fulfillment";
+import {
+  DELIVERY_ZONE,
+  fallbackFulfillmentConfig,
+  getActivePickupPointById,
+  getShippingFeeForDeliveryMethod,
+  type FulfillmentConfig,
+} from "@/src/config/fulfillment";
 import type { CatalogProduct } from "@/src/server/catalog/getProducts";
 import type {
   Order,
@@ -26,6 +32,7 @@ type BuildOrderInput = {
   paymentMethod: OrderPaymentMethod;
   deliveryMethod: OrderDeliveryMethod;
   fulfillment: ParsedCheckoutFulfillment;
+  fulfillmentConfig?: FulfillmentConfig;
   status?: OrderStatus;
 };
 
@@ -62,6 +69,7 @@ const buildOrderFulfillment = ({
   discountAmount,
   shippingFee,
   finalTotal,
+  fulfillmentConfig,
 }: {
   deliveryMethod: OrderDeliveryMethod;
   fulfillment: ParsedCheckoutFulfillment;
@@ -69,6 +77,7 @@ const buildOrderFulfillment = ({
   discountAmount: number;
   shippingFee: number;
   finalTotal: number;
+  fulfillmentConfig: FulfillmentConfig;
 }): OrderFulfillment | null => {
   if (deliveryMethod === "delivery") {
     const address = fulfillment.deliveryAddress;
@@ -99,7 +108,7 @@ const buildOrderFulfillment = ({
     };
   }
 
-  const pickupPoint = getPickupPointById(fulfillment.pickupPointId || "");
+  const pickupPoint = getActivePickupPointById(fulfillmentConfig, fulfillment.pickupPointId || "");
   if (!pickupPoint) return null;
 
   return {
@@ -110,8 +119,8 @@ const buildOrderFulfillment = ({
     pickupPoint: {
       id: pickupPoint.id,
       name: pickupPoint.name,
-      address: pickupPoint.address,
-      reference: pickupPoint.reference,
+      address: pickupPoint.name,
+      reference: pickupPoint.subtitle,
     },
     summary: `Punto de encuentro: ${pickupPoint.name}`,
   };
@@ -153,7 +162,8 @@ export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult
       .toFixed(2)
   );
   const discountAmount = getPaymentDiscountAmount(subtotalProducts, input.paymentMethod);
-  const shippingFee = input.deliveryMethod === "delivery" ? DELIVERY_FEE : 0;
+  const fulfillmentConfig = input.fulfillmentConfig ?? fallbackFulfillmentConfig;
+  const shippingFee = getShippingFeeForDeliveryMethod(input.deliveryMethod, fulfillmentConfig);
   const finalTotal = Number((subtotalProducts - discountAmount + shippingFee).toFixed(2));
   const fulfillment = buildOrderFulfillment({
     deliveryMethod: input.deliveryMethod,
@@ -162,6 +172,7 @@ export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult
     discountAmount,
     shippingFee,
     finalTotal,
+    fulfillmentConfig,
   });
 
   if (!fulfillment) {
