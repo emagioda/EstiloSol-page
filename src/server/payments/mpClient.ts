@@ -1,4 +1,5 @@
 import { fetchWithPolicy } from "@/src/server/http/fetchWithPolicy";
+import { logEvent } from "@/src/server/observability/log";
 import type { MpPaymentResponse, MpPreferenceResponse, MpSearchResponse } from "./shared";
 
 const DEFAULT_POLICY = {
@@ -10,23 +11,42 @@ export async function createPreferenceOnMp(
   payload: unknown,
   input: { accessToken: string; idempotencyKey: string }
 ): Promise<{ response: Response; data: MpPreferenceResponse | null }> {
-  const response = await fetchWithPolicy(
-    "https://api.mercadopago.com/checkout/preferences",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.accessToken}`,
-        "Content-Type": "application/json",
-        "X-Idempotency-Key": input.idempotencyKey,
-      },
-      body: JSON.stringify(payload),
-      cache: "no-store",
-    },
-    DEFAULT_POLICY
-  );
+  const startedAt = Date.now();
+  let status: number | undefined;
 
-  const data = (await response.json().catch(() => null)) as MpPreferenceResponse | null;
-  return { response, data };
+  try {
+    const response = await fetchWithPolicy(
+      "https://api.mercadopago.com/checkout/preferences",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.accessToken}`,
+          "Content-Type": "application/json",
+          "X-Idempotency-Key": input.idempotencyKey,
+        },
+        body: JSON.stringify(payload),
+        cache: "no-store",
+      },
+      DEFAULT_POLICY
+    );
+    status = response.status;
+
+    const data = (await response.json().catch(() => null)) as MpPreferenceResponse | null;
+    logEvent("info", "payments.mp.create_preference_timing", {
+      status,
+      ok: response.ok,
+      durationMs: Date.now() - startedAt,
+    });
+    return { response, data };
+  } catch (error) {
+    logEvent("warn", "payments.mp.create_preference_timing", {
+      status,
+      ok: false,
+      durationMs: Date.now() - startedAt,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    throw error;
+  }
 }
 
 export async function searchPaymentsByExternalReference(

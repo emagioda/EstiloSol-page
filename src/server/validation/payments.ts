@@ -11,6 +11,7 @@ type CheckoutBodyInput = {
   paymentMethod?: unknown;
   deliveryMethod?: unknown;
   fulfillment?: unknown;
+  checkoutAttemptId?: unknown;
   payer?: {
     name?: unknown;
     phone?: unknown;
@@ -49,6 +50,7 @@ export type ParsedCheckoutBody = {
   payerPhone: string;
   payerEmail: string;
   notes: string;
+  checkoutAttemptId?: string;
 };
 
 export type ValidationResult<T> =
@@ -84,6 +86,13 @@ const normalizePrice = (value: unknown) => {
   const price = Number(value);
   if (!Number.isFinite(price) || price < 0) return null;
   return Number(price.toFixed(2));
+};
+
+const normalizeCheckoutAttemptId = (value: unknown) => {
+  if (value === undefined || value === null || value === "") return undefined;
+  const attemptId = sanitizeText(value, 120);
+  if (!/^[a-zA-Z0-9_-]{8,120}$/.test(attemptId)) return null;
+  return attemptId;
 };
 
 const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -208,6 +217,7 @@ export const parseCheckoutBody = (
   const notes = sanitizeText(body.notes, 250);
   const paymentMethod = parsePaymentMethod(body.paymentMethod);
   const deliveryMethod = parseDeliveryMethod(body.deliveryMethod);
+  const checkoutAttemptId = normalizeCheckoutAttemptId(body.checkoutAttemptId);
 
   if (body.paymentMethod !== undefined && !paymentMethod) {
     return { ok: false, message: "Metodo de pago invalido" };
@@ -215,6 +225,10 @@ export const parseCheckoutBody = (
 
   if (body.deliveryMethod !== undefined && !deliveryMethod) {
     return { ok: false, message: "Metodo de entrega invalido" };
+  }
+
+  if (checkoutAttemptId === null) {
+    return { ok: false, message: "Intento de checkout invalido" };
   }
 
   const parsedFulfillment = parseFulfillment(
@@ -245,6 +259,7 @@ export const parseCheckoutBody = (
       payerPhone,
       payerEmail,
       notes,
+      ...(checkoutAttemptId ? { checkoutAttemptId } : {}),
     },
   };
 };

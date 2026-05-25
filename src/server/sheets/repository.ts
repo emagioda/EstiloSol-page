@@ -1,5 +1,6 @@
 import { env } from "@/src/config/env";
 import { fetchWithPolicy } from "@/src/server/http/fetchWithPolicy";
+import { logEvent } from "@/src/server/observability/log";
 import { getSheetsToken, type SheetsTokenPurpose } from "@/src/server/sheets/tokens";
 import type {
   Order,
@@ -352,32 +353,58 @@ async function postMutation(
   payload: Record<string, unknown>,
   tokenPurpose: SheetsTokenPurpose = "write"
 ): Promise<SheetsMutationResponse> {
-  const response = await fetchWithPolicy(
-    getSheetsEndpoint(),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+  const action = typeof payload.action === "string" ? payload.action : "unknown";
+  const sheet = typeof payload.sheet === "string" ? payload.sheet : undefined;
+  const startedAt = Date.now();
+  let status: number | undefined;
+
+  try {
+    const response = await fetchWithPolicy(
+      getSheetsEndpoint(),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify({
+          ...payload,
+          token: getSheetsToken(tokenPurpose),
+        }),
       },
-      cache: "no-store",
-      body: JSON.stringify({
-        ...payload,
-        token: getSheetsToken(tokenPurpose),
-      }),
-    },
-    DEFAULT_MUTATION_POLICY
-  );
+      DEFAULT_MUTATION_POLICY
+    );
+    status = response.status;
 
-  const data = (await response.json().catch(() => null)) as SheetsMutationResponse | null;
-  if (!response.ok) {
-    throw new Error(data?.error || `Sheets mutation failed with status ${response.status}`);
+    const data = (await response.json().catch(() => null)) as SheetsMutationResponse | null;
+    if (!response.ok) {
+      throw new Error(data?.error || `Sheets mutation failed with status ${response.status}`);
+    }
+
+    if (!data || data.ok === false) {
+      throw new Error(data?.error || "Sheets mutation failed");
+    }
+
+    logEvent("info", "sheets.mutation.timing", {
+      action,
+      sheet,
+      status,
+      ok: true,
+      durationMs: Date.now() - startedAt,
+    });
+
+    return data;
+  } catch (error) {
+    logEvent("warn", "sheets.mutation.timing", {
+      action,
+      sheet,
+      status,
+      ok: false,
+      durationMs: Date.now() - startedAt,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    throw error;
   }
-
-  if (!data || data.ok === false) {
-    throw new Error(data?.error || "Sheets mutation failed");
-  }
-
-  return data;
 }
 
 async function fetchRows(
@@ -389,22 +416,46 @@ async function fetchRows(
     sheet: sheetName,
     includeInactive: options.includeInactive ? 1 : undefined,
   }, tokenPurpose);
+  const startedAt = Date.now();
+  let status: number | undefined;
 
-  const response = await fetchWithPolicy(
-    url,
-    {
-      method: "GET",
-      cache: "no-store",
-    },
-    DEFAULT_GET_POLICY
-  );
+  try {
+    const response = await fetchWithPolicy(
+      url,
+      {
+        method: "GET",
+        cache: "no-store",
+      },
+      DEFAULT_GET_POLICY
+    );
+    status = response.status;
 
-  if (!response.ok) {
-    throw new Error(`Sheets GET failed for sheet ${sheetName}: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Sheets GET failed for sheet ${sheetName}: ${response.status}`);
+    }
+
+    const raw = await response.json().catch(() => null);
+    const rows = parseRowsPayload(raw).items;
+    logEvent("info", "sheets.read.timing", {
+      sheet: sheetName,
+      includeInactive: options.includeInactive === true,
+      status,
+      ok: true,
+      durationMs: Date.now() - startedAt,
+      rowCount: rows.length,
+    });
+    return rows;
+  } catch (error) {
+    logEvent("warn", "sheets.read.timing", {
+      sheet: sheetName,
+      includeInactive: options.includeInactive === true,
+      status,
+      ok: false,
+      durationMs: Date.now() - startedAt,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    throw error;
   }
-
-  const raw = await response.json().catch(() => null);
-  return parseRowsPayload(raw).items;
 }
 
 export const buildSalesSheetRow = (order: Order): Record<string, unknown> => {

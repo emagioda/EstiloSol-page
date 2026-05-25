@@ -3,6 +3,7 @@ import "server-only";
 import { env } from "@/src/config/env";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import { adaptSheetRowsToProducts } from "@/src/features/shop/infrastructure/data/productAdapter";
+import { logEvent } from "@/src/server/observability/log";
 import { getSheetsToken } from "@/src/server/sheets/tokens";
 
 type FetchCatalogSourceOptions = {
@@ -44,34 +45,61 @@ export async function fetchProductsFromCatalogSource(
     throw new Error("SHEETS_ENDPOINT missing");
   }
 
-  const response = await fetch(requestUrl, {
-    cache: forceFresh ? "no-store" : "force-cache",
-    next: forceFresh
-      ? undefined
-      : {
-          revalidate: CATALOG_DISPLAY_REVALIDATE_SECONDS,
-          tags: ["catalog"],
-        },
-  });
+  const startedAt = Date.now();
+  let status: number | undefined;
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch products catalog: ${response.status}`);
+  try {
+    const response = await fetch(requestUrl, {
+      cache: forceFresh ? "no-store" : "force-cache",
+      next: forceFresh
+        ? undefined
+        : {
+            revalidate: CATALOG_DISPLAY_REVALIDATE_SECONDS,
+            tags: ["catalog"],
+          },
+    });
+    status = response.status;
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch products catalog: ${response.status}`);
+    }
+
+    const payload: unknown = await response.json().catch(() => null);
+    if (payload && typeof payload === "object" && (payload as { ok?: unknown }).ok === false) {
+      const message = (payload as { error?: unknown }).error;
+      throw new Error(typeof message === "string" ? message : "Sheets endpoint error");
+    }
+
+    const rows = Array.isArray(payload)
+      ? payload
+      : payload && typeof payload === "object" && Array.isArray((payload as { items?: unknown }).items)
+        ? (payload as { items: unknown[] }).items
+        : [];
+
+    logEvent("info", "sheets.read.timing", {
+      sheet: PRODUCTS_SHEET,
+      includeInactive,
+      forceFresh,
+      status,
+      ok: true,
+      durationMs: Date.now() - startedAt,
+      rowCount: rows.length,
+    });
+
+    return adaptSheetRowsToProducts(
+      rows.filter((row): row is Record<string, unknown> => row !== null && typeof row === "object"),
+      { includeInactive },
+    );
+  } catch (error) {
+    logEvent("warn", "sheets.read.timing", {
+      sheet: PRODUCTS_SHEET,
+      includeInactive,
+      forceFresh,
+      status,
+      ok: false,
+      durationMs: Date.now() - startedAt,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    throw error;
   }
-
-  const payload: unknown = await response.json().catch(() => null);
-  if (payload && typeof payload === "object" && (payload as { ok?: unknown }).ok === false) {
-    const message = (payload as { error?: unknown }).error;
-    throw new Error(typeof message === "string" ? message : "Sheets endpoint error");
-  }
-
-  const rows = Array.isArray(payload)
-    ? payload
-    : payload && typeof payload === "object" && Array.isArray((payload as { items?: unknown }).items)
-      ? (payload as { items: unknown[] }).items
-      : [];
-
-  return adaptSheetRowsToProducts(
-    rows.filter((row): row is Record<string, unknown> => row !== null && typeof row === "object"),
-    { includeInactive },
-  );
 }

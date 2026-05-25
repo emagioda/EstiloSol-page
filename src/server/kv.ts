@@ -4,7 +4,7 @@ type KvValue = unknown;
 
 type KvClient = {
   get<T = KvValue>(key: string): Promise<T | null>;
-  set(key: string, value: KvValue, options?: { ex?: number }): Promise<"OK">;
+  set(key: string, value: KvValue, options?: { ex?: number; nx?: boolean }): Promise<"OK" | null>;
   del(key: string): Promise<number>;
   incr(key: string): Promise<number>;
   incrby(key: string, amount: number): Promise<number>;
@@ -48,7 +48,11 @@ const memoryKv: KvClient = {
     const entry = getMemoryEntry(key);
     return (entry?.value as T | undefined) ?? null;
   },
-  async set(key: string, value: KvValue, options?: { ex?: number }): Promise<"OK"> {
+  async set(key: string, value: KvValue, options?: { ex?: number; nx?: boolean }): Promise<"OK" | null> {
+    if (options?.nx && getMemoryEntry(key)) {
+      return null;
+    }
+
     const expiresAt = options?.ex ? Date.now() + options.ex * 1000 : null;
     memoryStore.set(key, { value, expiresAt });
     return "OK";
@@ -111,6 +115,11 @@ export async function getJson<T>(key: string): Promise<T | null> {
 
 export async function setJson<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
   await kv.set(key, value, { ex: ttlSeconds });
+}
+
+export async function setJsonIfNotExists<T>(key: string, value: T, ttlSeconds: number): Promise<boolean> {
+  const result = await kv.set(key, value, { ex: ttlSeconds, nx: true });
+  return result === "OK";
 }
 
 export async function del(key: string): Promise<void> {

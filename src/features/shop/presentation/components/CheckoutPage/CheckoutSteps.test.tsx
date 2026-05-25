@@ -248,6 +248,98 @@ describe("CheckoutSteps Auto-Advance", () => {
     expect(fetch).not.toHaveBeenCalledWith("/api/mp/validate-cart", expect.anything());
   });
 
+  it("starts Mercado Pago checkout through create-preference without validate-cart preflight", async () => {
+    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url) === "/api/mp/create-preference") {
+        return {
+          ok: false,
+          json: async () => ({ error: "No pudimos iniciar el pago. Intenta nuevamente." }),
+        };
+      }
+
+      if (String(url) === "/api/mp/validate-cart") {
+        throw new Error("validate-cart should not block Mercado Pago checkout");
+      }
+
+      return { ok: true, json: async () => [] };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockUseCart.mockReturnValue({
+      items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],
+      paymentMethod: "mercadopago",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts: vi.fn(),
+      clear: vi.fn(),
+      getTotal: () => 100,
+      getDiscountedTotal: () => 100,
+    });
+
+    render(<CheckoutSteps subtotal={100} discountedTotal={100} />);
+
+    await fillContactFields();
+    fillDeliveryFields();
+    fireEvent.click(screen.getByRole("button", { name: /Continuar al pago/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Finalizar pedido/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/mp/create-preference", expect.anything());
+    });
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/mp/validate-cart", expect.anything());
+
+    const createCall = fetchMock.mock.calls.find(([url]) => String(url) === "/api/mp/create-preference") as
+      | [RequestInfo | URL, RequestInit | undefined]
+      | undefined;
+    const payload = JSON.parse(String(createCall?.[1]?.body || "{}")) as { checkoutAttemptId?: string };
+    expect(payload.checkoutAttemptId).toMatch(/^ca_[a-zA-Z0-9_-]+$/);
+  });
+
+  it("shows a single combined progress message while Mercado Pago validates and prepares payment", async () => {
+    const pendingCreatePreference = new Promise<never>(() => {});
+    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+      if (String(url) === "/api/mp/create-preference") {
+        return pendingCreatePreference;
+      }
+
+      return Promise.resolve({ ok: true, json: async () => [] } as Response);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockUseCart.mockReturnValue({
+      items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],
+      paymentMethod: "mercadopago",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts: vi.fn(),
+      clear: vi.fn(),
+      getTotal: () => 100,
+      getDiscountedTotal: () => 100,
+    });
+
+    render(<CheckoutSteps subtotal={100} discountedTotal={100} />);
+
+    await fillContactFields();
+    fillDeliveryFields();
+    fireEvent.click(screen.getByRole("button", { name: /Continuar al pago/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Finalizar pedido/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/mp/create-preference", expect.anything());
+    });
+    expect(screen.getByText("Validando carrito y preparando pago seguro")).toBeInTheDocument();
+    expect(
+      screen.getByText("Revisando productos, precios, stock y creando el enlace de Mercado Pago.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Validando carrito$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Preparando pago seguro$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Validando y preparando pago/i })).toBeDisabled();
+  });
+
   it("keeps delivery checkout blocked until address details are complete", async () => {
     mockUseCart.mockReturnValue({
       items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],
@@ -314,7 +406,7 @@ describe("CheckoutSteps Auto-Advance", () => {
         return {
           ok: true,
           json: async () => ({
-            externalReference: "ORDER-123",
+            externalReference: "",
             summaryToken: "summary-token",
           }),
         };

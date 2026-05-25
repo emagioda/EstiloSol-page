@@ -28,8 +28,6 @@ import {
 
 const DRAFT_STORAGE_KEY = "es_sol_checkout_draft";
 const BANK_TRANSFER_INFO = brandConfig.paymentInfo.transfer;
-const PROGRESS_STEP_DELAY_MS = 850;
-const REDIRECT_FEEDBACK_DELAY_MS = 350;
 const ProductLightbox = dynamic(() => import("../ProductImageGalleryZoom/ProductLightbox"), { ssr: false });
 
 type CheckoutPhase = "idle" | "validating" | "creating" | "redirecting";
@@ -115,7 +113,16 @@ const isDeliveryAddressValid = (address: DeliveryAddress) =>
   address.number.trim().length > 0 &&
   address.betweenStreets.trim().length > 0 &&
   address.insideZoneConfirmed;
-const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const createCheckoutAttemptId = () => {
+  const cryptoRef = typeof window !== "undefined" ? window.crypto : undefined;
+  const randomValue =
+    cryptoRef && typeof cryptoRef.randomUUID === "function"
+      ? cryptoRef.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  return `ca_${randomValue}`.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 120);
+};
 
 const parseInvalidProducts = (items: CheckoutApiError["invalidProducts"]) =>
   Array.isArray(items) && items.length > 0
@@ -255,12 +262,35 @@ const CheckoutProgress = ({
 }) => {
   if (phase === "idle") return null;
 
-  const secondStepLabel =
-    paymentMethod === "mercadopago" ? "Preparando pago seguro" : "Generando pedido";
-  const secondStepDetail =
-    paymentMethod === "mercadopago"
-      ? "Estamos creando el enlace de Mercado Pago."
-      : "Estamos registrando tu compra en Estilo Sol.";
+  if (paymentMethod === "mercadopago") {
+    const status = phase === "redirecting" ? "done" : "active";
+
+    return (
+      <div
+        className="mt-4 overflow-hidden rounded-2xl border border-[rgba(242,199,119,0.34)] bg-[rgba(52,28,84,0.34)] p-3 text-sm text-[var(--brand-cream)] shadow-[0_16px_32px_rgba(18,8,35,0.18)]"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="flex items-center gap-3">
+          <ProgressIcon status={status} />
+          <div>
+            <p className="font-semibold">Validando carrito y preparando pago seguro</p>
+            <p className="text-xs text-[var(--brand-cream)]/68">
+              Revisando productos, precios, stock y creando el enlace de Mercado Pago.
+            </p>
+          </div>
+        </div>
+        {phase === "redirecting" ? (
+          <p className="mt-3 rounded-xl bg-emerald-300/14 px-3 py-2 text-xs font-medium text-emerald-100">
+            Todo listo. Te llevamos al siguiente paso...
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
+  const secondStepLabel = "Generando pedido";
+  const secondStepDetail = "Estamos registrando tu compra en Estilo Sol.";
   const firstStatus = phase === "validating" ? "active" : "done";
   const secondStatus =
     phase === "validating" ? "pending" : phase === "creating" ? "active" : "done";
@@ -327,6 +357,7 @@ export default function CheckoutSteps({
   const [isDraftHydrated, setIsDraftHydrated] = useState(false);
   const prevItemsCountRef = useRef(items.length);
   const checkoutPhaseTimerRef = useRef<number | null>(null);
+  const checkoutAttemptIdRef = useRef<string | null>(null);
   const isTestPublicKey = (process.env.NEXT_PUBLIC_MP_PUBLIC_KEY || "").toUpperCase().startsWith("TEST-");
 
   const fullName = useMemo(() => `${firstName} ${lastName}`.replace(/\s+/g, " ").trim(), [firstName, lastName]);
@@ -550,10 +581,16 @@ export default function CheckoutSteps({
     setCheckoutPhase("idle");
   };
 
-  const finishCheckoutProgress = async () => {
+  const finishCheckoutProgress = () => {
     clearCheckoutPhaseTimer();
     setCheckoutPhase("redirecting");
-    await wait(REDIRECT_FEEDBACK_DELAY_MS);
+  };
+
+  const getCheckoutAttemptId = () => {
+    if (!checkoutAttemptIdRef.current) {
+      checkoutAttemptIdRef.current = createCheckoutAttemptId();
+    }
+    return checkoutAttemptIdRef.current;
   };
 
   const checkoutItemsPayload = () =>
@@ -579,6 +616,23 @@ export default function CheckoutSteps({
     pickupPointId: deliveryMethod === "pickup" ? selectedPickupPoint?.id : undefined,
   });
 
+  const syncInvalidProductsFromApi = (invalidProducts?: CheckoutInvalidProduct[]) => {
+    if (!invalidProducts || invalidProducts.length === 0) return;
+
+    syncStockFromProducts(
+      invalidProducts
+        .filter((product) => typeof product.currentPrice === "number")
+        .map((product) => ({
+          id: product.productId,
+          name: product.name,
+          price: product.currentPrice ?? 0,
+          stock_status: product.stockStatus,
+          stock_qty: product.availableQty,
+        }))
+    );
+    void refreshProductsMemoryCacheFromSource();
+  };
+
   const validateCartBeforeCheckout = async () => {
     const response = await fetch("/api/mp/validate-cart", {
       method: "POST",
@@ -595,27 +649,12 @@ export default function CheckoutSteps({
     if (response.ok) return true;
 
     const invalidProducts = parseInvalidProducts(data?.invalidProducts);
-    if (invalidProducts && invalidProducts.length > 0) {
-      syncStockFromProducts(
-        invalidProducts
-          .filter((product) => typeof product.currentPrice === "number")
-          .map((product) => ({
-            id: product.productId,
-            name: product.name,
-            price: product.currentPrice ?? 0,
-            stock_status: product.stockStatus,
-            stock_qty: product.availableQty,
-          }))
-      );
-    }
+    syncInvalidProductsFromApi(invalidProducts);
 
     setError({
       message: checkoutErrorMessage(data?.error, invalidProducts),
       invalidProducts,
     });
-    if (invalidProducts && invalidProducts.length > 0) {
-      void refreshProductsMemoryCacheFromSource();
-    }
     return false;
   };
 
@@ -681,11 +720,6 @@ export default function CheckoutSteps({
     setError(null);
 
     try {
-      const [isCartValid] = await Promise.all([validateCartBeforeCheckout(), wait(PROGRESS_STEP_DELAY_MS)]);
-      if (!isCartValid) {
-        resetCheckoutProgress();
-        return;
-      }
       setCheckoutPhase("creating");
 
       const response = await fetch("/api/mp/create-preference", {
@@ -698,6 +732,7 @@ export default function CheckoutSteps({
           paymentMethod,
           deliveryMethod,
           fulfillment: checkoutFulfillmentPayload(),
+          checkoutAttemptId: getCheckoutAttemptId(),
           payer: {
             name: fullName,
             phone: normalizePhoneDigits(whatsapp),
@@ -712,7 +747,7 @@ export default function CheckoutSteps({
             initPoint?: string;
             sandboxInitPoint?: string;
             error?: string;
-            invalidProducts?: Array<{ productId?: string; name?: string }>;
+            invalidProducts?: CheckoutApiError["invalidProducts"];
           }
         | null;
 
@@ -722,6 +757,7 @@ export default function CheckoutSteps({
 
       if (!response.ok || !checkoutUrl) {
         const invalidProducts = parseInvalidProducts(data?.invalidProducts);
+        syncInvalidProductsFromApi(invalidProducts);
         resetCheckoutProgress();
         setError({
           message: invalidProducts
@@ -732,7 +768,7 @@ export default function CheckoutSteps({
         return;
       }
 
-      await finishCheckoutProgress();
+      finishCheckoutProgress();
       window.location.assign(checkoutUrl);
     } catch {
       resetCheckoutProgress();
@@ -755,7 +791,7 @@ export default function CheckoutSteps({
     setError(null);
 
     try {
-      const [isCartValid] = await Promise.all([validateCartBeforeCheckout(), wait(PROGRESS_STEP_DELAY_MS)]);
+      const isCartValid = await validateCartBeforeCheckout();
       if (!isCartValid) {
         resetCheckoutProgress();
         return;
@@ -819,7 +855,7 @@ export default function CheckoutSteps({
         successParams.set("summaryToken", summaryToken);
       }
 
-      await finishCheckoutProgress();
+      finishCheckoutProgress();
       window.location.assign(`/tienda/success?${successParams.toString()}`);
     } catch {
       resetCheckoutProgress();
@@ -1532,10 +1568,8 @@ export default function CheckoutSteps({
           <span data-loading={checkoutPhase !== "idle"}>
             <ButtonContent loading={checkoutPhase !== "idle"}>
               {paymentMethod === "mercadopago"
-                ? checkoutPhase === "validating"
-                  ? "Validando carrito..."
-                  : checkoutPhase === "creating"
-                  ? "Preparando pago..."
+                ? checkoutPhase === "validating" || checkoutPhase === "creating"
+                  ? "Validando y preparando pago..."
                   : checkoutPhase === "redirecting"
                   ? "Redirigiendo..."
                   : "Finalizar pedido"

@@ -10,7 +10,7 @@ vi.mock("@/src/server/sheets/repository", () => ({
 
 import { GET, POST } from "@/app/api/mp/verify-payment/route";
 import { createOrder, getOrder } from "@/src/server/orders/store";
-import { decrementProductsStockInSheet } from "@/src/server/sheets/repository";
+import { appendOrderToSalesSheet, decrementProductsStockInSheet } from "@/src/server/sheets/repository";
 
 describe("verify-payment confirmation flow", () => {
   beforeEach(() => {
@@ -40,7 +40,7 @@ describe("verify-payment confirmation flow", () => {
       currency: "ARS",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    });
+    }, { syncSheet: false });
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -77,6 +77,137 @@ describe("verify-payment confirmation flow", () => {
         title: "Producto",
       },
     ]);
+    expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(appendOrderToSalesSheet).mock.calls[0]?.[0]).toMatchObject({
+      externalReference: ref,
+      status: "approved",
+      paymentStatus: "confirmed",
+      mpPaymentId: "pay-1",
+    });
+
+    fetchMock.mockRestore();
+  });
+
+  it("keeps payment confirmation when stock deduction fails", async () => {
+    const ref = `es-${Date.now()}-stockfail`;
+    vi.mocked(decrementProductsStockInSheet).mockRejectedValueOnce(new Error("Sheets stock failed"));
+
+    await createOrder({
+      externalReference: ref,
+      status: "created",
+      paymentStatus: "pending",
+      shippingStatus: "in_process",
+      items: [
+        {
+          productId: "p1",
+          title: "Producto",
+          unitPrice: 1000,
+          qty: 1,
+          currency: "ARS",
+        },
+      ],
+      total: 1000,
+      currency: "ARS",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, { syncSheet: false });
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              id: "pay-stockfail",
+              status: "approved",
+              external_reference: ref,
+              transaction_amount: 1000,
+              currency_id: "ARS",
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const request = new NextRequest("http://localhost:3000/api/mp/verify-payment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref }),
+    });
+    const response = await POST(request);
+    const body = (await response.json()) as { approved?: boolean; externalReference?: string };
+    const updatedOrder = await getOrder(ref);
+
+    expect(response.status).toBe(200);
+    expect(body.approved).toBe(true);
+    expect(body.externalReference).toBe(ref);
+    expect(updatedOrder?.status).toBe("approved");
+    expect(updatedOrder?.paymentStatus).toBe("confirmed");
+    expect(updatedOrder?.stockDeductedAt).toBeUndefined();
+    expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockRestore();
+  });
+
+  it("keeps approved payment when sales sheet append fails after Mercado Pago approval", async () => {
+    const ref = `es-${Date.now()}-sheetfail`;
+    vi.mocked(appendOrderToSalesSheet).mockRejectedValueOnce(new Error("Sheets append failed"));
+
+    await createOrder({
+      externalReference: ref,
+      status: "created",
+      paymentStatus: "pending",
+      shippingStatus: "in_process",
+      items: [
+        {
+          productId: "p1",
+          title: "Producto",
+          unitPrice: 1000,
+          qty: 1,
+          currency: "ARS",
+        },
+      ],
+      total: 1000,
+      currency: "ARS",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      customer: { name: "Ana Gomez", phone: "+5491112345678", email: "ana@example.com" },
+    }, { syncSheet: false });
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              id: "pay-sheetfail",
+              status: "approved",
+              external_reference: ref,
+              transaction_amount: 1000,
+              currency_id: "ARS",
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const request = new NextRequest("http://localhost:3000/api/mp/verify-payment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref }),
+    });
+    const response = await POST(request);
+    const body = (await response.json()) as { approved?: boolean; externalReference?: string };
+    const updatedOrder = await getOrder(ref);
+
+    expect(response.status).toBe(200);
+    expect(body.approved).toBe(true);
+    expect(body.externalReference).toBe(ref);
+    expect(updatedOrder?.status).toBe("approved");
+    expect(updatedOrder?.paymentStatus).toBe("confirmed");
+    expect(updatedOrder?.salesSheetSyncedAt).toBeUndefined();
+    expect(updatedOrder?.salesSheetSyncFailedAt).toEqual(expect.any(Number));
+    expect(updatedOrder?.customer?.email).toBe("ana@example.com");
 
     fetchMock.mockRestore();
   });
@@ -136,7 +267,7 @@ describe("verify-payment confirmation flow", () => {
       currency: "ARS",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    });
+    }, { syncSheet: false });
 
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -191,7 +322,7 @@ describe("verify-payment confirmation flow", () => {
       currency: "ARS",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    });
+    }, { syncSheet: false });
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ results: [] }), {
@@ -299,7 +430,7 @@ describe("verify-payment confirmation flow", () => {
       currency: "ARS",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    });
+    }, { syncSheet: false });
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

@@ -65,6 +65,9 @@ export type Order = {
   mpStatus?: string;
   approvedAt?: number;
   stockDeductedAt?: number;
+  salesSheetSyncedAt?: number;
+  salesSheetDeferredUntilApprovedAt?: number;
+  salesSheetSyncFailedAt?: number;
   customer?: { name?: string; phone?: string; email?: string };
   notes?: string;
   fulfillment?: OrderFulfillment;

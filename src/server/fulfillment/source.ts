@@ -10,6 +10,7 @@ import {
   type PickupOptionConfig,
   type PickupPointConfig,
 } from "@/src/config/fulfillment";
+import { logEvent } from "@/src/server/observability/log";
 import { getSheetsToken } from "@/src/server/sheets/tokens";
 
 const FULFILLMENT_SHEET = "envios";
@@ -145,25 +146,49 @@ export async function fetchFulfillmentConfigFromSource(): Promise<FulfillmentCon
   const requestUrl = buildSheetsUrl();
   if (!requestUrl) return fallbackFulfillmentConfig;
 
-  const response = await fetch(requestUrl, {
-    cache: "force-cache",
-    next: {
-      revalidate: FULFILLMENT_REVALIDATE_SECONDS,
-      tags: ["fulfillment"],
-    },
-  });
+  const startedAt = Date.now();
+  let status: number | undefined;
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch fulfillment config: ${response.status}`);
+  try {
+    const response = await fetch(requestUrl, {
+      cache: "force-cache",
+      next: {
+        revalidate: FULFILLMENT_REVALIDATE_SECONDS,
+        tags: ["fulfillment"],
+      },
+    });
+    status = response.status;
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch fulfillment config: ${response.status}`);
+    }
+
+    const payload: unknown = await response.json().catch(() => null);
+    if (payload && typeof payload === "object" && (payload as { ok?: unknown }).ok === false) {
+      const message = (payload as { error?: unknown }).error;
+      throw new Error(typeof message === "string" ? message : "Sheets fulfillment endpoint error");
+    }
+
+    const rows = parseRowsPayload(payload);
+    logEvent("info", "sheets.read.timing", {
+      sheet: FULFILLMENT_SHEET,
+      status,
+      ok: true,
+      durationMs: Date.now() - startedAt,
+      rowCount: rows.length,
+    });
+
+    return adaptRowsToFulfillmentConfig(rows);
+  } catch (error) {
+    logEvent("warn", "sheets.read.timing", {
+      sheet: FULFILLMENT_SHEET,
+      status,
+      ok: false,
+      durationMs: Date.now() - startedAt,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    throw error;
   }
-
-  const payload: unknown = await response.json().catch(() => null);
-  if (payload && typeof payload === "object" && (payload as { ok?: unknown }).ok === false) {
-    const message = (payload as { error?: unknown }).error;
-    throw new Error(typeof message === "string" ? message : "Sheets fulfillment endpoint error");
-  }
-
-  return adaptRowsToFulfillmentConfig(parseRowsPayload(payload));
 }
 
 export async function getFulfillmentConfig(): Promise<FulfillmentConfig> {
