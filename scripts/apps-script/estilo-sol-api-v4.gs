@@ -204,7 +204,7 @@ function parseCsv_(value) {
 }
 
 function normalizeProduct(p) {
-  const images = parseCsv_(p.images || p.images_csv || p.imagenes);
+  const images = parseCsv_(p.images || p.images_csv || p.image_links || p.image || p.imagenes || p.imagenes_csv || p.imagen);
   const specifications = {};
 
   if (p.specifications && typeof p.specifications === "object") {

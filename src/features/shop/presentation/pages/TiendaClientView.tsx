@@ -322,16 +322,36 @@ export default function TiendaClientView({
 
     hasCheckedFirstVisitRef.current = true;
 
-    if (!hasSessionCatalogCache()) {
+    const hasFreshSessionCatalog = hasSessionCatalogCache();
+    if (!hasFreshSessionCatalog) {
       if (hasInitialCatalog) return;
-      void loadProducts();
+      const hasPreviewCatalog = products.length > 0;
+      void loadProducts(hasPreviewCatalog, {
+        revalidate: !hasPreviewCatalog,
+        silent: hasPreviewCatalog,
+      });
       return;
     }
 
     if (status === "idle") {
-      void loadProducts();
+      void loadProducts(false, { revalidate: true });
+      return;
     }
-  }, [hasInitialCatalog, loadProducts, pathname, router, searchParams, shouldRefreshCatalog, status]);
+
+    void loadProducts(false, {
+      revalidate: true,
+      silent: true,
+    });
+  }, [
+    hasInitialCatalog,
+    loadProducts,
+    pathname,
+    products.length,
+    router,
+    searchParams,
+    shouldRefreshCatalog,
+    status,
+  ]);
 
   useEffect(() => {
     if (allProducts.length === 0) return;

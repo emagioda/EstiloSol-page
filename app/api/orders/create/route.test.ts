@@ -68,7 +68,7 @@ describe("orders create manual payment flow", () => {
     expect(response.status).toBe(200);
     expect(body.externalReference?.startsWith("es-")).toBe(true);
     expect(body.summaryToken).toMatch(/^[a-f0-9]{32}$/);
-    expect(body.total).toBe(1800);
+    expect(body.total).toBe(4800);
     expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
 
@@ -124,7 +124,7 @@ describe("orders create manual payment flow", () => {
     const body = (await response.json()) as { total?: number };
 
     expect(response.status).toBe(200);
-    expect(body.total).toBe(22000);
+    expect(body.total).toBe(21500);
     expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
 
     fetchMock.mockRestore();

@@ -172,7 +172,9 @@ export function adaptSheetRowToProduct(rawRow: RawProductRow): Product | null {
   const stockQty = toNumberOrNull(pick(row, ["stock_qty", "stock", "cantidad_stock"]));
   const stockStatus = toStockStatus(pick(row, ["stock_status", "estado_stock"]), stockQty);
   const slug = toStringOrNull(pick(row, ["slug"])) ?? id;
-  const images = toImagesArray(pick(row, ["images", "images_csv", "imagenes", "imagenes_csv"]));
+  const images = toImagesArray(
+    pick(row, ["images", "images_csv", "image_links", "image", "imagenes", "imagenes_csv", "imagen"]),
+  );
   const departament = normalizeKey(pick(row, ["departament", "department", "rubro"])).toUpperCase();
 
   return {

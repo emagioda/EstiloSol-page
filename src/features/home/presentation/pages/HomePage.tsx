@@ -6,7 +6,7 @@ export default function HomePage() {
     <div className="flex flex-1 flex-col">
       <HomeCatalogPrefetch />
       <div className="sr-only">
-        <h1>Estilo Sol | Estilo y Cuidado</h1>
+        <h1>Estilo Sol | Brillá vos</h1>
         <p>
           Productos Profesionales y Diseños Únicos para Peluquería y
           Bijouterie en un solo lugar.

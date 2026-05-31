@@ -30,7 +30,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.APP_BASE_URL?.trim() || "https://estilosol.ar"),
   title: {
-    default: "Estilo Sol | Estilo y Cuidado",
+    default: "Estilo Sol | Brillá vos",
     template: "%s | Estilo Sol",
   },
   description:
@@ -39,7 +39,7 @@ export const metadata: Metadata = {
     canonical: "/",
   },
   openGraph: {
-    title: "Estilo Sol | Estilo y Cuidado",
+    title: "Estilo Sol | Brillá vos",
     description: "Productos profesionales de peluqueria y bijouterie seleccionados en Rosario.",
     url: "/",
     siteName: "Estilo Sol",
@@ -49,7 +49,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Estilo Sol | Estilo y Cuidado",
+    title: "Estilo Sol | Brillá vos",
     description: "Productos profesionales de peluqueria y bijouterie seleccionados en Rosario.",
     images: ["/home/tienda-placeholder.webp"],
   },

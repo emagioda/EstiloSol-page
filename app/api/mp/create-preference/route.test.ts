@@ -262,7 +262,11 @@ describe("create-preference local development flow", () => {
     expect(mpBodies[0].metadata).toMatchObject({
       store: "estilo-sol",
       delivery_method: "pickup",
-      shipping_fee: 0,
+      shipping_fee: 3000,
+    });
+    expect(mpBodies[0].shipments).toEqual({
+      cost: 3000,
+      mode: "not_specified",
     });
 
     const backUrls = mpBodies[0].back_urls as { success?: string } | undefined;
@@ -349,12 +353,12 @@ describe("create-preference local development flow", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ id: "p-1", unit_price: 1000 });
     expect(mpBodies[0].shipments).toEqual({
-      cost: 4000,
+      cost: 3500,
       mode: "not_specified",
     });
     expect(mpBodies[0].metadata).toMatchObject({
       delivery_method: "delivery",
-      shipping_fee: 4000,
+      shipping_fee: 3500,
     });
 
     fetchMock.mockRestore();

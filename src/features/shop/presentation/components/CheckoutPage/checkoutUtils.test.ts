@@ -27,8 +27,24 @@ describe("getCheckoutTotals", () => {
     ).toMatchObject({
       subtotalProducts: 9000,
       discountAmount: 0,
+      shippingFee: 3500,
+      finalTotal: 12500,
+    });
+  });
+
+  it("uses the selected pickup point shipping fee", () => {
+    expect(
+      getCheckoutTotals({
+        subtotalProducts: 9000,
+        paymentMethod: "transfer",
+        deliveryMethod: "pickup",
+        pickupPointId: "alto-rosario-junin",
+      })
+    ).toMatchObject({
+      subtotalProducts: 9000,
+      discountAmount: 900,
       shippingFee: 4000,
-      finalTotal: 13000,
+      finalTotal: 12100,
     });
   });
 });

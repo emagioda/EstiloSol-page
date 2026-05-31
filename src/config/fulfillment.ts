@@ -73,7 +73,7 @@ export const fallbackFulfillmentConfig: FulfillmentConfig = {
     type: "delivery",
     name: "Envio a domicilio",
     subtitle: "Dentro de la zona de envio",
-    price: 4000,
+    price: 3500,
     image: "",
     active: true,
   },
@@ -91,7 +91,7 @@ export const fallbackFulfillmentConfig: FulfillmentConfig = {
       type: "pickup_point",
       name: "Santa Fe y Mitre",
       subtitle: "Zona centro",
-      price: 0,
+      price: 3000,
       active: true,
     },
     {
@@ -99,7 +99,7 @@ export const fallbackFulfillmentConfig: FulfillmentConfig = {
       type: "pickup_point",
       name: "Mercado del Patio",
       subtitle: "Cafferata / Cordoba",
-      price: 0,
+      price: 3000,
       active: true,
     },
     {
@@ -107,7 +107,7 @@ export const fallbackFulfillmentConfig: FulfillmentConfig = {
       type: "pickup_point",
       name: "San Martin y Bv. Segui",
       subtitle: "Zona sur",
-      price: 0,
+      price: 3000,
       active: true,
     },
     {
@@ -115,7 +115,7 @@ export const fallbackFulfillmentConfig: FulfillmentConfig = {
       type: "pickup_point",
       name: "Shopping Alto Rosario",
       subtitle: "Entrada principal por Junin",
-      price: 0,
+      price: 4000,
       active: true,
     },
   ],
@@ -126,5 +126,9 @@ export const getActivePickupPointById = (config: FulfillmentConfig, id: string) 
 
 export const getShippingFeeForDeliveryMethod = (
   deliveryMethod: "delivery" | "pickup",
-  config: FulfillmentConfig = fallbackFulfillmentConfig
-) => (deliveryMethod === "delivery" ? config.delivery.price : config.pickup.price);
+  config: FulfillmentConfig = fallbackFulfillmentConfig,
+  pickupPointId?: string
+) => {
+  if (deliveryMethod === "delivery") return config.delivery.price;
+  return getActivePickupPointById(config, pickupPointId || "")?.price ?? config.pickup.price;
+};

@@ -54,16 +54,22 @@ export const getCheckoutTotals = ({
   paymentMethod,
   deliveryMethod,
   fulfillmentConfig,
+  pickupPointId,
 }: {
   subtotalProducts: number;
   paymentMethod: PaymentMethod;
   deliveryMethod: DeliveryMethod;
   fulfillmentConfig?: FulfillmentConfig;
+  pickupPointId?: string;
 }) => {
   const discountAmount = getPaymentDiscountAmount(subtotalProducts, paymentMethod);
   const shippingFee =
     subtotalProducts > 0
-      ? getShippingFeeForDeliveryMethod(deliveryMethod, fulfillmentConfig ?? fallbackFulfillmentConfig)
+      ? getShippingFeeForDeliveryMethod(
+          deliveryMethod,
+          fulfillmentConfig ?? fallbackFulfillmentConfig,
+          pickupPointId
+        )
       : 0;
   const finalTotal = Math.max(0, subtotalProducts - discountAmount + shippingFee);
 
@@ -102,6 +108,11 @@ export const paymentMethodLabel = (paymentMethod: PaymentMethod) => {
 
 export const deliveryMethodLabel = (deliveryMethod: DeliveryMethod) =>
   deliveryMethod === "delivery" ? "Envío a domicilio" : "Punto de encuentro coordinado";
+
+export const fulfillmentFeeLabel = (deliveryMethod: DeliveryMethod, shippingFee: number) => {
+  if (shippingFee > 0) return formatMoney(shippingFee);
+  return deliveryMethod === "pickup" ? "A coordinar" : "Gratis";
+};
 
 export const buildWhatsappMessage = ({
   items,

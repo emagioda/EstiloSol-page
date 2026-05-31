@@ -37,6 +37,18 @@ export type CatalogFacets = Partial<
 const SESSION_CATALOG_CACHE_KEY = "es:shop:catalog:session:v1";
 const SESSION_FILTERS_KEY = "es:shop:filters:session:v1";
 const CATALOG_CACHE_UPDATED_EVENT = "es:catalog-cache-updated";
+const SESSION_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+
+type SessionCatalogCacheSnapshot = {
+  products: Product[];
+  complete: boolean;
+};
+
+type SessionCatalogCacheRecord = {
+  products?: unknown;
+  cachedAt?: unknown;
+  complete?: unknown;
+};
 
 // Simple in-memory cache that survives component unmounts while the
 // page is still open. It does not persist across full reloads, but it
@@ -152,28 +164,47 @@ const emitCatalogCacheUpdated = (products: Product[], complete = true) => {
   );
 };
 
-const readSessionCachedProducts = (): Product[] | null => {
+const readSessionCatalogCache = ({
+  allowStale = false,
+}: {
+  allowStale?: boolean;
+} = {}): SessionCatalogCacheSnapshot | null => {
   if (typeof window === "undefined") return null;
 
   try {
     const raw = window.sessionStorage.getItem(SESSION_CATALOG_CACHE_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return null;
-    return parsed as Product[];
+    const now = Date.now();
+
+    if (Array.isArray(parsed)) {
+      const snapshot = {
+        products: parsed as Product[],
+        complete: false,
+      };
+      return allowStale ? snapshot : null;
+    }
+
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const record = parsed as SessionCatalogCacheRecord;
+    if (!Array.isArray(record.products)) return null;
+
+    const cachedAt = typeof record.cachedAt === "number" ? record.cachedAt : 0;
+    const stale = cachedAt <= 0 || now - cachedAt > SESSION_CATALOG_CACHE_TTL_MS;
+    if (stale && !allowStale) return null;
+
+    return {
+      products: record.products as Product[],
+      complete: record.complete !== false && !stale,
+    };
   } catch {
     return null;
   }
 };
 
 export const hasSessionCatalogCache = () => {
-  if (typeof window === "undefined") return false;
-
-  try {
-    return Boolean(window.sessionStorage.getItem(SESSION_CATALOG_CACHE_KEY));
-  } catch {
-    return false;
-  }
+  return Boolean(readSessionCatalogCache());
 };
 
 export const clearProductsCatalogSessionCache = () => {
@@ -194,7 +225,14 @@ const writeSessionCachedProducts = (products: Product[]) => {
   if (typeof window === "undefined") return;
 
   try {
-    window.sessionStorage.setItem(SESSION_CATALOG_CACHE_KEY, JSON.stringify(products));
+    window.sessionStorage.setItem(
+      SESSION_CATALOG_CACHE_KEY,
+      JSON.stringify({
+        cachedAt: Date.now(),
+        complete: true,
+        products,
+      }),
+    );
   } catch {
     return;
   }
@@ -203,13 +241,14 @@ const writeSessionCachedProducts = (products: Product[]) => {
 const productSignature = (products: Product[]): string =>
   [...products]
     .map((product) => {
-      const imagesCount = Array.isArray(product.images) ? product.images.length : 0;
+      const imagesSignature = Array.isArray(product.images) ? product.images.join(",") : "";
       const includesCount = Array.isArray(product.includes) ? product.includes.length : 0;
       const tagsCount = Array.isArray(product.tags) ? product.tags.length : 0;
       const specsCount = Object.keys(normalizeSpecifications(product)).length;
       return [
         product.id,
         product.slug ?? "",
+        product.name ?? "",
         String(product.price),
         String(product.old_price ?? ""),
         product.departament ?? "",
@@ -221,7 +260,7 @@ const productSignature = (products: Product[]): string =>
         product.is_sale ? "1" : "0",
         product.stock_status ?? "",
         String(product.stock_qty ?? ""),
-        String(imagesCount),
+        imagesSignature,
         String(includesCount),
         String(tagsCount),
         String(specsCount),
@@ -320,13 +359,13 @@ export const refreshProductsMemoryCacheFromSource = async (): Promise<boolean> =
 };
 
 export const prefetchProductsCatalogSession = async (): Promise<boolean> => {
-  if (cachedProductsComplete && cachedProducts && cachedProducts.length > 0) {
+  if (cachedProducts && cachedProducts.length > 0) {
     return true;
   }
 
-  const sessionCachedProducts = readSessionCachedProducts();
-  if (sessionCachedProducts && sessionCachedProducts.length > 0) {
-    updateMemoryCatalogCache(sessionCachedProducts, true);
+  const sessionCatalog = readSessionCatalogCache();
+  if (sessionCatalog && sessionCatalog.products.length > 0) {
+    updateMemoryCatalogCache(sessionCatalog.products, sessionCatalog.complete);
     return true;
   }
 
@@ -338,7 +377,7 @@ export const prefetchProductsCatalogSession = async (): Promise<boolean> => {
     cacheBust: false,
   })
     .then((data) => {
-      updateCatalogCache(data);
+      updateMemoryCatalogCache(data, false);
       return true;
     })
     .catch(() => false)
@@ -458,16 +497,18 @@ export const useProductsStore = ({
   }, []);
 
   useEffect(() => {
-    const sessionCachedProducts = readSessionCachedProducts();
+    const sessionCatalog = readSessionCatalogCache({ allowStale: true });
+    const sessionCachedProducts = sessionCatalog?.products;
     if (!sessionCachedProducts || sessionCachedProducts.length === 0) return;
 
     const sessionSignature = productSignature(sessionCachedProducts);
     if (sessionSignature === cachedProductsSignature) return;
 
     const hydrateTimer = window.setTimeout(() => {
-      setMemoryCatalogCache(sessionCachedProducts);
+      const complete = Boolean(sessionCatalog?.complete);
+      setMemoryCatalogCache(sessionCachedProducts, { complete });
       setProducts([...sessionCachedProducts]);
-      setCatalogComplete(true);
+      setCatalogComplete(complete);
       setStatus("success");
       setErrorMessage(null);
     }, 0);
@@ -478,9 +519,15 @@ export const useProductsStore = ({
   const loadProducts = useCallback(
     async (
       forceRefresh = false,
-      options: { silent?: boolean } = {},
+      options: { silent?: boolean; revalidate?: boolean } = {},
     ): Promise<boolean> => {
-      if (!forceRefresh && cachedProductsComplete && cachedProducts && cachedProducts.length > 0) {
+      if (
+        !forceRefresh &&
+        !options.revalidate &&
+        cachedProductsComplete &&
+        cachedProducts &&
+        cachedProducts.length > 0
+      ) {
         setProducts(cachedProducts);
         setCatalogComplete(true);
         setStatus("success");

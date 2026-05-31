@@ -124,7 +124,7 @@ export default function NavDrawer({ open, onClose }: NavDrawerProps) {
               Estilo Sol
             </span>
             <span className="mt-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-[#8b6aa0]">
-              Estilo y cuidado
+              Brillá vos
             </span>
           </div>
           <button

@@ -26,7 +26,7 @@ describe("/api/catalog", () => {
       ),
     );
 
-    const response = await GET();
+    const response = await GET(new Request("https://estilosol.test/api/catalog"));
     const body = (await response.json()) as Array<Record<string, unknown>>;
 
     expect(response.status).toBe(200);
@@ -51,13 +51,31 @@ describe("/api/catalog", () => {
       }),
     );
 
-    const response = await GET();
+    const response = await GET(new Request("https://estilosol.test/api/catalog?force=1"));
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("Cache-Control")).toBe("public, s-maxage=180, stale-while-revalidate=600");
+    expect(response.headers.get("Cache-Control")).toBe("public, s-maxage=180, stale-while-revalidate=120");
 
     const requestedUrl = String(fetchMock.mock.calls[0][0]);
     expect(requestedUrl).not.toContain("force=1");
     expect(requestedUrl).toContain("sheet=products");
+  });
+
+  it("uses a fresh source read for app cache-bust requests", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const response = await GET(new Request("https://estilosol.test/api/catalog?_ts=123"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
+
+    const requestedUrl = String(fetchMock.mock.calls[0][0]);
+    expect(requestedUrl).toContain("force=1");
+    expect(requestedUrl).toContain("_ts=");
   });
 });

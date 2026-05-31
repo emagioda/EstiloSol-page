@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
 
-export default function PreguntasFrecuentesPage() {
+export default function QuienSoyPage() {
   notFound();
 }

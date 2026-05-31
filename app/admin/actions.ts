@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath, revalidateTag } from "next/cache";
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { env } from "@/src/config/env";
@@ -544,9 +544,8 @@ export async function updateCatalogProductAction(formData: FormData) {
     stockQty,
   });
 
-  revalidateTag("catalog", "max");
+  await invalidateProductsCatalogCache();
   revalidatePath("/admin");
   revalidatePath("/admin/productos");
-  revalidatePath("/tienda");
   redirect(redirectTo);
 }

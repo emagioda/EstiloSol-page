@@ -4,7 +4,7 @@
 import { useState } from "react";
 import type { CartItem } from "../../view-models/useCartStore";
 import type { CheckoutInvalidProduct } from "./CheckoutSteps";
-import { deliveryMethodLabel, formatMoney, type DeliveryMethod } from "./checkoutUtils";
+import { deliveryMethodLabel, formatMoney, fulfillmentFeeLabel, type DeliveryMethod } from "./checkoutUtils";
 
 type OrderSummaryMobileProps = {
   items: CartItem[];
@@ -152,7 +152,7 @@ export default function OrderSummaryMobile({
                           : "text-xs font-semibold uppercase tracking-[0.08em] text-[var(--brand-violet-500)]/62"
                       }
                     >
-                      {shippingFee > 0 ? formatMoney(shippingFee) : "Gratis"}
+                      {fulfillmentFeeLabel(deliveryMethod, shippingFee)}
                     </span>
                   </div>
                 ) : null}

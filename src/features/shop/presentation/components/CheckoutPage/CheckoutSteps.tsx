@@ -67,6 +67,7 @@ type CheckoutStepsProps = {
   discountedTotal: number;
   fulfillmentConfig?: FulfillmentConfig;
   onDeliveryMethodChange?: (deliveryMethod: DeliveryMethod) => void;
+  onPickupPointChange?: (pickupPointId: string) => void;
   onInvalidProductsChange?: (products: CheckoutInvalidProduct[]) => void;
 };
 
@@ -92,6 +93,25 @@ const selectedPickupOptionClassName =
 
 const getInputClassName = (hasError: boolean) =>
   `${inputBaseClassName} ${hasError ? "border-rose-200/70 bg-rose-50/95 ring-1 ring-rose-200/45" : ""}`;
+
+const pickupPointPriceLabel = (price: number) => (price > 0 ? formatMoney(price) : "A coordinar");
+
+const pickupMethodPriceLabel = (
+  activePickupPoints: FulfillmentConfig["pickupPoints"],
+  selectedPickupPoint: FulfillmentConfig["pickupPoints"][number] | null
+) => {
+  if (selectedPickupPoint) return pickupPointPriceLabel(selectedPickupPoint.price);
+
+  const pricedPoints = activePickupPoints
+    .map((point) => point.price)
+    .filter((price) => price > 0);
+
+  if (pricedPoints.length === 0) return "Según punto";
+
+  const lowestPrice = Math.min(...pricedPoints);
+  const highestPrice = Math.max(...pricedPoints);
+  return lowestPrice === highestPrice ? formatMoney(lowestPrice) : `Desde ${formatMoney(lowestPrice)}`;
+};
 
 const isPaymentMethod = (value: unknown): value is PaymentMethod =>
   value === "cash" || value === "transfer" || value === "mercadopago";
@@ -330,6 +350,7 @@ const CheckoutProgress = ({
 export default function CheckoutSteps({
   fulfillmentConfig = fallbackFulfillmentConfig,
   onDeliveryMethodChange,
+  onPickupPointChange,
   onInvalidProductsChange,
 }: CheckoutStepsProps) {
   const { items, paymentMethod, setPaymentMethod, removeItem, syncStockFromProducts } = useCart();
@@ -386,6 +407,10 @@ export default function CheckoutSteps({
   const selectedPickupPoint = useMemo(
     () => getActivePickupPointById(fulfillmentConfig, pickupPointId),
     [fulfillmentConfig, pickupPointId]
+  );
+  const pickupMethodPrice = useMemo(
+    () => pickupMethodPriceLabel(activePickupPoints, selectedPickupPoint),
+    [activePickupPoints, selectedPickupPoint]
   );
   const isDiscountMethod = isDiscountPaymentMethod(paymentMethod);
   const priceChangedProducts = useMemo(
@@ -486,6 +511,10 @@ export default function CheckoutSteps({
   useEffect(() => {
     onDeliveryMethodChange?.(deliveryMethod);
   }, [deliveryMethod, onDeliveryMethodChange]);
+
+  useEffect(() => {
+    onPickupPointChange?.(deliveryMethod === "pickup" ? selectedPickupPoint?.id || "" : "");
+  }, [deliveryMethod, onPickupPointChange, selectedPickupPoint?.id]);
 
   // Detect new purchase session: reset Step 1 when cart transitions from empty to filled
   useEffect(() => {
@@ -1102,7 +1131,7 @@ export default function CheckoutSteps({
                     </span>
                   </span>
                   <span className="pointer-events-none absolute bottom-0 left-1/2 inline-flex -translate-x-1/2 translate-y-[60%] rounded-full border border-[rgba(248,227,176,0.38)] bg-[rgba(216,188,229,0.94)] px-5 py-1.5 text-[13px] font-semibold leading-none text-[var(--brand-gold-300)] shadow-[0_8px_16px_rgba(37,17,58,0.18)]">
-                    Gratis
+                    {pickupMethodPrice}
                   </span>
                 </label>
               </div>
@@ -1288,7 +1317,12 @@ export default function CheckoutSteps({
                             onChange={() => setPickupPointId(point.id)}
                           />
                           <PickupSelectedMark selected={checked} />
-                          <span className="block pr-6 font-semibold leading-snug">{point.name}</span>
+                          <span className="flex items-start justify-between gap-3 pr-6">
+                            <span className="min-w-0 font-semibold leading-snug">{point.name}</span>
+                            <span className="shrink-0 rounded-full border border-[rgba(248,227,176,0.32)] bg-[rgba(248,227,176,0.14)] px-2.5 py-1 text-[11px] font-semibold leading-none text-[var(--brand-gold-300)]">
+                              {pickupPointPriceLabel(point.price)}
+                            </span>
+                          </span>
                           <span className="mt-1 block pr-6 text-xs leading-relaxed text-[var(--brand-cream)]/66">
                             {point.subtitle}
                           </span>
@@ -1297,7 +1331,7 @@ export default function CheckoutSteps({
                     })}
                   </div>
                   <p className="text-sm leading-relaxed text-[var(--brand-cream)]/76">
-                    Coordinamos día y horario por WhatsApp después de confirmar el pago.
+                    El costo se suma al total según el punto elegido. Coordinamos día y horario por WhatsApp después de confirmar el pago.
                   </p>
                   {pickupPointError ? (
                     <p className={fieldErrorClassName}>Seleccioná un punto de encuentro para continuar.</p>
@@ -1323,7 +1357,7 @@ export default function CheckoutSteps({
               type="button"
               onClick={handleContinueToPayment}
               disabled={!isContactFormValid || !isDeliveryDetailsValid}
-              className="w-full rounded-2xl border border-[rgba(248,227,176,0.38)] bg-[linear-gradient(135deg,var(--brand-gold-300),#e8c984)] px-4 py-3 text-sm font-semibold text-[var(--brand-violet-950)] shadow-[0_14px_26px_rgba(37,17,58,0.2)] transition hover:brightness-105 hover:shadow-[0_18px_32px_rgba(37,17,58,0.24)] disabled:cursor-not-allowed disabled:border-[rgba(248,227,176,0.2)] disabled:bg-[linear-gradient(135deg,rgba(248,227,176,0.62),rgba(232,201,132,0.48))] disabled:text-[rgba(45,25,68,0.62)] disabled:shadow-none disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(248,227,176,0.68)]"
+              className="w-full rounded-2xl border border-[rgba(248,227,176,0.38)] bg-[linear-gradient(135deg,var(--brand-gold-300),#e8c984)] px-4 py-3 text-sm font-semibold text-black shadow-[0_14px_26px_rgba(37,17,58,0.2)] transition hover:brightness-105 hover:shadow-[0_18px_32px_rgba(37,17,58,0.24)] disabled:cursor-not-allowed disabled:border-[rgba(248,227,176,0.2)] disabled:bg-[linear-gradient(135deg,rgba(248,227,176,0.62),rgba(232,201,132,0.48))] disabled:text-black/55 disabled:shadow-none disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(248,227,176,0.68)]"
             >
               Continuar al pago
             </button>

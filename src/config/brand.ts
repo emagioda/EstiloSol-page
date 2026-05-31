@@ -139,7 +139,7 @@ export const brandConfig = {
     } as BrandBankTransferInfo,
   },
   heroLeft: {
-    title: "Estilo y Cuidado Profesional",
+    title: "Brillá vos Profesional",
     subtitle: "Reservá tu turno en minutos y recibí atención experta para potenciar tu look.",
     image: {
       src: "/home/turnos-placeholder.webp",

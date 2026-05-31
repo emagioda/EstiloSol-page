@@ -220,7 +220,7 @@ export default function Navbar() {
                       {brandName}
                     </span>
                     <span className="hidden text-[10px] uppercase tracking-[0.2em] text-[var(--brand-cream)] md:block">
-                      Estilo y Cuidado
+                      Brillá vos
                     </span>
                   </div>
                 )}

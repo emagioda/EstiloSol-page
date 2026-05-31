@@ -163,7 +163,11 @@ export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult
   );
   const discountAmount = getPaymentDiscountAmount(subtotalProducts, input.paymentMethod);
   const fulfillmentConfig = input.fulfillmentConfig ?? fallbackFulfillmentConfig;
-  const shippingFee = getShippingFeeForDeliveryMethod(input.deliveryMethod, fulfillmentConfig);
+  const shippingFee = getShippingFeeForDeliveryMethod(
+    input.deliveryMethod,
+    fulfillmentConfig,
+    input.fulfillment.pickupPointId
+  );
   const finalTotal = Number((subtotalProducts - discountAmount + shippingFee).toFixed(2));
   const fulfillment = buildOrderFulfillment({
     deliveryMethod: input.deliveryMethod,

@@ -1,8 +1,11 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import {
+  clearProductsCatalogSessionCache,
   clearShopFiltersSessionState,
+  hasSessionCatalogCache,
+  prefetchProductsCatalogSession,
   useProductsStore,
 } from "@/src/features/shop/presentation/view-models/useProductsStore";
 
@@ -33,7 +36,9 @@ const products: Product[] = [
 
 describe("shop filter session state", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     window.sessionStorage.clear();
+    clearProductsCatalogSessionCache();
   });
 
   it("keeps filters across store remounts when persistence is enabled", async () => {
@@ -151,5 +156,27 @@ describe("shop filter session state", () => {
       category: null,
       searchTerm: "",
     });
+  });
+
+  it("keeps home catalog prefetch out of the persistent session cache", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: "p4",
+            name: "Collar nuevo",
+            price: "5000",
+            departament: "BIJOUTERIE",
+            images: "",
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(prefetchProductsCatalogSession()).resolves.toBe(true);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/catalog", { cache: "no-store" });
+    expect(hasSessionCatalogCache()).toBe(false);
   });
 });

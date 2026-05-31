@@ -14,7 +14,7 @@ export default function GlobalFooter() {
           <section className="md:flex md:flex-col md:items-center md:text-center">
             <h2 className="text-2xl font-semibold text-[var(--brand-gold-300)]">{brandName}</h2>
             <p className="mt-2 text-xs uppercase tracking-[0.18em] text-[var(--brand-cream)]/75">
-              Estilo y Cuidado
+              Brillá vos
             </p>
             <p className="mx-auto mt-4 max-w-[46ch] text-sm leading-relaxed text-[var(--brand-cream)]/78">
               Belleza, bienestar y productos seleccionados para acompanar tu estilo todos los dias.

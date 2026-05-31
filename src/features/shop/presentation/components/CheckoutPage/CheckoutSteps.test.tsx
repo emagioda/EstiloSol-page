@@ -340,6 +340,83 @@ describe("CheckoutSteps Auto-Advance", () => {
     expect(screen.getByRole("button", { name: /Validando y preparando pago/i })).toBeDisabled();
   });
 
+  it("refreshes the cached catalog when Mercado Pago validation returns invalid products", async () => {
+    const syncStockFromProducts = vi.fn();
+    const fetchMock = vi.fn(async (...[url]: [RequestInfo | URL, RequestInit?]) => {
+      const requestUrl = String(url);
+
+      if (requestUrl === "/api/mp/create-preference") {
+        return {
+          ok: false,
+          json: async () => ({
+            error: "El precio de algunos productos cambio.",
+            invalidProducts: [
+              {
+                productId: "p1",
+                name: "Producto 1",
+                reason: "price_changed",
+                requestedQty: 1,
+                availableQty: 5,
+                requestedPrice: 100,
+                currentPrice: 120,
+                stockStatus: "in_stock",
+              },
+            ],
+          }),
+        };
+      }
+
+      if (requestUrl.startsWith("/api/catalog?_ts=")) {
+        return { ok: true, json: async () => [] };
+      }
+
+      return { ok: true, json: async () => [] };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockUseCart.mockReturnValue({
+      items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],
+      paymentMethod: "mercadopago",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts,
+      clear: vi.fn(),
+      getTotal: () => 100,
+      getDiscountedTotal: () => 100,
+    });
+
+    render(<CheckoutSteps subtotal={100} discountedTotal={100} />);
+
+    await fillContactFields();
+    fillDeliveryFields();
+    fireEvent.click(screen.getByRole("button", { name: /Continuar al pago/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Finalizar pedido/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/mp/create-preference", expect.anything());
+    });
+    expect(syncStockFromProducts).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: "p1",
+        name: "Producto 1",
+        price: 120,
+        stock_status: "in_stock",
+        stock_qty: 5,
+      }),
+    ]);
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).startsWith("/api/catalog?_ts=") &&
+            (init as RequestInit | undefined)?.cache === "no-store",
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("keeps delivery checkout blocked until address details are complete", async () => {
     mockUseCart.mockReturnValue({
       items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],
@@ -394,6 +471,30 @@ describe("CheckoutSteps Auto-Advance", () => {
 
     fireEvent.click(screen.getAllByText("Santa Fe y Mitre")[0]);
     expect(screen.getByRole("button", { name: /Continuar al pago/i })).toBeEnabled();
+  });
+
+  it("shows pickup point prices instead of a free pickup badge", async () => {
+    mockUseCart.mockReturnValue({
+      items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],
+      paymentMethod: "mercadopago",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts: vi.fn(),
+      clear: vi.fn(),
+      getTotal: () => 100,
+      getDiscountedTotal: () => 100,
+    });
+
+    render(<CheckoutSteps subtotal={100} discountedTotal={100} />);
+
+    fireEvent.click(screen.getByText("Punto de encuentro"));
+
+    expect(screen.queryByText("Gratis")).not.toBeInTheDocument();
+    expect(screen.getByText(/Desde\s+\$\s*3\.000/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/\$\s*3\.000/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/El costo se suma al total/i)).toBeInTheDocument();
   });
 
   it("sends fulfillment in the manual order payload", async () => {

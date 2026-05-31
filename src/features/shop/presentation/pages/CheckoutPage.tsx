@@ -13,6 +13,7 @@ export default function CheckoutPage() {
   const { items, paymentMethod, getTotal } = useCart();
   const [invalidProducts, setInvalidProducts] = useState<CheckoutInvalidProduct[]>([]);
   const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod>("delivery");
+  const [pickupPointId, setPickupPointId] = useState("");
   const [fulfillmentConfig, setFulfillmentConfig] = useState<FulfillmentConfig>(fallbackFulfillmentConfig);
 
   useEffect(() => {
@@ -34,8 +35,15 @@ export default function CheckoutPage() {
 
   const subtotal = useMemo(() => Math.round(getTotal()), [getTotal]);
   const totals = useMemo(
-    () => getCheckoutTotals({ subtotalProducts: subtotal, paymentMethod, deliveryMethod, fulfillmentConfig }),
-    [deliveryMethod, fulfillmentConfig, paymentMethod, subtotal]
+    () =>
+      getCheckoutTotals({
+        subtotalProducts: subtotal,
+        paymentMethod,
+        deliveryMethod,
+        fulfillmentConfig,
+        pickupPointId,
+      }),
+    [deliveryMethod, fulfillmentConfig, paymentMethod, pickupPointId, subtotal]
   );
   const hasDiscount = isDiscountPaymentMethod(paymentMethod);
 
@@ -71,6 +79,7 @@ export default function CheckoutPage() {
         discountedTotal={subtotal - totals.discountAmount}
         fulfillmentConfig={fulfillmentConfig}
         onDeliveryMethodChange={setDeliveryMethod}
+        onPickupPointChange={setPickupPointId}
         onInvalidProductsChange={setInvalidProducts}
       />
     </CheckoutLayout>
