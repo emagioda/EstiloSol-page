@@ -41,10 +41,7 @@ export default function Navbar() {
   const [storedCartSnapshot, setStoredCartSnapshot] = useState<{ count: number; total: number }>(
     () => ({ count: 0, total: 0 })
   );
-  const cartSnapshot =
-    typeof window !== "undefined"
-      ? readCartSnapshotFromStorage()
-      : storedCartSnapshot;
+  const cartSnapshot = storedCartSnapshot;
   const cartCount = cartSnapshot.count;
   const cartTotal = cartSnapshot.total;
   const formattedTotal = new Intl.NumberFormat("es-AR", {

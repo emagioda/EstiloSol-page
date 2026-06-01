@@ -83,8 +83,6 @@ export default function ProductImageGalleryZoom({
   const SWIPE_THRESHOLD_PX = 40;
   const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
-  const [animationKey, setAnimationKey] = useState(0);
-  const [slideDirection, setSlideDirection] = useState<"left" | "right">("right");
   const lightboxHistoryEntryRef = useRef(false);
   const pointerStartRef = useRef<{
     pointerId: number;
@@ -102,7 +100,6 @@ export default function ProductImageGalleryZoom({
   const safeIndex = images.length
     ? Math.min(Math.max(currentImageIndex, 0), images.length - 1)
     : 0;
-  const currentImage = images[safeIndex] ?? "";
   const slides = useMemo(() => images.map((src) => ({ src })), [images]);
 
   const openLightbox = useCallback(() => {
@@ -160,22 +157,8 @@ export default function ProductImageGalleryZoom({
       return;
     }
 
-    const len = images.length;
-    const forwardSteps = (nextIndex - safeIndex + len) % len;
-    const backwardSteps = (safeIndex - nextIndex + len) % len;
-    const isMovingForward = forwardSteps <= backwardSteps;
-
-    setSlideDirection(isMovingForward ? "left" : "right");
-    setAnimationKey((prev) => prev + 1);
     onImageIndexChange(nextIndex);
   };
-
-  const slideAnimationClass =
-    animationKey > 0
-      ? slideDirection === "left"
-        ? "animate-slideInRight"
-        : "animate-slideInLeft"
-      : "";
 
   const nextImage = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -307,19 +290,27 @@ export default function ProductImageGalleryZoom({
           }
         }}
       >
-        {currentImage ? (
-          <img
-            key={`${currentImage}-${animationKey}`}
-            src={currentImage}
-            alt={productName}
-            className={`absolute inset-0 h-full w-full object-cover transition-all duration-500 ease-out md:group-hover:scale-110 ${
-              slideAnimationClass
-            }`}
+        {images.length > 0 ? (
+          <div
+            className="absolute inset-0 flex h-full w-full transition-transform duration-500 ease-out"
             style={{
-              transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%`,
+              transform: `translate3d(-${safeIndex * 100}%, 0, 0)`,
             }}
-            loading="eager"
-          />
+          >
+            {images.map((image, index) => (
+              <div key={`${image}-${index}`} className="relative h-full w-full shrink-0 overflow-hidden">
+                <img
+                  src={image}
+                  alt={productName}
+                  className="h-full w-full object-cover transition-transform duration-500 ease-out md:group-hover:scale-110"
+                  style={{
+                    transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%`,
+                  }}
+                  loading={index === safeIndex ? "eager" : "lazy"}
+                />
+              </div>
+            ))}
+          </div>
         ) : (
           <div
             className={`flex h-full w-full items-center justify-center text-xs uppercase ${placeholderClassName}`}

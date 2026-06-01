@@ -76,8 +76,8 @@ type BankField = "cvu" | "alias";
 const inputBaseClassName =
   "w-full rounded-2xl border border-white/10 bg-[rgba(255,255,255,0.9)] px-3.5 py-2.5 text-sm text-[var(--brand-violet-950)] placeholder:text-[var(--brand-violet-950)]/42 shadow-[inset_0_1px_0_rgba(255,255,255,0.5)] transition focus-visible:border-[rgba(248,227,176,0.68)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(248,227,176,0.5)]";
 const fieldLabelClassName =
-  "mb-1.5 block text-xs font-semibold uppercase tracking-[0.1em] text-[var(--brand-cream)]/76";
-const fieldErrorClassName = "mt-1.5 text-xs font-medium text-rose-100";
+  "mb-1.5 block pl-2 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--brand-cream)]/76";
+const fieldErrorClassName = "mt-1.5 pl-2 text-xs font-medium text-rose-100";
 const deliveryOptionBaseClassName =
   "group relative flex min-h-[5.25rem] cursor-pointer items-center rounded-2xl border px-4 py-3 text-left transition duration-200 focus-within:ring-2 focus-within:ring-[rgba(248,227,176,0.42)] sm:px-5";
 const unselectedDeliveryOptionClassName =
@@ -94,7 +94,7 @@ const selectedPickupOptionClassName =
 const getInputClassName = (hasError: boolean) =>
   `${inputBaseClassName} ${hasError ? "border-rose-200/70 bg-rose-50/95 ring-1 ring-rose-200/45" : ""}`;
 
-const pickupPointPriceLabel = (price: number) => (price > 0 ? formatMoney(price) : "A coordinar");
+const pickupPointPriceLabel = (price: number) => (price > 0 ? formatMoney(price) : "Gratis");
 
 const pickupMethodPriceLabel = (
   activePickupPoints: FulfillmentConfig["pickupPoints"],
@@ -106,6 +106,7 @@ const pickupMethodPriceLabel = (
     .map((point) => point.price)
     .filter((price) => price > 0);
 
+  if (activePickupPoints.some((point) => point.price <= 0)) return "Desde Gratis";
   if (pricedPoints.length === 0) return "Según punto";
 
   const lowestPrice = Math.min(...pricedPoints);
@@ -1004,7 +1005,7 @@ export default function CheckoutSteps({
           </div>
         ) : (
           <div className="mt-4 space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
               <div>
                 <label htmlFor="checkout-first-name" className={fieldLabelClassName}>
                   Nombre
@@ -1072,11 +1073,8 @@ export default function CheckoutSteps({
 
             <div className="rounded-[1.5rem] border border-white/12 bg-[rgba(248,244,252,0.12)] p-4 sm:p-5">
               <div className="mb-3.5">
-                <p className="[font-family:var(--font-brand-display)] text-xl leading-tight text-[var(--brand-cream)]">
+                <p className="[font-family:var(--font-brand-display)] text-center text-xl leading-tight text-[var(--brand-cream)]">
                   Elegí cómo recibir tu pedido
-                </p>
-                <p className="mt-1 text-sm leading-relaxed text-[var(--brand-cream)]/72">
-                  Elegí una de las dos opciones de entrega para continuar.
                 </p>
               </div>
 
@@ -1194,7 +1192,7 @@ export default function CheckoutSteps({
                   </div>
 
                   <label
-                    className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2.5 text-sm text-[var(--brand-cream)] transition ${
+                    className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm text-[var(--brand-cream)] transition ${
                       deliveryInsideZoneError
                         ? "border-rose-200/60 bg-rose-200/10"
                         : "border-white/10 bg-transparent hover:border-[rgba(248,227,176,0.22)]"
@@ -1204,7 +1202,7 @@ export default function CheckoutSteps({
                       type="checkbox"
                       checked={deliveryInsideZoneConfirmed}
                       onChange={(event) => setDeliveryInsideZoneConfirmed(event.target.checked)}
-                      className="mt-0.5 h-4 w-4 rounded border-white/30 accent-[var(--brand-gold-300)]"
+                      className="h-4 w-4 shrink-0 rounded border-white/30 accent-[var(--brand-gold-300)]"
                     />
                     <span className="leading-relaxed">
                       Confirmo que mi dirección está dentro de la zona de envío.
@@ -1212,8 +1210,8 @@ export default function CheckoutSteps({
                   </label>
 
                   {deliveryAddressFieldsVisible ? (
-                    <div className="space-y-3 rounded-2xl bg-[rgba(255,255,255,0.08)] p-3.5 sm:p-4">
-                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
+                    <div className="space-y-3">
+                    <div className="grid grid-cols-[minmax(0,1fr)_8rem] gap-2 sm:gap-3">
                       <div>
                         <label htmlFor="delivery-address-street" className={fieldLabelClassName}>
                           Calle
@@ -1247,7 +1245,7 @@ export default function CheckoutSteps({
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div>
                         <label htmlFor="delivery-address-floor" className={fieldLabelClassName}>
-                          Piso / Depto, opcional
+                          Piso / Depto <span className="normal-case">(Opcional)</span>
                         </label>
                         <input
                           id="delivery-address-floor"
@@ -1276,7 +1274,7 @@ export default function CheckoutSteps({
 
                     <div>
                       <label htmlFor="delivery-address-notes" className={fieldLabelClassName}>
-                        Aclaraciones de entrega, opcional
+                        Aclaraciones de entrega <span className="normal-case">(Opcional)</span>
                       </label>
                       <textarea
                         id="delivery-address-notes"
@@ -1302,10 +1300,13 @@ export default function CheckoutSteps({
                   <div className="grid gap-2.5 sm:grid-cols-2">
                     {activePickupPoints.map((point) => {
                       const checked = pickupPointId === point.id;
+                      const isFreePickupPoint = point.price <= 0;
                       return (
                         <label
                           key={point.id}
                           className={`${pickupOptionBaseClassName} ${
+                            isFreePickupPoint ? "sm:col-span-2 sm:w-[calc(50%-0.3125rem)] sm:justify-self-center" : ""
+                          } ${
                             checked ? selectedPickupOptionClassName : unselectedPickupOptionClassName
                           }`}
                         >
@@ -1342,7 +1343,7 @@ export default function CheckoutSteps({
 
             <div>
               <label htmlFor="checkout-notes" className={fieldLabelClassName}>
-                Notas (opcional)
+                Notas <span className="normal-case">(Opcional)</span>
               </label>
               <textarea
                 id="checkout-notes"

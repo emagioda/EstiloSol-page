@@ -14,7 +14,6 @@ import { logEvent } from "@/src/server/observability/log";
 import { getSheetsToken } from "@/src/server/sheets/tokens";
 
 const FULFILLMENT_SHEET = "envios";
-const FULFILLMENT_REVALIDATE_SECONDS = 180;
 
 type SheetRow = Record<string, unknown>;
 
@@ -151,11 +150,7 @@ export async function fetchFulfillmentConfigFromSource(): Promise<FulfillmentCon
 
   try {
     const response = await fetch(requestUrl, {
-      cache: "force-cache",
-      next: {
-        revalidate: FULFILLMENT_REVALIDATE_SECONDS,
-        tags: ["fulfillment"],
-      },
+      cache: "no-store",
     });
     status = response.status;
 

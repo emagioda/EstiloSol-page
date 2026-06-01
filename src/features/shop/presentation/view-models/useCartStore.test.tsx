@@ -92,7 +92,7 @@ describe("cart flow", () => {
     expect(result.current.items[0].qty).toBe(50);
   });
 
-  it("hydrates legacy cart items that stored price under price aliases", () => {
+  it("hydrates legacy cart items that stored price under price aliases", async () => {
     window.localStorage.setItem(
       "es_sol_cart_v1",
       JSON.stringify([
@@ -107,11 +107,15 @@ describe("cart flow", () => {
 
     const { result } = renderHook(() => useCart(), { wrapper });
 
-    expect(result.current.items[0]).toMatchObject({
-      productId: "p1",
-      unitPrice: 2500,
-      qty: 2,
-    });
+    expect(result.current.items).toHaveLength(0);
+
+    await waitFor(() =>
+      expect(result.current.items[0]).toMatchObject({
+        productId: "p1",
+        unitPrice: 2500,
+        qty: 2,
+      })
+    );
     expect(result.current.getTotal()).toBe(5000);
   });
 

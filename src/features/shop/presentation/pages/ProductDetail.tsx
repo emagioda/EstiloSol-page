@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useCallback, useMemo, useState, type MouseEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
@@ -243,6 +243,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
         .slice(0, 6),
     [currentProduct.id, similarProducts],
   );
+  const similarProductsScrollerRef = useRef<HTMLDivElement | null>(null);
 
   const images = useMemo(
     () =>
@@ -291,6 +292,16 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
     },
     [router]
   );
+
+  const scrollSimilarProducts = useCallback((direction: -1 | 1) => {
+    const scroller = similarProductsScrollerRef.current;
+    if (!scroller) return;
+
+    scroller.scrollBy({
+      left: direction * Math.max(scroller.clientWidth * 0.78, 280),
+      behavior: "smooth",
+    });
+  }, []);
 
   const handleAddToCart = () => {
     if (!canAddToCart) return;
@@ -453,59 +464,98 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
           </h2>
           <div className="mb-6 h-px bg-gradient-to-r from-[var(--brand-gold-400)]/40 via-[var(--brand-gold-300)]/20 to-transparent" />
 
-          <div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2">
-            {visibleSimilarProducts.map((similarProduct) => {
-              const similarPrice = isValidPrice(similarProduct.price)
-                ? formatMoney(similarProduct.price)
-                : "Consultar";
-              const oldPrice = isValidPrice(similarProduct.old_price)
-                ? similarProduct.old_price
-                : null;
-              const hasOldPrice =
-                oldPrice !== null &&
-                isValidPrice(similarProduct.price) &&
-                oldPrice > similarProduct.price;
-              const similarOldPrice = hasOldPrice
-                ? formatMoney(oldPrice)
-                : null;
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => scrollSimilarProducts(-1)}
+              className="absolute left-0 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 place-items-center rounded-full border border-[var(--brand-gold-300)]/55 bg-[var(--brand-violet-950)]/88 text-[var(--brand-gold-300)] shadow-[0_12px_26px_rgba(18,8,35,0.32)] backdrop-blur-sm transition hover:border-[var(--brand-gold-300)] hover:bg-[var(--brand-violet-900)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] md:grid"
+              aria-label="Ver productos anteriores"
+            >
+              <svg aria-hidden="true" viewBox="0 0 20 20" className="h-5 w-5" fill="none">
+                <path
+                  d="M12.5 4.5 7 10l5.5 5.5"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
 
-              return (
-                <Link
-                  key={similarProduct.id}
-                  href={`/tienda/producto/${similarProduct.slug || similarProduct.id}`}
-                  className="group snap-start shrink-0 basis-[38%] overflow-hidden rounded-xl border border-[var(--brand-gold-300)]/22 bg-white/[0.12] shadow-lg shadow-black/20 transition-all duration-200 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/50 sm:basis-[30%] lg:basis-[22%]"
-                >
-                  <div className="relative aspect-[4/5] w-full">
-                    {Array.isArray(similarProduct.images) && similarProduct.images[0] ? (
-                      <Image
-                        src={similarProduct.images[0]}
-                        alt={similarProduct.name}
-                        fill
-                        className="object-cover transition-transform duration-300 group-hover:scale-105"
-                        sizes="(max-width:640px) 38vw, (max-width:1024px) 30vw, 22vw"
-                      />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[var(--brand-gold-300)]">
-                        Sin imagen
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-1.5 p-3">
-                    {similarOldPrice && (
-                      <span className="text-xs text-[var(--brand-cream)]/60 line-through">
-                        {similarOldPrice}
+            <div
+              ref={similarProductsScrollerRef}
+              className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-3 md:mx-0 md:px-12 md:pb-4 related-products-scroll"
+            >
+              {visibleSimilarProducts.map((similarProduct) => {
+                const similarPrice = isValidPrice(similarProduct.price)
+                  ? formatMoney(similarProduct.price)
+                  : "Consultar";
+                const oldPrice = isValidPrice(similarProduct.old_price)
+                  ? similarProduct.old_price
+                  : null;
+                const hasOldPrice =
+                  oldPrice !== null &&
+                  isValidPrice(similarProduct.price) &&
+                  oldPrice > similarProduct.price;
+                const similarOldPrice = hasOldPrice
+                  ? formatMoney(oldPrice)
+                  : null;
+
+                return (
+                  <Link
+                    key={similarProduct.id}
+                    href={`/tienda/producto/${similarProduct.slug || similarProduct.id}`}
+                    className="group snap-start shrink-0 basis-[38%] overflow-hidden rounded-xl border border-[var(--brand-gold-300)]/22 bg-white/[0.12] shadow-lg shadow-black/20 transition-all duration-200 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/50 sm:basis-[30%] lg:basis-[22%]"
+                  >
+                    <div className="relative aspect-[4/5] w-full">
+                      {Array.isArray(similarProduct.images) && similarProduct.images[0] ? (
+                        <Image
+                          src={similarProduct.images[0]}
+                          alt={similarProduct.name}
+                          fill
+                          className="object-cover transition-transform duration-300 group-hover:scale-105"
+                          sizes="(max-width:640px) 38vw, (max-width:1024px) 30vw, 22vw"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[var(--brand-gold-300)]">
+                          Sin imagen
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-1.5 p-3">
+                      {similarOldPrice && (
+                        <span className="text-xs text-[var(--brand-cream)]/60 line-through">
+                          {similarOldPrice}
+                        </span>
+                      )}
+                      <span className="text-xs font-semibold text-[var(--brand-gold-300)] sm:text-sm">
+                        {similarPrice}
                       </span>
-                    )}
-                    <span className="text-xs font-semibold text-[var(--brand-gold-300)] sm:text-sm">
-                      {similarPrice}
-                    </span>
-                    <p className="line-clamp-2 text-xs leading-relaxed text-[var(--brand-cream)]/92 sm:text-sm">
-                      {similarProduct.name}
-                    </p>
-                  </div>
-                </Link>
-              );
-            })}
+                      <p className="line-clamp-2 text-xs leading-relaxed text-[var(--brand-cream)]/92 sm:text-sm">
+                        {similarProduct.name}
+                      </p>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => scrollSimilarProducts(1)}
+              className="absolute right-0 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 place-items-center rounded-full border border-[var(--brand-gold-300)]/55 bg-[var(--brand-violet-950)]/88 text-[var(--brand-gold-300)] shadow-[0_12px_26px_rgba(18,8,35,0.32)] backdrop-blur-sm transition hover:border-[var(--brand-gold-300)] hover:bg-[var(--brand-violet-900)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] md:grid"
+              aria-label="Ver mas productos recomendados"
+            >
+              <svg aria-hidden="true" viewBox="0 0 20 20" className="h-5 w-5" fill="none">
+                <path
+                  d="M7.5 4.5 13 10l-5.5 5.5"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
           </div>
         </section>
       )}

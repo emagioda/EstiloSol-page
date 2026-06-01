@@ -109,9 +109,9 @@ export const paymentMethodLabel = (paymentMethod: PaymentMethod) => {
 export const deliveryMethodLabel = (deliveryMethod: DeliveryMethod) =>
   deliveryMethod === "delivery" ? "Envío a domicilio" : "Punto de encuentro coordinado";
 
-export const fulfillmentFeeLabel = (deliveryMethod: DeliveryMethod, shippingFee: number) => {
+export const fulfillmentFeeLabel = (_deliveryMethod: DeliveryMethod, shippingFee: number) => {
   if (shippingFee > 0) return formatMoney(shippingFee);
-  return deliveryMethod === "pickup" ? "A coordinar" : "Gratis";
+  return "Gratis";
 };
 
 export const buildWhatsappMessage = ({

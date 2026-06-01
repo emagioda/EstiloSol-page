@@ -127,9 +127,11 @@ export default function TiendaClientView({
   const [sortOpen, setSortOpen] = useState(false);
   const [sortShouldRender, setSortShouldRender] = useState(false);
   const [sortClosing, setSortClosing] = useState(false);
+  const [desktopSortOpen, setDesktopSortOpen] = useState(false);
   const hasCheckedFirstVisitRef = useRef(false);
   const filtersCloseTimerRef = useRef<number | null>(null);
   const sortCloseTimerRef = useRef<number | null>(null);
+  const desktopSortRef = useRef<HTMLDivElement | null>(null);
   const filtersOpenRef = useRef(false);
   const filtersShouldRenderRef = useRef(false);
   const sortOpenRef = useRef(false);
@@ -159,6 +161,8 @@ export default function TiendaClientView({
     departamentOptions.findIndex((option) => option.value === selectedWorld),
     0
   );
+  const selectedSortOption =
+    sortOptions.find((option) => option.value === filters.sortBy) ?? sortOptions[0];
   const ensureFullCatalog = useCallback(() => {
     if (catalogComplete || catalogRefreshing) return;
     void loadProducts(false, { silent: true });
@@ -357,6 +361,29 @@ export default function TiendaClientView({
     if (allProducts.length === 0) return;
     syncStockFromProducts(allProducts);
   }, [allProducts, syncStockFromProducts]);
+
+  useEffect(() => {
+    if (!desktopSortOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (desktopSortRef.current?.contains(event.target as Node)) return;
+      setDesktopSortOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setDesktopSortOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [desktopSortOpen]);
 
   useEffect(() => {
     setSuppressBadge(isQuickViewOpen);
@@ -845,19 +872,78 @@ export default function TiendaClientView({
                 </div>
                 <div className="flex items-center justify-end gap-2">
                   <span className="text-xs text-[var(--brand-cream)]/70 shrink-0">Ordenar:</span>
-                  <div className="relative flex-1">
-                    <select
-                      value={filters.sortBy}
-                      onChange={(e) => handleSortChange(e.target.value as typeof filters.sortBy)}
-                      className="w-full cursor-pointer appearance-none rounded-lg border border-white/20 bg-white/8 py-1.5 pl-3 pr-7 text-sm text-[var(--brand-cream)] transition hover:border-white/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                  <div ref={desktopSortRef} className="relative min-w-[11rem]">
+                    <button
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded={desktopSortOpen}
+                      aria-controls="desktop-sort-menu"
+                      onClick={() => setDesktopSortOpen((open) => !open)}
+                      className="flex h-10 w-full items-center justify-between gap-3 rounded-xl border border-[var(--brand-gold-300)]/45 bg-white/[0.12] px-3 text-left text-sm font-semibold text-[var(--brand-cream)] shadow-[0_10px_24px_rgba(18,8,35,0.18)] backdrop-blur-sm transition duration-200 hover:border-[var(--brand-gold-300)]/80 hover:bg-white/[0.16] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-950)]"
                     >
-                      {sortOptions.map((opt) => (
-                        <option key={opt.value} value={opt.value} className="bg-[#1a0a2e]">
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                    <span aria-hidden className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-[var(--brand-cream)]/60">▼</span>
+                      <span className="truncate">{selectedSortOption.label}</span>
+                      <svg
+                        aria-hidden="true"
+                        viewBox="0 0 20 20"
+                        className={`h-4 w-4 shrink-0 text-[var(--brand-gold-300)] transition-transform duration-200 ${
+                          desktopSortOpen ? "rotate-180" : ""
+                        }`}
+                        fill="none"
+                      >
+                        <path
+                          d="M5 7.5l5 5 5-5"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+
+                    {desktopSortOpen && (
+                      <div
+                        id="desktop-sort-menu"
+                        role="listbox"
+                        aria-label="Ordenar productos"
+                        className="absolute right-0 top-[calc(100%+0.45rem)] z-40 w-full overflow-hidden rounded-xl border border-[var(--brand-gold-300)]/45 bg-[var(--brand-violet-950)] p-1.5 text-sm text-[var(--brand-cream)] shadow-[0_18px_40px_rgba(18,8,35,0.36)] ring-1 ring-white/10"
+                      >
+                        {sortOptions.map((option) => {
+                          const active = filters.sortBy === option.value;
+
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              role="option"
+                              aria-selected={active}
+                              onClick={() => {
+                                handleSortChange(option.value);
+                                setDesktopSortOpen(false);
+                              }}
+                              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition duration-150 ${
+                                active
+                                  ? "bg-[var(--brand-gold-300)]/18 text-[var(--brand-gold-300)]"
+                                  : "text-[var(--brand-cream)]/86 hover:bg-white/[0.08] hover:text-[var(--brand-cream)]"
+                              }`}
+                            >
+                              <span
+                                aria-hidden="true"
+                                className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border ${
+                                  active
+                                    ? "border-[var(--brand-gold-300)]"
+                                    : "border-[var(--brand-cream)]/30"
+                                }`}
+                              >
+                                {active && (
+                                  <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand-gold-300)]" />
+                                )}
+                              </span>
+                              <span className="truncate">{option.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

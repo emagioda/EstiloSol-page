@@ -87,12 +87,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     const product = await loadProduct(slug);
     if (!product) {
       return {
-        title: "Producto no encontrado | Estilo Sol",
+        title: "Producto no encontrado",
         robots: { index: false, follow: true },
       };
     }
 
-    const title = `${product.name} | Estilo Sol`;
+    const title = product.name;
+    const socialTitle = `${product.name} | Estilo Sol`;
     const description =
       product.short_description || product.description || "Producto de peluqueria y bijouterie en Estilo Sol.";
     const images = product.images?.slice(0, 4);
@@ -104,7 +105,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         canonical: productUrl(product),
       },
       openGraph: {
-        title,
+        title: socialTitle,
         description,
         type: "website",
         url: productUrl(product),
@@ -112,14 +113,14 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       },
       twitter: {
         card: "summary_large_image",
-        title,
+        title: socialTitle,
         description,
         images,
       },
     };
   } catch {
     return {
-      title: "Producto | Estilo Sol",
+      title: "Producto",
       description: "Producto de peluqueria y bijouterie en Estilo Sol.",
     };
   }

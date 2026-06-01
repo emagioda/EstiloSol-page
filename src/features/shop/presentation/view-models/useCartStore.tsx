@@ -126,8 +126,6 @@ const readItemsFromStorage = (): CartItem[] => {
       .filter((it) => it.qty > 0);
 
     return sanitized;
-
-    return sanitized;
   } catch {
     return [];
   }
@@ -179,9 +177,7 @@ const emitCartUpdated = (items: CartItem[]) => {
 };
 
 export const CartProvider = ({ children }: { children: React.ReactNode }) => {
-  const [items, setItems] = useState<CartItem[]>(() =>
-    typeof window !== "undefined" ? readItemsFromStorage() : []
-  );
+  const [items, setItems] = useState<CartItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("mercadopago");
   const [storageHydrated, setStorageHydrated] = useState(false);
   const itemsSignatureRef = useRef(cartItemsSignature([]));

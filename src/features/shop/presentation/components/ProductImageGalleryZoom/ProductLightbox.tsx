@@ -34,7 +34,16 @@ export default function ProductLightbox({
           onViewIndex(nextIndex);
         },
       }}
-      controller={{ closeOnBackdropClick: false }}
+      carousel={{
+        finite: !hasMultipleImages,
+        preload: hasMultipleImages ? 2 : 0,
+        spacing: hasMultipleImages ? "30%" : 0,
+      }}
+      controller={{
+        closeOnBackdropClick: false,
+        disableSwipeNavigation: !hasMultipleImages,
+        preventDefaultWheelX: true,
+      }}
       render={{
         buttonPrev: hasMultipleImages ? undefined : () => null,
         buttonNext: hasMultipleImages ? undefined : () => null,
