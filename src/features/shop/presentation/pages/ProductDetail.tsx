@@ -16,6 +16,7 @@ import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useC
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import { formatProductCategories } from "@/src/features/shop/domain/productCategories";
+import { getCashTransferDiscountedTotal } from "@/src/features/shop/domain/cashTransferDiscount";
 import {
   getStockLabel,
   isProductPurchasable,
@@ -270,7 +271,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
   const effectiveQty =
     remainingQty === null ? qty : Math.max(1, Math.min(qty, Math.max(remainingQty, 1)));
   const discountedPrice = isValidPrice(currentProduct.price)
-    ? formatMoney(Math.round(currentProduct.price * 0.9))
+    ? formatMoney(getCashTransferDiscountedTotal(currentProduct.price))
     : null;
   const shortDescription = useMemo(
     () => getShortDescription(currentProduct.short_description, currentProduct.description),

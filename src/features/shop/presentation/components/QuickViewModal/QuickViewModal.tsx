@@ -6,6 +6,7 @@ import ProductImageGalleryZoom from "@/src/features/shop/presentation/components
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import { formatProductCategories } from "@/src/features/shop/domain/productCategories";
+import { getCashTransferDiscountedTotal } from "@/src/features/shop/domain/cashTransferDiscount";
 import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 import {
   getStockLabel,
@@ -79,7 +80,7 @@ export default function QuickViewModal({
           style: "currency",
           currency: product?.currency || "ARS",
           maximumFractionDigits: 0,
-        }).format(Math.round(product.price * 0.9))
+        }).format(getCashTransferDiscountedTotal(product.price))
       : null;
 
   useBodyScrollLock(open);

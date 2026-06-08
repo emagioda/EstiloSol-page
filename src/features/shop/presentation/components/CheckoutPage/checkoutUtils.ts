@@ -2,6 +2,7 @@
 
 import type { CartItem, PaymentMethod } from "../../view-models/useCartStore";
 import { fallbackFulfillmentConfig, getShippingFeeForDeliveryMethod, type FulfillmentConfig } from "@/src/config/fulfillment";
+import { getCashTransferDiscountAmount } from "@/src/features/shop/domain/cashTransferDiscount";
 
 export type DeliveryMethod = "delivery" | "pickup";
 
@@ -46,7 +47,7 @@ export const isDiscountPaymentMethod = (paymentMethod: PaymentMethod) =>
 
 export const getPaymentDiscountAmount = (subtotalProducts: number, paymentMethod: PaymentMethod) => {
   if (!isDiscountPaymentMethod(paymentMethod)) return 0;
-  return Math.round(subtotalProducts * 0.1);
+  return getCashTransferDiscountAmount(subtotalProducts);
 };
 
 export const getCheckoutTotals = ({

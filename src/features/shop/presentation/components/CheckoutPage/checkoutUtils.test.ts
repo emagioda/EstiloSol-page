@@ -47,4 +47,20 @@ describe("getCheckoutTotals", () => {
       finalTotal: 12100,
     });
   });
+
+  it("rounds cash/transfer discounted totals to hundreds before adding shipping", () => {
+    expect(
+      getCheckoutTotals({
+        subtotalProducts: 12300,
+        paymentMethod: "cash",
+        deliveryMethod: "pickup",
+        pickupPointId: "santa-fe-mitre",
+      })
+    ).toMatchObject({
+      subtotalProducts: 12300,
+      discountAmount: 1200,
+      shippingFee: 3000,
+      finalTotal: 14100,
+    });
+  });
 });

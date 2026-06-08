@@ -1,6 +1,7 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Product, StockStatus } from "@/src/features/shop/domain/entities/Product";
+import { getCashTransferDiscountedTotal } from "@/src/features/shop/domain/cashTransferDiscount";
 
 export type CartItem = {
   productId: string;
@@ -367,7 +368,7 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
     () => items.reduce((sum, item) => sum + item.unitPrice * item.qty, 0),
     [items]
   );
-  const getDiscountedTotal = useCallback(() => Math.round(getTotal() * 0.9), [getTotal]);
+  const getDiscountedTotal = useCallback(() => getCashTransferDiscountedTotal(getTotal()), [getTotal]);
 
   const value = useMemo(
     () => ({

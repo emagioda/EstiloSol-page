@@ -21,6 +21,7 @@ import {
   type InvalidCheckoutProduct,
   validateCatalogItem,
 } from "@/src/server/catalog/stock";
+import { getCashTransferDiscountAmount } from "@/src/features/shop/domain/cashTransferDiscount";
 
 type BuildOrderInput = {
   items: ParsedCheckoutItem[];
@@ -57,7 +58,7 @@ const buildSummaryToken = () => randomBytes(16).toString("hex");
 
 export const getPaymentDiscountAmount = (subtotalProducts: number, paymentMethod: OrderPaymentMethod) => {
   if (paymentMethod === "cash" || paymentMethod === "transfer") {
-    return Math.round(subtotalProducts * 0.1);
+    return getCashTransferDiscountAmount(subtotalProducts);
   }
   return 0;
 };
