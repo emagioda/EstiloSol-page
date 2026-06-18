@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { buildSalesSheetRow } from "@/src/server/sheets/repository";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildSalesSheetRow, getOrdersForAdmin } from "@/src/server/sheets/repository";
 import type { Order } from "@/src/server/orders/types";
 
 const baseOrder: Order = {
@@ -23,6 +23,11 @@ const baseOrder: Order = {
   createdAt: Date.UTC(2026, 0, 1),
   updatedAt: Date.UTC(2026, 0, 1),
 };
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("buildSalesSheetRow", () => {
   it("maps fulfillment fields for new ventas columns", () => {
@@ -86,5 +91,41 @@ describe("buildSalesSheetRow", () => {
     expect(row.pickup_point_id).toBe("santa-fe-mitre");
     expect(row.pickup_point_name).toBe("Santa Fe y Mitre");
     expect(row.fulfillment_summary).toBe("Punto de encuentro: Santa Fe y Mitre");
+  });
+});
+
+describe("getOrdersForAdmin", () => {
+  it("reads WhatsApp values from camel-case sheet headers", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_ADMIN_TOKEN", "admin-token");
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          items: [
+            {
+              Nro_de_compra: "es-20260615-190658-test",
+              Fecha: "2026-06-15T19:06:58.000Z",
+              Nombre: "Rocio",
+              Apellido: "Gonzalez",
+              WhatsApp: "3413432914",
+              Email: "rocio@example.com",
+              Forma_de_Pago: "Mercado Pago",
+              Estado_de_Pago: "Confirmado",
+              Estado_de_Envio: "En proceso",
+              Total: 15225,
+            },
+          ],
+        }),
+        { status: 200 }
+      )
+    );
+
+    const orders = await getOrdersForAdmin();
+
+    expect(orders).toHaveLength(1);
+    expect(orders[0]?.customerName).toBe("Rocio Gonzalez");
+    expect(orders[0]?.whatsapp).toBe("3413432914");
   });
 });

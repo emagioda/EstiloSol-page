@@ -8,6 +8,8 @@ import { isAdminEmail } from "@/src/server/auth/adminEmail";
 import { authOptions } from "@/src/server/auth/options";
 import { invalidateProductsCatalogCache } from "@/src/server/catalog/getProducts";
 import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
+import { logEvent } from "@/src/server/observability/log";
+import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { getOrder, markApproved, markTerminalPaymentState, updateOrder } from "@/src/server/orders/store";
 import type { Order, OrderItem, OrderPaymentStatus, OrderShippingStatus, OrderStatus } from "@/src/server/orders/types";
 import {
@@ -214,15 +216,36 @@ const decrementFallbackOrderStockIfNeeded = async (
   if (sheetOrderHasStockDeducted(sheetOrder)) return null;
 
   const stockDeductedAt = Date.now();
-  await decrementProductsStockInSheet(
-    order.externalReference,
-    order.items.map((item) => ({
-      productId: item.productId,
-      qty: item.qty,
-      title: item.title,
-    }))
-  );
-  await invalidateProductsCatalogCache();
+  try {
+    await decrementProductsStockInSheet(
+      order.externalReference,
+      order.items.map((item) => ({
+        productId: item.productId,
+        qty: item.qty,
+        title: item.title,
+      }))
+    );
+  } catch (error) {
+    logEvent("error", "admin.fallback_stock_deduction_failed", {
+      externalReference: order.externalReference,
+      error,
+    });
+    await trackBusinessEvent("payment.stock_deduction_failed", {
+      externalReference: order.externalReference,
+      source: "admin_fallback_order",
+    });
+    return null;
+  }
+
+  try {
+    await invalidateProductsCatalogCache();
+  } catch (error) {
+    logEvent("warn", "admin.catalog_cache_invalidation_failed", {
+      externalReference: order.externalReference,
+      error,
+    });
+  }
+
   return stockDeductedAt;
 };
 

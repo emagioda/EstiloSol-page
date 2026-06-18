@@ -27,6 +27,7 @@ type SortByOption =
   | "total-asc"
   | "customer-asc"
   | "customer-desc";
+type QuickFilter = "all" | "needs-payment" | "needs-shipping" | "completed";
 
 type FilterOption<T extends string> = {
   value: T;
@@ -54,6 +55,11 @@ type SaveDialogState =
       description: string;
       orderId: string;
       formId: string;
+    }
+  | {
+      mode: "batchConfirm";
+      title: string;
+      description: string;
     };
 
 type LeaveDialogState = {
@@ -66,6 +72,8 @@ const moneyFormatter = new Intl.NumberFormat("es-AR", {
   currency: "ARS",
   maximumFractionDigits: 0,
 });
+
+const formatMoney = (value: number) => moneyFormatter.format(value).replace(/\$\s+/u, "$");
 
 const dateFormatter = new Intl.DateTimeFormat("es-AR", {
   day: "2-digit",
@@ -168,6 +176,20 @@ const sortByOptions: Array<FilterOption<SortByOption>> = [
   { value: "customer-desc", label: "Cliente (Z-A)" },
 ];
 
+const quickFilterLabels: Record<QuickFilter, string> = {
+  all: "Todas",
+  "needs-payment": "A cobrar",
+  "needs-shipping": "A preparar",
+  completed: "Completadas",
+};
+
+const actionToneClass = {
+  payment: "border-amber-300/70 bg-amber-100 text-amber-900",
+  shipping: "border-sky-300/70 bg-sky-100 text-sky-900",
+  review: "border-rose-300/70 bg-rose-100 text-rose-900",
+  done: "border-emerald-300/70 bg-emerald-100 text-emerald-900",
+} as const;
+
 function FilterDropdown<T extends string>({
   label,
   value,
@@ -209,13 +231,13 @@ function FilterDropdown<T extends string>({
   return (
     <div
       ref={rootRef}
-      className="relative min-w-0 flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.09em] text-[var(--brand-cream)]/88"
+      className="relative min-w-0 flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.09em] text-[#6b5a78]"
     >
       <span>{label}</span>
       <button
         type="button"
         onClick={() => setOpen((previous) => !previous)}
-        className="flex h-9 items-center justify-between rounded-lg border border-[var(--brand-gold-300)]/35 bg-[rgba(255,255,255,0.14)] px-2.5 text-left text-sm font-medium normal-case tracking-normal text-[var(--brand-cream)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+        className="flex h-9 items-center justify-between rounded-md border border-[#d8cce4] bg-white px-2.5 text-left text-sm font-medium normal-case tracking-normal text-[#2a1644] shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
         aria-haspopup="listbox"
         aria-expanded={open}
       >
@@ -226,7 +248,7 @@ function FilterDropdown<T extends string>({
       </button>
 
       {open ? (
-        <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-[360] overflow-hidden rounded-lg border border-[var(--brand-gold-300)]/35 bg-[var(--brand-violet-950)] shadow-[0_14px_28px_rgba(7,3,18,0.45)]">
+        <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-[360] overflow-hidden rounded-md border border-[#d8cce4] bg-white shadow-[0_14px_28px_rgba(47,24,77,0.2)]">
           <ul role="listbox" className="max-h-56 overflow-y-auto py-1">
             {options.map((option) => {
               const isSelected = option.value === value;
@@ -241,7 +263,7 @@ function FilterDropdown<T extends string>({
                     className={`flex w-full items-center px-2.5 py-2 text-left text-sm font-medium normal-case tracking-normal transition ${
                       isSelected
                         ? "bg-[var(--brand-gold-300)] text-[var(--brand-violet-950)]"
-                        : "text-[var(--brand-cream)] hover:bg-white/10"
+                        : "text-[#2a1644] hover:bg-[#f2ecf8]"
                     }`}
                   >
                     {option.label}
@@ -268,6 +290,41 @@ const formatDateOnly = (value: string) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return dateOnlyFormatter.format(date);
+};
+
+const getShortOrderId = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return "#";
+
+  const timeMatch = trimmed.match(/-(\d{6})-/);
+  if (timeMatch) return `#${timeMatch[1]}`;
+
+  const compact = trimmed.replace(/[^a-zA-Z0-9]/g, "");
+  return `#${compact.slice(-6).toUpperCase() || trimmed.slice(-6)}`;
+};
+
+const getOrderAction = (order: AdminOrderSheetRow, draft: OrderDraft) => {
+  if (draft.paymentStatus === "pending") {
+    return { label: "Falta confirmar pago", tone: "payment" as const };
+  }
+  if (
+    draft.paymentStatus === "cancelled" ||
+    draft.paymentStatus === "refunded" ||
+    draft.paymentStatus === "charged_back"
+  ) {
+    return { label: "Revisar venta", tone: "review" as const };
+  }
+  if (draft.shippingStatus === "in_process") {
+    return { label: "Preparar o entregar", tone: "shipping" as const };
+  }
+  return { label: "Venta finalizada", tone: "done" as const };
+};
+
+const getOrderGeneralStatus = (paymentStatus: PaymentStatus, shippingStatus: ShippingStatus) => {
+  if (paymentStatus === "confirmed" && shippingStatus === "completed") return "Completada";
+  if (paymentStatus === "confirmed" && shippingStatus === "in_process") return "A preparar";
+  if (paymentStatus === "pending") return "A cobrar";
+  return "Revisar";
 };
 
 const toWaLink = (value: string) => {
@@ -351,6 +408,7 @@ export default function VentasTable({ orders }: VentasTableProps) {
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>("all");
   const [shippingFilter, setShippingFilter] = useState<ShippingFilter>("all");
   const [sortBy, setSortBy] = useState<SortByOption>("date-desc");
+  const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [draftByOrder, setDraftByOrder] = useState<Record<string, OrderDraft>>(() =>
     buildDraftMap(orders)
   );
@@ -447,6 +505,77 @@ export default function VentasTable({ orders }: VentasTableProps) {
   const selectedOrderWaLink = selectedOrder ? toWaLink(selectedOrder.whatsapp) : null;
   const selectedOrderMailtoLink = selectedOrder ? toMailtoLink(selectedOrder.email) : null;
   const selectedOrderReceiptSent = Boolean(selectedOrder?.receiptEmailSentAt);
+
+  const summaryStats = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStart = today.getTime();
+
+    return orders.reduce(
+      (stats, order) => {
+        const isToday = order.createdAtMs >= todayStart;
+        const isPendingPayment = order.paymentStatus === "pending";
+        const isReadyForShipping =
+          order.paymentStatus === "confirmed" && order.shippingStatus === "in_process";
+        const isCompleted =
+          order.paymentStatus === "confirmed" && order.shippingStatus === "completed";
+
+        return {
+          todayCount: stats.todayCount + (isToday ? 1 : 0),
+          pendingPaymentCount: stats.pendingPaymentCount + (isPendingPayment ? 1 : 0),
+          shippingCount: stats.shippingCount + (isReadyForShipping ? 1 : 0),
+          completedCount: stats.completedCount + (isCompleted ? 1 : 0),
+          totalSold: stats.totalSold + order.total,
+        };
+      },
+      {
+        todayCount: 0,
+        pendingPaymentCount: 0,
+        shippingCount: 0,
+        completedCount: 0,
+        totalSold: 0,
+      }
+    );
+  }, [orders]);
+
+  const activeQuickFilter: QuickFilter =
+    paymentFilter === "pending" && shippingFilter === "all"
+      ? "needs-payment"
+      : paymentFilter === "confirmed" && shippingFilter === "in_process"
+        ? "needs-shipping"
+        : paymentFilter === "confirmed" && shippingFilter === "completed"
+          ? "completed"
+          : "all";
+
+  const quickFilters = [
+    { value: "all" as const, count: orders.length },
+    { value: "needs-payment" as const, count: summaryStats.pendingPaymentCount },
+    { value: "needs-shipping" as const, count: summaryStats.shippingCount },
+    { value: "completed" as const, count: summaryStats.completedCount },
+  ];
+
+  const applyQuickFilter = (filter: QuickFilter) => {
+    if (filter === "needs-payment") {
+      setPaymentFilter("pending");
+      setShippingFilter("all");
+      return;
+    }
+
+    if (filter === "needs-shipping") {
+      setPaymentFilter("confirmed");
+      setShippingFilter("in_process");
+      return;
+    }
+
+    if (filter === "completed") {
+      setPaymentFilter("confirmed");
+      setShippingFilter("completed");
+      return;
+    }
+
+    setPaymentFilter("all");
+    setShippingFilter("all");
+  };
 
   const visibleOrders = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -672,18 +801,131 @@ export default function VentasTable({ orders }: VentasTableProps) {
     setIsPersistingSale(false);
   };
 
+  const persistPendingChanges = async () => {
+    setIsPersistingSale(true);
+    skipLeaveGuardRef.current = true;
+
+    try {
+      await saveOrderStatusesBatchAction(pendingOrderUpdates);
+      window.location.reload();
+    } catch {
+      skipLeaveGuardRef.current = false;
+      setIsPersistingSale(false);
+      setSaveDialogState({
+        mode: "info",
+        title: "No pudimos guardar",
+        description: "Los cambios siguen pendientes. Revisá tu conexión y probá nuevamente.",
+      });
+    }
+  };
+
+  const handleSavePendingChanges = () => {
+    if (pendingOrderUpdates.length === 0 || isPersistingSale) return;
+
+    const confirmsPayment = pendingOrderUpdates.some((update) => {
+      const order = orders.find((entry) => entry.orderId === update.orderId);
+      return order?.paymentStatus !== "confirmed" && update.paymentStatus === "confirmed";
+    });
+
+    if (confirmsPayment) {
+      setSaveDialogState({
+        mode: "batchConfirm",
+        title: "Confirmar cambios",
+        description:
+          "Al menos una venta pasará a pago Confirmado y puede enviar el email de comprobante. Revisá que esté todo correcto antes de guardar.",
+      });
+      return;
+    }
+
+    void persistPendingChanges();
+  };
+
+  const handleConfirmBatchSave = () => {
+    if (saveDialogState.mode !== "batchConfirm") return;
+    setSaveDialogState({ mode: "closed" });
+    void persistPendingChanges();
+  };
+
   return (
     <>
-      <div className="relative z-[80] mb-3 rounded-xl border border-[var(--brand-gold-300)]/38 bg-[linear-gradient(180deg,rgba(255,255,255,0.17)_0%,rgba(255,255,255,0.1)_100%)] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.35)] backdrop-blur-[2px]">
-        <div className="mb-2 flex items-center justify-between border-b border-[var(--brand-gold-300)]/18 pb-2">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)]/88">
-            Filtros de ventas
-          </p>
-          <p className="text-[10px] font-medium text-[var(--brand-cream)]/72">
-            {visibleOrders.length}/{orders.length}
-          </p>
+      {hasUnsavedChanges ? (
+        <div className="mb-3 flex flex-col gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-950 shadow-[0_10px_22px_rgba(45,22,75,0.12)] sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-bold">
+              {pendingOrderUpdates.length} cambio{pendingOrderUpdates.length === 1 ? "" : "s"} pendiente
+              {pendingOrderUpdates.length === 1 ? "" : "s"}
+            </p>
+            <p className="text-xs text-amber-900/80">Guardalos antes de salir o cambiar de sección.</p>
+          </div>
+          <button
+            type="button"
+            onClick={handleSavePendingChanges}
+            disabled={isPersistingSale}
+            className="rounded-md bg-[var(--brand-gold-300)] px-3 py-2 text-xs font-bold text-[var(--brand-violet-950)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Guardar cambios
+          </button>
         </div>
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+      ) : null}
+
+      <div className="mb-2">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+          {quickFilters.map((filter) => {
+            const isActive = activeQuickFilter === filter.value;
+            return (
+              <button
+                key={filter.value}
+                type="button"
+                onClick={() => applyQuickFilter(filter.value)}
+                aria-pressed={isActive}
+                className={`flex min-w-0 items-center justify-between gap-2 rounded-full border px-2.5 py-1.5 text-xs font-bold transition sm:min-w-[8.5rem] ${
+                  isActive
+                    ? "border-[var(--brand-gold-300)] bg-[var(--brand-gold-300)] text-[var(--brand-violet-950)] shadow-[0_8px_18px_rgba(45,22,75,0.18)]"
+                    : "border-white/30 bg-white/16 text-[var(--brand-cream)] hover:bg-white/24"
+                }`}
+              >
+                <span className="truncate">{quickFilterLabels[filter.value]}</span>
+                <span
+                  className={`inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[10px] ${
+                    isActive ? "bg-white/55" : "bg-white/16"
+                  }`}
+                >
+                  {filter.count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <section className="relative z-[80] mb-3 rounded-lg border border-[#e4d8ec] bg-[#fbf8ff] p-2.5 text-[#2a1644] shadow-[0_10px_20px_rgba(45,22,75,0.14)] sm:p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#715889]">
+              Filtros
+            </p>
+            <p className="mt-0.5 text-xs font-medium text-[#725f80]">
+              <span className="md:hidden">{visibleOrders.length} ventas</span>
+              <span className="hidden md:inline">
+                Mostrando {visibleOrders.length} de {orders.length} ventas
+              </span>
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsFiltersOpen((previous) => !previous)}
+            aria-expanded={isFiltersOpen}
+            aria-controls="ventas-filter-panel"
+            className="rounded-md border border-[#d8cce4] bg-white px-3 py-1.5 text-xs font-bold text-[#2a1644] shadow-sm md:hidden"
+          >
+            {isFiltersOpen ? "Ocultar" : "Filtros"}
+          </button>
+        </div>
+
+        <div
+          id="ventas-filter-panel"
+          className={`${isFiltersOpen ? "grid" : "hidden"} mt-3 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 md:grid`}
+        >
           <FilterDropdown
             label="Estado pago"
             value={paymentFilter}
@@ -700,21 +942,22 @@ export default function VentasTable({ orders }: VentasTableProps) {
 
           <FilterDropdown label="Ordenar" value={sortBy} options={sortByOptions} onChange={setSortBy} />
 
-          <label className="min-w-0 flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.09em] text-[var(--brand-cream)]/88">
+          <label className="min-w-0 flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.09em] text-[#6b5a78]">
             Buscar
             <input
               type="text"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder="Cliente, ID, WhatsApp, email"
-              className="h-9 rounded-lg border border-[var(--brand-gold-300)]/35 bg-[rgba(255,255,255,0.14)] px-2.5 text-sm font-medium normal-case tracking-normal text-[var(--brand-cream)] placeholder:text-[var(--brand-cream)]/78 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+              className="h-9 rounded-md border border-[#d8cce4] bg-white px-2.5 text-sm font-medium normal-case tracking-normal text-[#2a1644] placeholder:text-[#725f80]/58 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
             />
           </label>
         </div>
 
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <p className="text-xs font-medium text-[var(--brand-cream)]/80">
-            Mostrando {visibleOrders.length} de {orders.length} ventas
+        <div className={`${isFiltersOpen ? "flex" : "hidden"} mt-3 items-center justify-between gap-2 md:flex`}>
+          <p className="text-xs font-medium text-[#725f80]">
+            <span className="hidden md:inline">Mostrando {visibleOrders.length} de {orders.length} ventas · </span>
+            Orden actual: {sortByOptions.find((option) => option.value === sortBy)?.label}
           </p>
           <button
             type="button"
@@ -724,16 +967,16 @@ export default function VentasTable({ orders }: VentasTableProps) {
               setShippingFilter("all");
               setSortBy("date-desc");
             }}
-            className="rounded-full border border-[var(--brand-gold-300)]/45 bg-[rgba(255,255,255,0.12)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--brand-violet-950)] transition hover:bg-[rgba(255,255,255,0.18)]"
+            className="rounded-full border border-[#d8cce4] bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-[#2a1644] transition hover:bg-[#f2ecf8]"
           >
             Limpiar
           </button>
         </div>
-      </div>
+      </section>
 
       <div className="space-y-3 md:hidden">
         {visibleOrders.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-[var(--brand-gold-300)]/35 bg-[rgba(255,255,255,0.06)] px-4 py-6 text-center text-sm text-[var(--brand-cream)]/85">
+          <p className="rounded-lg border border-dashed border-white/35 bg-white/12 px-4 py-6 text-center text-sm text-[var(--brand-cream)]/85">
             No hay ventas que cumplan con los filtros seleccionados.
           </p>
         ) : (
@@ -744,73 +987,55 @@ export default function VentasTable({ orders }: VentasTableProps) {
           return (
             <article
               key={order.orderId}
-              className="rounded-2xl border border-[var(--brand-gold-300)]/25 bg-[linear-gradient(180deg,rgba(164,137,209,0.2)_0%,rgba(71,40,118,0.82)_100%)] p-3 text-[var(--brand-cream)] shadow-[0_12px_24px_rgba(12,6,24,0.28)]"
+              className="rounded-lg border border-[#e4d8ec] bg-[#fbf8ff] p-3 text-[#2a1644] shadow-[0_12px_24px_rgba(45,22,75,0.16)]"
             >
               <div className="flex items-start justify-between gap-3">
-                <p className="truncate whitespace-nowrap text-[12px] font-medium text-[var(--brand-cream)]/82">
-                  <span className="text-[var(--brand-gold-300)]/85">ID:</span> {order.orderId}
-                </p>
-                <p className="shrink-0 text-[11px] font-medium text-[var(--brand-cream)]/70">
-                  {formatDateOnly(order.createdAt)}
+                <div className="min-w-0">
+                  <p className="text-xs font-black uppercase tracking-[0.08em] text-[#715889]">
+                    {getShortOrderId(order.orderId)}
+                  </p>
+                  <p className="mt-2 text-sm font-bold uppercase leading-tight tracking-[0.02em]">
+                    {order.customerName || "-"}
+                  </p>
+                  <p className="mt-0.5 text-xs font-medium text-[#725f80]">{formatDateOnly(order.createdAt)}</p>
+                </div>
+                <p className="shrink-0 whitespace-nowrap text-right text-base font-black tabular-nums text-[var(--brand-violet-950)]">
+                  {formatMoney(order.total)}
                 </p>
               </div>
 
-              <div className="mt-3 grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-2 text-[14px] font-semibold">
-                <span className="min-w-0 truncate text-left uppercase tracking-[0.03em] text-[var(--brand-cream)]">
-                  {order.customerName || "-"}
-                </span>
-                <span className="justify-self-center text-[var(--brand-cream)]/55">-</span>
-                <span className="justify-self-end whitespace-nowrap text-right tabular-nums text-[var(--brand-gold-300)]">
-                  TOTAL: {moneyFormatter.format(order.total)}
-                </span>
-              </div>
+              <p className="mt-3 text-xs font-semibold leading-relaxed text-[#5d466f]">
+                Pago {paymentStatusLabel[draft.paymentStatus].toLowerCase()} · Envío{" "}
+                {shippingStatusLabel[draft.shippingStatus].toLowerCase()}
+              </p>
 
-              <div className="mt-3 flex items-center gap-1.5">
-                <span
-                  className={`inline-flex items-center whitespace-nowrap rounded-full border px-1.5 py-1 text-[10px] font-semibold ${paymentBadgeClass[draft.paymentStatus]}`}
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedOrderId(order.orderId)}
+                  className="rounded-md border border-[#d8cce4] bg-white px-2.5 py-2 text-xs font-bold text-[#2a1644] transition hover:bg-[#f2ecf8]"
                 >
-                  Pago: {paymentStatusLabel[draft.paymentStatus]}
-                </span>
-                <span
-                  className={`inline-flex items-center whitespace-nowrap rounded-full border px-1.5 py-1 text-[10px] font-semibold ${shippingBadgeClass[draft.shippingStatus]}`}
-                >
-                  Envio: {shippingStatusLabel[draft.shippingStatus]}
-                </span>
+                  Detalle
+                </button>
                 {waLink ? (
                   <a
                     href={waLink}
                     target="_blank"
                     rel="noreferrer"
-                    aria-label="Abrir chat de WhatsApp"
-                    className="ml-auto -mr-0.5 inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-300/45 bg-emerald-500/95 text-white shadow-[0_2px_8px_rgba(0,0,0,0.22)] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200/70"
+                    className="inline-flex items-center justify-center gap-1 rounded-md border border-emerald-300/70 bg-emerald-500 px-2.5 py-2 text-xs font-bold text-white transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200/70"
                   >
                     {whatsappIcon}
+                    WhatsApp
                   </a>
                 ) : (
                   <span
-                    className="ml-auto -mr-0.5 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/18 bg-white/10 text-[var(--brand-cream)]/40"
+                    className="inline-flex items-center justify-center gap-1 rounded-md border border-[#d8cce4] bg-[#f2ecf8] px-2.5 py-2 text-xs font-bold text-[#725f80]/55"
                     aria-hidden
                   >
                     {whatsappIcon}
+                    WhatsApp
                   </span>
                 )}
-              </div>
-
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setEditingOrderId(order.orderId)}
-                  className="rounded-lg bg-[var(--brand-gold-300)] px-2.5 py-2 text-xs font-bold text-[#2f184d] transition hover:brightness-105"
-                >
-                  Editar estado
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedOrderId(order.orderId)}
-                  className="rounded-lg border border-[var(--brand-gold-300)]/25 bg-white/5 px-2.5 py-2 text-xs font-semibold text-[var(--brand-cream)] transition hover:bg-white/10"
-                >
-                  Ver detalle
-                </button>
               </div>
             </article>
           );
@@ -818,25 +1043,26 @@ export default function VentasTable({ orders }: VentasTableProps) {
         )}
       </div>
 
-      <div className="relative z-0 hidden overflow-x-auto rounded-2xl border border-[var(--brand-gold-300)]/25 bg-[rgba(255,255,255,0.95)] shadow-[0_16px_30px_rgba(12,6,24,0.25)] md:block">
-        <table className="min-w-[1080px] w-full table-fixed text-center">
-          <thead className="bg-[var(--brand-violet-900)] text-[var(--brand-cream)]">
+      <div className="relative z-0 hidden overflow-x-auto rounded-lg border border-[#e4d8ec] bg-white shadow-[0_16px_30px_rgba(12,6,24,0.22)] md:block">
+        <table className="min-w-[1180px] w-full table-fixed text-left">
+          <thead className="bg-[#efe7f6] text-[#4f356c]">
             <tr className="text-center text-xs uppercase tracking-[0.1em]">
-              <th className="w-[18%] px-3 py-3">ID Venta</th>
+              <th className="w-[13%] px-3 py-3">Pedido</th>
               <th className="w-[9%] px-3 py-3">Fecha</th>
-              <th className="w-[14%] px-3 py-3">Cliente</th>
+              <th className="w-[15%] px-3 py-3">Cliente</th>
+              <th className="w-[15%] px-3 py-3">Próxima acción</th>
               <th className="w-[9%] px-3 py-3">Total</th>
               <th className="w-[14%] px-3 py-3">Estado Pago</th>
               <th className="w-[14%] px-3 py-3">Estado Envío</th>
-              <th className="w-[9%] px-3 py-3">WhatsApp</th>
-              <th className="w-[13%] px-3 py-3">Detalle</th>
+              <th className="w-[8%] px-3 py-3">Contacto</th>
+              <th className="w-[13%] px-3 py-3">Gestión</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-[var(--brand-violet-700)]/12 bg-white text-[13px] text-[#2a1644]">
+          <tbody className="divide-y divide-[#eadff2] bg-white text-[13px] text-[#2a1644]">
             {visibleOrders.length === 0 ? (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="px-4 py-8 text-center text-sm font-medium text-[var(--brand-violet-900)]/75"
                 >
                   No hay ventas que cumplan con los filtros seleccionados.
@@ -848,24 +1074,25 @@ export default function VentasTable({ orders }: VentasTableProps) {
               const formId = `venta-form-${order.orderId}`;
               const draft = getDraftForOrder(order);
               const rowHasChanges = hasChanges(order, draft);
+              const action = getOrderAction(order, draft);
 
               return (
                 <tr
                   key={order.orderId}
                   className="align-middle transition-colors odd:bg-white even:bg-[rgba(92,54,150,0.04)] hover:bg-[rgba(92,54,150,0.09)]"
                 >
-                  <td className="px-3 py-3.5 text-center">
+                  <td className="px-3 py-3.5">
                     <span
-                      className="inline-block max-w-full truncate font-semibold text-[var(--brand-violet-950)]"
+                      className="block max-w-full truncate font-bold text-[var(--brand-violet-950)]"
                       title={order.orderId}
                     >
-                      {order.orderId}
+                      {getShortOrderId(order.orderId)}
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-3 py-3.5 text-center text-[13px] font-medium tabular-nums text-[var(--brand-violet-900)]/95">
                     {formatDate(order.createdAt)}
                   </td>
-                  <td className="px-3 py-3.5 text-center">
+                  <td className="px-3 py-3.5">
                     <span
                       className="inline-block max-w-full truncate text-[var(--brand-violet-950)] font-bold uppercase tracking-[0.02em]"
                       title={order.customerName || "-"}
@@ -873,8 +1100,13 @@ export default function VentasTable({ orders }: VentasTableProps) {
                       {order.customerName || "-"}
                     </span>
                   </td>
+                  <td className="px-3 py-3.5 text-center">
+                    <span className={`inline-flex max-w-full items-center justify-center rounded-full border px-2 py-1 text-[11px] font-bold ${actionToneClass[action.tone]}`}>
+                      <span className="truncate">{action.label}</span>
+                    </span>
+                  </td>
                   <td className="whitespace-nowrap px-3 py-3.5 text-center font-bold tabular-nums text-[var(--brand-violet-950)]">
-                    {moneyFormatter.format(order.total)}
+                    {formatMoney(order.total)}
                   </td>
                   <td className="px-3 py-3.5 text-center">
                     <div className="relative mx-auto w-[124px]">
@@ -947,12 +1179,12 @@ export default function VentasTable({ orders }: VentasTableProps) {
                         href={waLink}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-block max-w-full truncate font-semibold text-[var(--brand-violet-900)] underline decoration-dotted underline-offset-3 transition hover:text-[var(--brand-violet-950)]"
+                        className="inline-flex items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100"
                       >
-                        {order.whatsapp}
+                        WhatsApp
                       </a>
                     ) : (
-                      "-"
+                      <span className="text-[#725f80]/55">-</span>
                     )}
                   </td>
                   <td className="px-3 py-3.5 text-center">
@@ -964,20 +1196,22 @@ export default function VentasTable({ orders }: VentasTableProps) {
                       >
                         <input type="hidden" name="orderId" value={order.orderId} />
                         <input type="hidden" name="redirectTo" value="/admin/ventas" />
-                        <button
-                          type="submit"
-                          disabled={!rowHasChanges || isPersistingSale}
-                          className="whitespace-nowrap rounded-lg bg-[var(--brand-gold-300)] px-2.5 py-1.5 text-xs font-semibold text-[var(--brand-violet-950)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:bg-[var(--brand-gold-300)]/45 disabled:text-[var(--brand-violet-900)]/65 disabled:opacity-90"
-                        >
-                          Guardar
-                        </button>
+                        {rowHasChanges ? (
+                          <button
+                            type="submit"
+                            disabled={isPersistingSale}
+                            className="whitespace-nowrap rounded-md bg-[var(--brand-gold-300)] px-2.5 py-1.5 text-xs font-bold text-[var(--brand-violet-950)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Guardar
+                          </button>
+                        ) : null}
                       </form>
                       <button
                         type="button"
                         onClick={() => setSelectedOrderId(order.orderId)}
-                        className="whitespace-nowrap rounded-lg border border-[var(--brand-violet-700)]/45 bg-[var(--brand-violet-700)]/14 px-2.5 py-1.5 text-xs font-semibold text-[var(--brand-violet-950)] transition hover:bg-[var(--brand-violet-700)]/22"
+                        className="whitespace-nowrap rounded-md border border-[#d8cce4] bg-white px-2.5 py-1.5 text-xs font-bold text-[var(--brand-violet-950)] transition hover:bg-[#f2ecf8]"
                       >
-                        Ver detalle
+                        Detalle
                       </button>
                     </div>
                   </td>
@@ -1121,7 +1355,7 @@ export default function VentasTable({ orders }: VentasTableProps) {
               {saveDialogState.description}
             </p>
 
-            {saveDialogState.mode === "confirm" ? (
+            {saveDialogState.mode === "confirm" || saveDialogState.mode === "batchConfirm" ? (
               <div className="mt-5 grid grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -1133,7 +1367,11 @@ export default function VentasTable({ orders }: VentasTableProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={handleConfirmSave}
+                  onClick={
+                    saveDialogState.mode === "batchConfirm"
+                      ? handleConfirmBatchSave
+                      : handleConfirmSave
+                  }
                   disabled={isPersistingSale}
                   className="rounded-lg bg-[var(--brand-gold-300)] px-3 py-2 text-xs font-semibold text-[var(--brand-violet-950)] transition hover:brightness-105"
                 >
@@ -1220,107 +1458,176 @@ export default function VentasTable({ orders }: VentasTableProps) {
       )}
 
       {selectedOrder && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-[rgba(10,5,20,0.7)] p-4">
-          <div className="w-full max-w-2xl rounded-3xl border border-[var(--brand-gold-300)]/35 bg-[var(--brand-violet-950)] p-5 text-[var(--brand-cream)] shadow-[0_24px_52px_rgba(4,2,10,0.55)]">
-            <div className="mb-4 flex items-start justify-between gap-4 border-b border-[var(--brand-gold-300)]/20 pb-4">
-              <div className="min-w-0">
-                <p className="text-xs uppercase tracking-[0.12em] text-[var(--brand-gold-300)]/85">Detalle de venta</p>
-                <h3 className="mt-1 truncate whitespace-nowrap [font-family:var(--font-brand-display)] text-xl sm:text-2xl">
-                  {selectedOrder.orderId}
-                </h3>
+        <div className="fixed inset-0 z-[200] flex items-end justify-center bg-[rgba(10,5,20,0.72)] p-0 md:items-center md:p-4">
+          <div className="flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl border border-[var(--brand-gold-300)]/35 bg-[var(--brand-violet-950)] text-[var(--brand-cream)] shadow-[0_-18px_46px_rgba(4,2,10,0.55)] md:max-h-[88vh] md:max-w-[640px] md:rounded-3xl md:shadow-[0_24px_52px_rgba(4,2,10,0.55)]">
+            <div className="border-b border-[var(--brand-gold-300)]/20 px-4 pb-3 pt-4 md:px-5 md:pb-4 md:pt-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--brand-gold-300)]/90">
+                    Detalle de venta
+                  </p>
+                  <h3 className="mt-1 [font-family:var(--font-brand-display)] text-2xl leading-tight text-white md:text-3xl">
+                    Pedido {getShortOrderId(selectedOrder.orderId)}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedOrderId(null)}
+                  className="shrink-0 rounded-full border border-[var(--brand-gold-300)]/45 px-3 py-2 text-xs font-bold text-[var(--brand-cream)] transition hover:bg-white/10"
+                  aria-label="Cerrar detalle"
+                >
+                  Cerrar
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedOrderId(null)}
-                className="rounded-full border border-[var(--brand-gold-300)]/40 p-2 text-[var(--brand-cream)] transition hover:bg-white/10"
-                aria-label="Cerrar detalle"
-              >
-                X
-              </button>
-            </div>
 
-            <div className="grid gap-3 text-sm text-[var(--brand-cream)]/90 sm:grid-cols-2">
-              <p>
-                <span className="text-[var(--brand-cream)]/65">Fecha y hora:</span> {formatDate(selectedOrder.createdAt)}
-              </p>
-              <p>
-                <span className="text-[var(--brand-cream)]/65">Total:</span> {moneyFormatter.format(selectedOrder.total)}
-              </p>
-              <p>
-                <span className="text-[var(--brand-cream)]/65">Forma de pago:</span>{" "}
-                {paymentMethodLabel(selectedOrder.paymentMethod)}
-              </p>
-              <p>
-                <span className="text-[var(--brand-cream)]/65">Cliente:</span> {selectedOrder.customerName || "-"}
-              </p>
-              <p>
-                <span className="text-[var(--brand-cream)]/65">Forma de entrega:</span>{" "}
-                {deliveryMethodLabel(selectedOrder.deliveryMethod)}
-              </p>
-              <p>
-                <span className="text-[var(--brand-cream)]/65">WhatsApp:</span>{" "}
-                {selectedOrderWaLink ? (
-                  <a
-                    href={selectedOrderWaLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[var(--brand-gold-300)] underline decoration-dotted underline-offset-2"
-                  >
-                    {selectedOrder.whatsapp}
-                  </a>
-                ) : (
-                  selectedOrder.whatsapp || "-"
-                )}
-              </p>
-              <p>
-                <span className="text-[var(--brand-cream)]/65">Email:</span>{" "}
-                {selectedOrderMailtoLink ? (
-                  <a
-                    href={selectedOrderMailtoLink}
-                    className="text-[var(--brand-gold-300)] underline decoration-dotted underline-offset-2"
-                  >
-                    {selectedOrder.email}
-                  </a>
-                ) : (
-                  selectedOrder.email || "-"
-                )}
-              </p>
-              <p className="sm:col-span-2">
-                <span className="text-[var(--brand-cream)]/65">Comprobante por email:</span>{" "}
-                <span className={selectedOrderReceiptSent ? "text-emerald-300" : "text-[var(--brand-cream)]/75"}>
-                  {selectedOrderReceiptSent ? "Enviado ✓" : "Pendiente"}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-[var(--brand-gold-300)] px-3 py-1 text-sm font-bold text-[var(--brand-violet-950)]">
+                  {formatMoney(selectedOrder.total)}
                 </span>
-                {selectedOrderReceiptSent && selectedOrder.receiptEmailSentAt ? (
-                  <span className="text-[var(--brand-cream)]/70"> ({formatDate(selectedOrder.receiptEmailSentAt)})</span>
-                ) : null}
-              </p>
+                <span className="rounded-full border border-emerald-200/70 bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-900">
+                  {getOrderGeneralStatus(selectedOrder.paymentStatus, selectedOrder.shippingStatus)}
+                </span>
+              </div>
             </div>
 
-            <div className="mt-5 rounded-2xl border border-[var(--brand-gold-300)]/20 bg-[rgba(255,255,255,0.05)] p-4">
-              <h4 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--brand-gold-300)]">Items comprados</h4>
-              {selectedOrder.items.length > 0 ? (
-                <ul className="mt-2 space-y-2 text-sm">
-                  {selectedOrder.items.map((item, index) => (
-                    <li key={`${item.title}-${index}`} className="flex items-center justify-between gap-3 border-b border-white/10 pb-2 last:border-b-0 last:pb-0">
-                      <span className="text-[var(--brand-cream)]/90">
-                        {item.qty}x {item.title}
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 md:px-5">
+              <section className="rounded-2xl border border-[#e2d7ea] bg-[#fbf8ff] p-3 text-[#2a1644] md:p-4">
+                <dl className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="min-w-0">
+                    <dt className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#7a6988]">Cliente</dt>
+                    <dd className="mt-1 break-words font-bold">{selectedOrder.customerName || "-"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#7a6988]">Fecha</dt>
+                    <dd className="mt-1 font-bold">{formatDate(selectedOrder.createdAt)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#7a6988]">Total</dt>
+                    <dd className="mt-1 whitespace-nowrap font-bold">{formatMoney(selectedOrder.total)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#7a6988]">
+                      Estado general
+                    </dt>
+                    <dd className="mt-1 font-bold">
+                      {getOrderGeneralStatus(selectedOrder.paymentStatus, selectedOrder.shippingStatus)}
+                    </dd>
+                  </div>
+                </dl>
+                <p className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-[#5a4867]">
+                  Pago {paymentStatusLabel[selectedOrder.paymentStatus].toLowerCase()} · Envío{" "}
+                  {shippingStatusLabel[selectedOrder.shippingStatus].toLowerCase()}
+                </p>
+                <div className="mt-2 grid gap-2 text-xs text-[#5a4867] sm:grid-cols-2">
+                  <p className="rounded-xl bg-white px-3 py-2">
+                    <span className="font-bold">Forma de pago:</span>{" "}
+                    {paymentMethodLabel(selectedOrder.paymentMethod)}
+                  </p>
+                  <p className="rounded-xl bg-white px-3 py-2">
+                    <span className="font-bold">Entrega:</span>{" "}
+                    {deliveryMethodLabel(selectedOrder.deliveryMethod)}
+                  </p>
+                </div>
+              </section>
+
+              <section className="grid gap-2 rounded-2xl border border-[var(--brand-gold-300)]/20 bg-white/8 p-3 text-sm md:grid-cols-2 md:p-4">
+                <div className="min-w-0 rounded-xl bg-white/8 px-3 py-2">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--brand-cream)]/65">
+                    WhatsApp
+                  </p>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate font-semibold text-white">
+                      {selectedOrder.whatsapp || "-"}
+                    </span>
+                    {selectedOrderWaLink ? (
+                      <a
+                        href={selectedOrderWaLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="shrink-0 rounded-lg bg-emerald-100 px-3 py-1.5 text-xs font-bold text-emerald-900 transition hover:bg-emerald-200"
+                      >
+                        Abrir
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="min-w-0 rounded-xl bg-white/8 px-3 py-2">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--brand-cream)]/65">
+                    Email
+                  </p>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate font-semibold text-white" title={selectedOrder.email}>
+                      {selectedOrder.email || "-"}
+                    </span>
+                    {selectedOrderMailtoLink ? (
+                      <a
+                        href={selectedOrderMailtoLink}
+                        className="shrink-0 rounded-lg border border-[var(--brand-gold-300)]/45 px-3 py-1.5 text-xs font-bold text-[var(--brand-cream)] transition hover:bg-white/10"
+                      >
+                        Abrir
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="min-w-0 rounded-xl bg-white/8 px-3 py-2 md:col-span-2">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--brand-cream)]/65">
+                    Comprobante enviado
+                  </p>
+                  <p
+                    className={`mt-1 text-sm font-semibold ${
+                      selectedOrderReceiptSent ? "text-emerald-200" : "text-[var(--brand-cream)]/88"
+                    }`}
+                  >
+                    {selectedOrderReceiptSent ? "Enviado" : "Pendiente"}
+                    {selectedOrderReceiptSent && selectedOrder.receiptEmailSentAt ? (
+                      <span className="font-normal text-[var(--brand-cream)]/70">
+                        {" "}
+                        · {formatDate(selectedOrder.receiptEmailSentAt)}
                       </span>
-                      <span className="text-xs text-[var(--brand-gold-300)]">
-                        {typeof item.unitPrice === "number" ? moneyFormatter.format(item.unitPrice) : ""}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : selectedOrder.itemsSummary ? (
-                <p className="mt-2 text-sm text-[var(--brand-cream)]/85">{selectedOrder.itemsSummary}</p>
+                    ) : null}
+                  </p>
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-[#e2d7ea] bg-[#fbf8ff] p-3 text-[#2a1644] md:p-4">
+                <h4 className="text-xs font-bold uppercase tracking-[0.12em] text-[#6b4a82]">Items comprados</h4>
+                {selectedOrder.items.length > 0 ? (
+                  <ul className="mt-3 divide-y divide-[#e6ddec] text-sm">
+                    {selectedOrder.items.map((item, index) => (
+                      <li key={`${item.title}-${index}`} className="flex items-start justify-between gap-3 py-2 first:pt-0 last:pb-0">
+                        <span className="min-w-0 break-words font-semibold leading-snug">
+                          <span className="mr-1 rounded-md bg-[#efe7f6] px-1.5 py-0.5 text-xs font-bold text-[#6b4a82]">
+                            {item.qty}x
+                          </span>
+                          {item.title}
+                        </span>
+                        <span className="shrink-0 whitespace-nowrap text-xs font-bold text-[#6b4a82]">
+                          {typeof item.unitPrice === "number" ? formatMoney(item.unitPrice) : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : selectedOrder.itemsSummary ? (
+                  <p className="mt-2 break-words text-sm font-medium text-[#3d2852]">{selectedOrder.itemsSummary}</p>
+                ) : (
+                  <p className="mt-2 text-sm text-[#725f80]">No hay detalle de items disponible.</p>
+                )}
+              </section>
+
+              {selectedOrder.notes ? (
+                <section className="rounded-2xl border border-[var(--brand-gold-300)]/20 bg-white/8 p-3 md:p-4">
+                  <h4 className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--brand-gold-300)]">
+                    Notas
+                  </h4>
+                  <p className="mt-1 break-words text-sm text-[var(--brand-cream)]/90">{selectedOrder.notes}</p>
+                </section>
               ) : (
-                <p className="mt-2 text-sm text-[var(--brand-cream)]/65">No hay detalle de items disponible.</p>
+                <p className="px-1 text-xs text-[var(--brand-cream)]/65">Notas: sin notas</p>
               )}
-            </div>
 
-            <div className="mt-4 rounded-2xl border border-[var(--brand-gold-300)]/20 bg-[rgba(255,255,255,0.04)] p-4">
-              <h4 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--brand-gold-300)]">Notas</h4>
-              <p className="mt-1 text-sm text-[var(--brand-cream)]/85">{selectedOrder.notes || "Sin notas."}</p>
+              <p className="break-all px-1 text-[11px] text-[var(--brand-cream)]/55" title={selectedOrder.orderId}>
+                ID interno: {selectedOrder.orderId}
+              </p>
             </div>
           </div>
         </div>

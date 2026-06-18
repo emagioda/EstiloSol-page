@@ -45,7 +45,7 @@ export default function AdminBreadcrumbs() {
   ];
 
   return (
-    <nav aria-label="Migas de pan" className="flex flex-wrap items-center gap-1 text-xs text-[var(--brand-cream)]/75">
+    <nav aria-label="Migas de pan" className="hidden flex-wrap items-center gap-1 text-xs text-[var(--brand-cream)]/75 md:flex">
       {crumbs.map((crumb, index) => (
         <span key={crumb.href} className="inline-flex items-center gap-1">
           {index > 0 ? <span aria-hidden className="text-[var(--brand-gold-300)]/80">/</span> : null}

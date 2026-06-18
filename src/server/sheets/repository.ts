@@ -102,6 +102,8 @@ const normalizeKey = (value: string) =>
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 
+const compactKey = (value: string) => normalizeKey(value).replace(/_/g, "");
+
 const normalizeToken = (value: unknown) =>
   String(value ?? "")
     .toLowerCase()
@@ -231,6 +233,18 @@ const pickValue = (row: SheetRow, keys: string[]) => {
     if (typeof value === "string" && !value.trim()) continue;
     return value;
   }
+
+  const rowEntries = Object.entries(row);
+  for (const key of keys) {
+    const compact = compactKey(key);
+    const match = rowEntries.find(([rowKey]) => compactKey(rowKey) === compact);
+    if (!match) continue;
+    const value = match[1];
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && !value.trim()) continue;
+    return value;
+  }
+
   return undefined;
 };
 
