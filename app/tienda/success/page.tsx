@@ -37,6 +37,7 @@ const ESTILO_SOL_SUPPORT_EMAIL = brandConfig.contactInfo.email;
 const ESTILO_SOL_WHATSAPP_LABEL =
   brandConfig.contactInfo.socialNetworks.find((network) => network.icon === "whatsapp")?.label || "";
 const ESTILO_SOL_WHATSAPP_PHONE = brandConfig.contactInfo.whatsappPhone;
+const BANK_TRANSFER_INFO = brandConfig.paymentInfo.transfer;
 const RECEIPT_PDF_MODE: "compact" | "a4" = "compact";
 
 const formatMoney = (value: number) =>
@@ -473,6 +474,9 @@ export default function SuccessPage() {
     isPending: status === "pending",
   });
   const orderCode = shortOrderCode(paymentData?.externalReference);
+  const isTransferPending =
+    status === "pending" &&
+    (orderSummary?.paymentMethod === "transfer" || paymentData?.paymentMethodLabel === "Transferencia bancaria");
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[var(--brand-violet-950)] text-[var(--brand-cream)] p-4">
@@ -541,6 +545,39 @@ export default function SuccessPage() {
               <p className="text-center text-xs text-[var(--brand-cream)]/70 mt-4">
                 Continua por WhatsApp para enviar comprobante o coordinar la entrega.
               </p>
+            </div>
+          )}
+
+          {isTransferPending && (
+            <div className="mb-6 rounded border border-amber-300/35 bg-[var(--brand-violet-950)] p-5 text-sm">
+              <div className="mb-4">
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-amber-200">
+                  Datos bancarios
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-[var(--brand-cream)]/72">
+                  Podes hacer la transferencia con estos datos y enviarnos el comprobante por WhatsApp.
+                </p>
+              </div>
+              <dl className="divide-y divide-[var(--brand-violet-800)] text-[var(--brand-cream)]/90">
+                <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-3 py-2">
+                  <dt className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)]/60">
+                    Banco
+                  </dt>
+                  <dd className="font-semibold text-amber-200">{BANK_TRANSFER_INFO.bankName}</dd>
+                </div>
+                <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-3 py-2">
+                  <dt className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)]/60">
+                    CVU
+                  </dt>
+                  <dd className="break-all font-semibold text-amber-200">{BANK_TRANSFER_INFO.cvu}</dd>
+                </div>
+                <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-3 py-2">
+                  <dt className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--brand-cream)]/60">
+                    Alias
+                  </dt>
+                  <dd className="break-all font-semibold text-amber-200">{BANK_TRANSFER_INFO.alias}</dd>
+                </div>
+              </dl>
             </div>
           )}
 

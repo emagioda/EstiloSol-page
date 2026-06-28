@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { fetchProductsFromCatalogSource } from "@/src/server/catalog/source";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const revalidate = 180;
 
 const PUBLIC_CATALOG_CACHE_CONTROL = "public, s-maxage=180, stale-while-revalidate=120";
