@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
@@ -16,6 +16,12 @@ import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useC
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import { formatProductCategories } from "@/src/features/shop/domain/productCategories";
+import {
+  getProductGroupId,
+  getProductVariantLabel,
+  getProductVariants,
+  hasProductVariants,
+} from "@/src/features/shop/domain/productVariants";
 import { getCashTransferDiscountedTotal } from "@/src/features/shop/domain/cashTransferDiscount";
 import {
   getStockLabel,
@@ -236,13 +242,22 @@ function ProductDescriptionDetails({ description, includes }: { description: str
 }
 
 export default function ProductDetail({ product, similarProducts = [] }: Props) {
-  const currentProduct = product;
+  const variants = useMemo(() => getProductVariants(product), [product]);
+  const hasVariants = hasProductVariants(product);
+  const [selectedVariantId, setSelectedVariantId] = useState(product.id);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [qty, setQty] = useState(1);
+  const currentProduct = variants.find((variant) => variant.id === selectedVariantId) ?? variants[0] ?? product;
+  const selectedGroupId = getProductGroupId(currentProduct);
   const visibleSimilarProducts = useMemo(
     () =>
       similarProducts
-        .filter((candidate) => candidate.id !== currentProduct.id)
+        .filter((candidate) => {
+          if (candidate.id === currentProduct.id) return false;
+          return !selectedGroupId || getProductGroupId(candidate) !== selectedGroupId;
+        })
         .slice(0, 6),
-    [currentProduct.id, similarProducts],
+    [currentProduct.id, selectedGroupId, similarProducts],
   );
   const similarProductsScrollerRef = useRef<HTMLDivElement | null>(null);
 
@@ -253,11 +268,28 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
         : [],
     [currentProduct.images]
   );
-  const [currentImageIndex, setCurrentImageIndex] = useState(0);
-  const [qty, setQty] = useState(1);
   const router = useRouter();
   const { addItem, items } = useCart();
   const { setOpen } = useCartDrawer();
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSelectedVariantId(product.id);
+      setQty(1);
+      setCurrentImageIndex(0);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [product]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setQty(1);
+      setCurrentImageIndex(0);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [selectedVariantId]);
 
   const safeUnitPrice = isValidPrice(currentProduct.price) ? currentProduct.price : 0;
   const displayPrice = isValidPrice(currentProduct.price) ? formatMoney(currentProduct.price) : "Consultar";
@@ -307,10 +339,14 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
   const handleAddToCart = () => {
     if (!canAddToCart) return;
 
+    const cartItemName = hasVariants
+      ? `${product.name} - ${getProductVariantLabel(currentProduct)}`
+      : currentProduct.name;
+
     try {
       const result = addItem({
         productId: currentProduct.id,
-        name: currentProduct.name,
+        name: cartItemName,
         unitPrice: safeUnitPrice,
         qty: effectiveQty,
         image: images[0] ?? "",
@@ -327,7 +363,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
       }
       setQty(1);
       showCartAddedToast({
-        productName: currentProduct.name,
+        productName: cartItemName,
         image: images[0],
         onViewCart: () => setOpen(true),
       });
@@ -378,7 +414,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
               {stockLabel}
             </div>
           </div>
-          <h1 className="text-3xl font-semibold leading-tight text-[var(--brand-cream)]">{currentProduct.name}</h1>
+          <h1 className="text-3xl font-semibold leading-tight text-[var(--brand-cream)]">{product.name}</h1>
           <div className="space-y-2">
             <p className="text-3xl font-extrabold text-yellow-100">
               {displayPrice}
@@ -390,6 +426,45 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
               </p>
             )}
           </div>
+
+          {hasVariants ? (
+            <fieldset className="rounded-2xl border border-[var(--brand-gold-300)]/20 bg-white/[0.06] p-3 shadow-[0_12px_28px_rgba(18,8,35,0.16)]">
+              <legend className="px-1 text-xs font-bold uppercase tracking-[0.16em] text-[var(--brand-gold-300)]">
+                Diseño
+              </legend>
+              <div className="mt-2 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Elegir diseño">
+                {variants.map((variant, index) => {
+                  const selected = variant.id === currentProduct.id;
+                  const disabled = !isProductPurchasable(variant);
+                  const label = getProductVariantLabel(variant, index);
+
+                  return (
+                    <button
+                      key={variant.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      disabled={disabled}
+                      onClick={() => setSelectedVariantId(variant.id)}
+                      className={`min-h-12 rounded-xl border px-3 py-2 text-sm font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)] ${
+                        selected
+                          ? "border-[var(--brand-gold-300)] bg-[var(--brand-gold-300)] text-[var(--brand-violet-950)] shadow-md"
+                          : "border-white/18 bg-white/[0.10] text-[var(--brand-cream)] hover:border-[var(--brand-gold-300)]/55 hover:bg-white/[0.14]"
+                      } disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-[var(--brand-cream)]/38`}
+                      title={disabled ? `${label} sin stock` : `Elegir ${label}`}
+                    >
+                      <span className="block truncate">{label}</span>
+                      {disabled ? (
+                        <span className="mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.08em]">
+                          Sin stock
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+          ) : null}
 
           <div className="flex flex-row items-center gap-3">
             <div className="inline-flex items-center rounded-2xl bg-white/10 border border-white/15 p-1 backdrop-blur-sm">

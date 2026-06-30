@@ -245,6 +245,8 @@ function normalizeProduct(p) {
     product_type: compactKey(p.product_type) === "kit" ? "KIT" : "UNICO",
     images: images,
     specifications: specifications,
+    group_id: p.group_id ? String(p.group_id).trim() : null,
+    variant_name: p.variant_name ? String(p.variant_name).trim() : null,
     is_featured: toBool(p.is_featured || p.destacado),
     is_new: toBool(p.is_new || p.nuevo),
     is_sale: toBool(p.is_sale || p.oferta) || (typeof oldPrice === "number" && typeof price === "number" && oldPrice > price),

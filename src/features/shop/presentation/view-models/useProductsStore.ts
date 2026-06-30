@@ -254,6 +254,8 @@ const productSignature = (products: Product[]): string =>
         product.departament ?? "",
         product.category ?? "",
         product.product_type ?? "",
+        product.group_id ?? "",
+        product.variant_name ?? "",
         product.active === false ? "0" : "1",
         product.is_new ? "1" : "0",
         product.is_featured ? "1" : "0",

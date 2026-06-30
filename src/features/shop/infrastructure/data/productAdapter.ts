@@ -192,6 +192,8 @@ export function adaptSheetRowToProduct(rawRow: RawProductRow): Product | null {
     product_type: toProductType(pick(row, ["product_type", "tipo_producto"])),
     images,
     specifications: toSpecifications(pick(row, ["specifications", "specs", "specs_csv"])),
+    group_id: toStringOrNull(pick(row, ["group_id", "variant_group_id", "grupo_variante"])) ?? undefined,
+    variant_name: toStringOrNull(pick(row, ["variant_name", "variant", "variante", "diseno", "diseño", "opcion"])) ?? undefined,
     is_featured: toBoolean(pick(row, ["is_featured", "destacado"]), false),
     is_new: toBoolean(pick(row, ["is_new", "nuevo"]), false),
     is_sale:

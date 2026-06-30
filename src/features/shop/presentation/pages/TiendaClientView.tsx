@@ -11,6 +11,10 @@ import {
   type FilterState,
 } from "../view-models/useProductsStore";
 import type { Departament, Product } from "@/src/features/shop/domain/entities/Product";
+import {
+  attachProductVariants,
+  groupProductsForDisplay,
+} from "@/src/features/shop/domain/productVariants";
 import ProductsGrid from "@/src/features/shop/presentation/components/ProductsGrid/ProductsGrid";
 import FiltersSidebar from "@/src/features/shop/presentation/components/FiltersSidebar/FiltersSidebar";
 import StoreToolbar from "@/src/features/shop/presentation/components/StoreToolbar/StoreToolbar";
@@ -242,10 +246,18 @@ export default function TiendaClientView({
     [ensureFullCatalog, toggleSpecFilter]
   );
 
-  const departamentFilteredProducts = products.filter(
-    (p) =>
-      typeof p.departament === "string" &&
-      p.departament.toLowerCase() === selectedWorld.toLowerCase()
+  const departamentFilteredProducts = useMemo(
+    () =>
+      products.filter(
+        (p) =>
+          typeof p.departament === "string" &&
+          p.departament.toLowerCase() === selectedWorld.toLowerCase(),
+      ),
+    [products, selectedWorld],
+  );
+  const displayProducts = useMemo(
+    () => groupProductsForDisplay(departamentFilteredProducts),
+    [departamentFilteredProducts],
   );
 
   const activeFilterChips = [
@@ -712,9 +724,9 @@ export default function TiendaClientView({
   const handleOpenQuickView = useCallback(
     (product: Product) => {
       quickViewScrollYRef.current = window.scrollY;
-      openQuickView(product);
+      openQuickView(attachProductVariants(product, allProducts));
     },
-    [openQuickView]
+    [allProducts, openQuickView]
   );
 
   return (
@@ -970,7 +982,7 @@ export default function TiendaClientView({
                 </div>
               ) : (
                 <ProductsGrid
-                  products={departamentFilteredProducts}
+                  products={displayProducts}
                   onQuickView={handleOpenQuickView}
                   catalogComplete={catalogComplete}
                   catalogRefreshing={catalogRefreshing}

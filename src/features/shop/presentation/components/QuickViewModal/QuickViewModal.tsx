@@ -5,6 +5,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import {
+  getProductVariantLabel,
+  getProductVariants,
+  hasProductVariants,
+} from "@/src/features/shop/domain/productVariants";
 import { formatProductCategories } from "@/src/features/shop/domain/productCategories";
 import { getCashTransferDiscountedTotal } from "@/src/features/shop/domain/cashTransferDiscount";
 import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
@@ -29,16 +34,45 @@ export default function QuickViewModal({
   const { addItem, items } = useCart();
   const [qty, setQty] = useState(1);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const variants = useMemo(() => (product ? getProductVariants(product) : []), [product]);
+  const hasVariants = product ? hasProductVariants(product) : false;
+  const activeProduct =
+    variants.find((variant) => variant.id === selectedVariantId) ?? variants[0] ?? product;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setCurrentImageIndex(0), 0);
     return () => window.clearTimeout(timer);
   }, [product]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (!product) {
+        setSelectedVariantId(null);
+        return;
+      }
+
+      setSelectedVariantId(product.id);
+      setQty(1);
+      setCurrentImageIndex(0);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [product]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setQty(1);
+      setCurrentImageIndex(0);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [selectedVariantId]);
+
   const images = useMemo(
     () =>
-      (product?.images ?? []).filter((image): image is string => {
+      (activeProduct?.images ?? []).filter((image): image is string => {
         if (typeof image !== "string") return false;
         const trimmed = image.trim();
         if (!trimmed) return false;
@@ -51,36 +85,36 @@ export default function QuickViewModal({
           return false;
         }
       }),
-    [product?.images]
+    [activeProduct?.images]
   );
 
-  const shortDescription = (product?.short_description ?? "").trim();
-  const stockLabel = product ? getStockLabel(product) : "";
-  const canBuy = product ? isProductPurchasable(product) : false;
-  const isLastUnit = canBuy && product?.stock_qty === 1;
-  const cartQty = product
-    ? items.find((item) => item.productId === product.id)?.qty ?? 0
+  const shortDescription = (activeProduct?.short_description ?? product?.short_description ?? "").trim();
+  const stockLabel = activeProduct ? getStockLabel(activeProduct) : "";
+  const canBuy = activeProduct ? isProductPurchasable(activeProduct) : false;
+  const isLastUnit = canBuy && activeProduct?.stock_qty === 1;
+  const cartQty = activeProduct
+    ? items.find((item) => item.productId === activeProduct.id)?.qty ?? 0
     : 0;
-  const maxQty = typeof product?.stock_qty === "number" ? product.stock_qty : null;
+  const maxQty = typeof activeProduct?.stock_qty === "number" ? activeProduct.stock_qty : null;
   const remainingQty = maxQty === null ? null : Math.max(0, maxQty - cartQty);
   const canAddToCart = canBuy && (remainingQty === null || remainingQty > 0);
   const effectiveQty =
     remainingQty === null ? qty : Math.max(1, Math.min(qty, Math.max(remainingQty, 1)));
   const formattedPrice =
-    typeof product?.price === "number" && Number.isFinite(product.price)
+    typeof activeProduct?.price === "number" && Number.isFinite(activeProduct.price)
       ? new Intl.NumberFormat("es-AR", {
           style: "currency",
-          currency: product?.currency || "ARS",
+          currency: activeProduct?.currency || "ARS",
           maximumFractionDigits: 0,
-        }).format(product.price)
+        }).format(activeProduct.price)
       : "Consultar";
   const discountedPrice =
-    typeof product?.price === "number" && Number.isFinite(product.price)
+    typeof activeProduct?.price === "number" && Number.isFinite(activeProduct.price)
       ? new Intl.NumberFormat("es-AR", {
           style: "currency",
-          currency: product?.currency || "ARS",
+          currency: activeProduct?.currency || "ARS",
           maximumFractionDigits: 0,
-        }).format(getCashTransferDiscountedTotal(product.price))
+        }).format(getCashTransferDiscountedTotal(activeProduct.price))
       : null;
 
   useBodyScrollLock(open);
@@ -118,7 +152,7 @@ export default function QuickViewModal({
     }
   }, [open]);
 
-  if (!open || !product) return null;
+  if (!open || !product || !activeProduct) return null;
 
   const safeIndex = images.length
     ? Math.min(Math.max(currentImageIndex, 0), images.length - 1)
@@ -152,9 +186,9 @@ export default function QuickViewModal({
           <div className="grid max-h-[90vh] overflow-y-auto overflow-x-hidden overscroll-contain sm:grid-cols-2 scrollbar-hide">
             <div className="flex h-auto flex-col bg-[var(--brand-cream)] p-3 sm:p-4">
               <ProductImageGalleryZoom
-                key={`${product.id}-${open ? "open" : "closed"}`}
+                key={`${activeProduct.id}-${open ? "open" : "closed"}`}
                 images={images}
-                productName={product.name}
+                productName={activeProduct.name}
                 currentImageIndex={safeIndex}
                 onImageIndexChange={setCurrentImageIndex}
                 theme="quickview"
@@ -204,6 +238,45 @@ export default function QuickViewModal({
             </div>
 
             <div className="flex flex-col gap-4 pt-2">
+              {hasVariants ? (
+                <fieldset className="rounded-2xl border border-[var(--brand-violet-950)]/15 bg-[var(--brand-violet-950)]/[0.04] p-3">
+                  <legend className="px-1 text-xs font-bold uppercase tracking-[0.14em] text-[var(--brand-violet-700)]">
+                    Diseño
+                  </legend>
+                  <div className="mt-2 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Elegir diseño">
+                    {variants.map((variant, index) => {
+                      const selected = variant.id === activeProduct.id;
+                      const disabled = !isProductPurchasable(variant);
+                      const label = getProductVariantLabel(variant, index);
+
+                      return (
+                        <button
+                          key={variant.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          disabled={disabled}
+                          onClick={() => setSelectedVariantId(variant.id)}
+                          className={`min-h-11 rounded-xl border px-2.5 py-2 text-sm font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-violet-900)]/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-cream)] ${
+                            selected
+                              ? "border-[var(--brand-violet-950)] bg-[var(--brand-violet-950)] text-white shadow-md"
+                              : "border-[var(--brand-violet-950)]/18 bg-white/70 text-[var(--brand-violet-950)] hover:border-[var(--brand-violet-950)]/45 hover:bg-white"
+                          } disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400`}
+                          title={disabled ? `${label} sin stock` : `Elegir ${label}`}
+                        >
+                          <span className="block truncate">{label}</span>
+                          {disabled ? (
+                            <span className="mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.08em]">
+                              Sin stock
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+              ) : null}
+
               <div className="flex flex-nowrap items-center justify-between gap-3 w-full">
                 <div className="inline-flex items-center rounded-2xl bg-[var(--brand-violet-950)]/10 border border-[var(--brand-violet-950)]/15 p-1 backdrop-blur-sm">
                   <button
@@ -242,21 +315,29 @@ export default function QuickViewModal({
                     if (!canAddToCart) return;
                     try {
                       const result = addItem({
-                        productId: product.id,
-                        name: product.name,
-                        unitPrice: product.price,
+                        productId: activeProduct.id,
+                        name: hasVariants
+                          ? `${product.name} - ${getProductVariantLabel(activeProduct)}`
+                          : activeProduct.name,
+                        unitPrice: activeProduct.price,
                         qty: effectiveQty,
                         image: currentImage,
-                        stockStatus: product.stock_status,
-                        stockQty: product.stock_qty ?? null,
+                        stockStatus: activeProduct.stock_status,
+                        stockQty: activeProduct.stock_qty ?? null,
                       });
                       if (!result.ok) {
-                        onAddFeedback?.({ ok: false, name: product.name });
+                        onAddFeedback?.({ ok: false, name: activeProduct.name });
                         return;
                       }
-                      onAddFeedback?.({ ok: true, name: product.name, image: currentImage });
+                      onAddFeedback?.({
+                        ok: true,
+                        name: hasVariants
+                          ? `${product.name} - ${getProductVariantLabel(activeProduct)}`
+                          : activeProduct.name,
+                        image: currentImage,
+                      });
                     } catch {
-                      onAddFeedback?.({ ok: false, name: product.name });
+                      onAddFeedback?.({ ok: false, name: activeProduct.name });
                     }
                     onClose();
                   }}
@@ -278,7 +359,7 @@ export default function QuickViewModal({
               )}
 
               <Link
-                href={`/tienda/producto/${product.slug || encodeURIComponent(String(product.id))}`}
+                href={`/tienda/producto/${activeProduct.slug || encodeURIComponent(String(activeProduct.id))}`}
                 onClick={onClose}
                 className="block w-full text-center py-3 px-4 rounded-2xl border border-[var(--brand-violet-950)]/30 bg-[var(--brand-violet-950)]/5 text-[var(--brand-violet-900)] font-semibold hover:bg-[var(--brand-violet-950)]/10 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-violet-900)]/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-cream)]"
               >

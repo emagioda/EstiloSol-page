@@ -347,7 +347,7 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
 
           const syncedItem: CartItem = {
             ...item,
-            name: product.name || item.name,
+            name: product.variant_name ? `${product.name} - ${product.variant_name}` : product.name || item.name,
             unitPrice: normalizePrice(product.price),
             image: item.image || product.images?.[0],
             stockStatus: normalizeStockStatus(product.stock_status),

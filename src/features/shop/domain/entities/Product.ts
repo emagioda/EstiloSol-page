@@ -18,6 +18,9 @@ export type Product = {
   specifications?: Record<string, string>;
   product_type?: ProductType;
   includes?: string[];
+  group_id?: string;
+  variant_name?: string;
+  variants?: Product[];
   is_new?: boolean;
   is_featured?: boolean;
   is_sale?: boolean;

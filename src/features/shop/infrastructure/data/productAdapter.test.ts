@@ -16,6 +16,8 @@ describe("productAdapter", () => {
         product_type: "ÚNICO",
         images_csv: "https://i.ibb.co/a.jpg, https://i.ibb.co/b.jpg",
         specs_csv: "Beneficio: Brillo, Cabello: Seco",
+        group_id: "ampolla-capilar",
+        variant_name: "Argan",
         stock_status: "in_stock",
         stock_qty: "4",
         is_new: "1",
@@ -46,6 +48,8 @@ describe("productAdapter", () => {
       is_sale: true,
       stock_status: "in_stock",
       stock_qty: 4,
+      group_id: "ampolla-capilar",
+      variant_name: "Argan",
     });
     expect(products[0].images).toEqual(["https://i.ibb.co/a.jpg", "https://i.ibb.co/b.jpg"]);
     expect(products[0].specifications).toEqual({ Beneficio: "Brillo", Cabello: "Seco" });

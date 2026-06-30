@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import ProductDetail from "@/src/features/shop/presentation/pages/ProductDetail";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import { attachProductVariants } from "@/src/features/shop/domain/productVariants";
 import {
   getProductCategories,
   productBelongsToCategory,
@@ -49,7 +50,7 @@ const loadProductContext = async (
   const product = findProductBySlugOrId(products, slug);
 
   return {
-    product,
+    product: product ? attachProductVariants(product, products) : undefined,
     similarProducts: product ? findSimilarProducts(products, product) : [],
   };
 };

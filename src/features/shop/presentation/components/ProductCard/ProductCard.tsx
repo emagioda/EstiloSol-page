@@ -3,6 +3,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { memo } from "react";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
+import {
+  areVariantPricesDifferent,
+  getProductVariants,
+  hasProductVariants,
+} from "@/src/features/shop/domain/productVariants";
 import { rememberCurrentShopScroll } from "@/src/features/shop/presentation/lib/shopScrollRestoration";
 import {
   getStockLabel,
@@ -27,7 +32,12 @@ function ProductCard({
   priority?: boolean;
 }) {
   const hasCurrentPrice = isValidNumber(product.price);
-  const formattedPrice = hasCurrentPrice ? ARS_FORMATTER.format(product.price) : "Consultar";
+  const variants = getProductVariants(product);
+  const hasVariants = hasProductVariants(product);
+  const hasPriceRange = hasVariants && areVariantPricesDifferent(variants);
+  const formattedPrice = hasCurrentPrice
+    ? `${hasPriceRange ? "Desde " : ""}${ARS_FORMATTER.format(product.price)}`
+    : "Consultar";
   const oldPrice = isValidNumber(product.old_price) ? product.old_price : null;
   const hasOldPrice = oldPrice !== null && hasCurrentPrice && oldPrice > product.price;
   const formattedOldPrice = hasOldPrice ? ARS_FORMATTER.format(oldPrice) : null;
@@ -77,6 +87,13 @@ function ProductCard({
       key: "sale",
       label: hasOldPrice && discountPercent ? `-${discountPercent}% OFF` : "PROMO",
       className: "bg-gradient-to-r from-red-500 to-orange-500 text-white",
+    });
+  }
+  if (hasVariants) {
+    badges.push({
+      key: "variants",
+      label: `${variants.length} DISEÑOS`,
+      className: "bg-[var(--brand-violet-950)]/88 text-[var(--brand-gold-300)] ring-1 ring-white/20",
     });
   }
 
