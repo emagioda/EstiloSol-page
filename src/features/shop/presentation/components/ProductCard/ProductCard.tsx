@@ -1,7 +1,7 @@
 "use client";
 import Image from "next/image";
 import Link from "next/link";
-import { memo } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import {
   areVariantPricesDifferent,
@@ -22,6 +22,18 @@ const ARS_FORMATTER = new Intl.NumberFormat("es-AR", {
 const isValidNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
+const CAROUSEL_INTERVAL_MS = 3200;
+
+const getFirstImage = (product: Product) =>
+  product.images && product.images.length > 0 ? product.images[0] : undefined;
+
+const uniqueImages = (images: Array<string | undefined>) =>
+  Array.from(
+    new Set(
+      images.filter((image): image is string => typeof image === "string" && image.trim().length > 0),
+    ),
+  );
+
 function ProductCard({
   product,
   onQuickView,
@@ -31,9 +43,28 @@ function ProductCard({
   onQuickView?: (product: Product) => void;
   priority?: boolean;
 }) {
+  const cardRef = useRef<HTMLElement | null>(null);
+  const [isCardVisible, setIsCardVisible] = useState(false);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [isTrackTransitionEnabled, setIsTrackTransitionEnabled] = useState(true);
+  const prefersReducedMotion = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    [],
+  );
   const hasCurrentPrice = isValidNumber(product.price);
   const variants = getProductVariants(product);
   const hasVariants = hasProductVariants(product);
+  const carouselImages = useMemo(
+    () =>
+      hasVariants
+        ? uniqueImages(variants.map(getFirstImage))
+        : uniqueImages([getFirstImage(product)]),
+    [hasVariants, product, variants],
+  );
+  const canRotateImages = carouselImages.length > 1 && !prefersReducedMotion;
+  const trackImages = canRotateImages ? [...carouselImages, carouselImages[0]] : carouselImages;
   const hasPriceRange = hasVariants && areVariantPricesDifferent(variants);
   const formattedPrice = hasCurrentPrice
     ? `${hasPriceRange ? "Desde " : ""}${ARS_FORMATTER.format(product.price)}`
@@ -53,7 +84,6 @@ function ProductCard({
     });
   };
 
-  const thumb = product.images && product.images.length > 0 ? product.images[0] : undefined;
   const stockLabel = getStockLabel(product);
   const canBuy = isProductPurchasable(product);
   const isLastUnit = canBuy && product.stock_qty === 1;
@@ -97,6 +127,55 @@ function ProductCard({
     });
   }
 
+  useEffect(() => {
+    if (!canRotateImages) return;
+
+    const card = cardRef.current;
+    if (!card || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsCardVisible(Boolean(entry?.isIntersecting));
+      },
+      { rootMargin: "120px 0px", threshold: 0.35 },
+    );
+
+    observer.observe(card);
+    return () => observer.disconnect();
+  }, [canRotateImages]);
+
+  useEffect(() => {
+    if (!canRotateImages || !isCardVisible) return;
+
+    const interval = window.setInterval(() => {
+      setIsTrackTransitionEnabled(true);
+      setActiveImageIndex((index) => index + 1);
+    }, CAROUSEL_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [canRotateImages, isCardVisible]);
+
+  useEffect(() => {
+    if (activeImageIndex <= carouselImages.length) return;
+
+    const timer = window.setTimeout(() => {
+      setIsTrackTransitionEnabled(false);
+      setActiveImageIndex(0);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeImageIndex, carouselImages.length]);
+
+  const handleCarouselTransitionEnd = () => {
+    if (!canRotateImages || activeImageIndex !== carouselImages.length) return;
+
+    setIsTrackTransitionEnabled(false);
+    setActiveImageIndex(0);
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => setIsTrackTransitionEnabled(true));
+    });
+  };
+
   const mediaAndBody = (
     <>
       <div className="relative aspect-[4/5] w-full overflow-hidden rounded-t-2xl">
@@ -113,15 +192,27 @@ function ProductCard({
           </div>
         )}
 
-        {thumb ? (
-          <Image
-            src={thumb}
-            alt={product.name}
-            fill
-            className="object-cover transition-transform duration-300 group-hover:scale-105"
-            sizes="(max-width:640px) 50vw, (max-width:1024px) 33vw, 25vw"
-            priority={priority}
-          />
+        {trackImages.length > 0 ? (
+          <div
+            className={`flex h-full w-full ${
+              canRotateImages && isTrackTransitionEnabled ? "transition-transform duration-700 ease-in-out" : ""
+            }`}
+            style={{ transform: `translateX(-${activeImageIndex * 100}%)` }}
+            onTransitionEnd={handleCarouselTransitionEnd}
+          >
+            {trackImages.map((image, index) => (
+              <div key={`${image}-${index}`} className="relative h-full w-full shrink-0">
+                <Image
+                  src={image}
+                  alt={product.name}
+                  fill
+                  className="object-cover transition-transform duration-300 group-hover:scale-105"
+                  sizes="(max-width:640px) 50vw, (max-width:1024px) 33vw, 25vw"
+                  priority={priority && index === 0}
+                />
+              </div>
+            ))}
+          </div>
         ) : (
           <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[var(--brand-gold-300)]">
             Sin imagen
@@ -158,7 +249,10 @@ function ProductCard({
   );
 
   return (
-    <article className="animate-fade-up flex h-full flex-col overflow-hidden rounded-2xl border border-[var(--brand-gold-300)]/22 bg-white/[0.14] text-[var(--brand-cream)] shadow-lg shadow-black/22 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/60 hover:bg-white/[0.18] hover:shadow-2xl hover:shadow-black/30">
+    <article
+      ref={cardRef}
+      className="animate-fade-up flex h-full flex-col overflow-hidden rounded-2xl border border-[var(--brand-gold-300)]/22 bg-white/[0.14] text-[var(--brand-cream)] shadow-lg shadow-black/22 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/60 hover:bg-white/[0.18] hover:shadow-2xl hover:shadow-black/30"
+    >
       <Link
         href={detailHref}
         className="group flex h-full flex-col"
