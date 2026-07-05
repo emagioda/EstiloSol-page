@@ -180,7 +180,9 @@ export default function ProductImageGalleryZoom({
     theme === "quickview" ? "text-[#777]" : "text-[var(--brand-gold-300)]";
 
   const thumbnailWrapperClassName = alwaysColumn
-    ? "mt-4 flex flex-row gap-2 overflow-x-auto"
+    ? thumbnailsDesktopOnly
+      ? "mt-4 hidden flex-row gap-2 overflow-x-auto sm:flex"
+      : "mt-4 flex flex-row gap-2 overflow-x-auto"
     : thumbnailsDesktopOnly
     ? "hidden gap-2 md:order-first md:mt-0 md:flex md:w-16 md:flex-col"
     : "mt-4 grid grid-cols-5 gap-2 md:mt-0 md:w-16 md:flex-col md:flex md:order-first";

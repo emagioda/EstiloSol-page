@@ -195,7 +195,7 @@ export default function QuickViewModal({
                 currentImageIndex={safeIndex}
                 onImageIndexChange={setCurrentImageIndex}
                 theme="quickview"
-                thumbnailsDesktopOnly={false}
+                thumbnailsDesktopOnly
                 alwaysColumn
               />
               <ProductVariantSelector
