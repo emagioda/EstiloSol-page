@@ -6,6 +6,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 
+const infoLinks = [
+  { label: "Preguntas frecuentes", href: "/preguntas-frecuentes", visible: false },
+  { label: "Quién soy", href: "/quien-soy", visible: false },
+  { label: "Contacto", href: "/contacto", visible: true },
+];
+
+const visibleInfoLinks = infoLinks.filter((link) => link.visible);
+
 interface NavDrawerProps {
   open: boolean;
   onClose: () => void;
@@ -36,11 +44,7 @@ export default function NavDrawer({ open, onClose }: NavDrawerProps) {
         setShouldRender(true);
         setIsClosing(false);
         setTiendaExpanded(pathname?.startsWith("/tienda") ?? false);
-        setInfoExpanded(
-          (pathname?.startsWith("/preguntas-frecuentes") ?? false) ||
-            (pathname?.startsWith("/quien-soy") ?? false) ||
-            (pathname?.startsWith("/contacto") ?? false)
-        );
+        setInfoExpanded(visibleInfoLinks.some((link) => pathname?.startsWith(link.href)));
       }, 0);
       return () => window.clearTimeout(openSyncTimer);
     }
@@ -86,10 +90,7 @@ export default function NavDrawer({ open, onClose }: NavDrawerProps) {
       : (new URLSearchParams(window.location.search).get("rubro") ?? "").toLowerCase();
   const isPeluqueria = isTienda && (rubro === "" || rubro === "peluqueria" || rubro === "peluquería");
   const isBijouterie = isTienda && rubro === "bijouterie";
-  const isInfo =
-    (pathname?.startsWith("/preguntas-frecuentes") ?? false) ||
-    (pathname?.startsWith("/quien-soy") ?? false) ||
-    (pathname?.startsWith("/contacto") ?? false);
+  const isInfo = visibleInfoLinks.some((link) => pathname?.startsWith(link.href));
 
   const primaryLinkBase =
     "flex min-h-12 w-full items-center justify-between rounded-2xl border px-4 text-[15px] font-semibold tracking-normal transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#d9b86f]";
@@ -218,27 +219,16 @@ export default function NavDrawer({ open, onClose }: NavDrawerProps) {
 
             {infoExpanded && (
               <div className="mt-1.5 grid gap-1">
-                <Link
-                  href="/preguntas-frecuentes"
-                  onClick={handleClose}
-                  className={`${subLinkBase} ${pathname?.startsWith("/preguntas-frecuentes") ? subActive : ""}`}
-                >
-                  Preguntas frecuentes
-                </Link>
-                <Link
-                  href="/quien-soy"
-                  onClick={handleClose}
-                  className={`${subLinkBase} ${pathname?.startsWith("/quien-soy") ? subActive : ""}`}
-                >
-                  Quién soy
-                </Link>
-                <Link
-                  href="/contacto"
-                  onClick={handleClose}
-                  className={`${subLinkBase} ${pathname?.startsWith("/contacto") ? subActive : ""}`}
-                >
-                  Contacto
-                </Link>
+                {visibleInfoLinks.map((link) => (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    onClick={handleClose}
+                    className={`${subLinkBase} ${pathname?.startsWith(link.href) ? subActive : ""}`}
+                  >
+                    {link.label}
+                  </Link>
+                ))}
               </div>
             )}
           </div>

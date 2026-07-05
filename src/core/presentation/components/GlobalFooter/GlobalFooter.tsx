@@ -6,6 +6,7 @@ export default function GlobalFooter() {
   const socialLinks = brandConfig.contactInfo.socialNetworks;
   const brandName = brandConfig.brandName;
   const { primary: primaryLinks, support: supportLinks } = brandConfig.footerLinks;
+  const visibleSupportLinks = supportLinks.filter((link) => link.visible !== false);
 
   return (
     <footer className="relative z-40 border-t border-[var(--brand-gold-400)]/25 bg-[var(--brand-violet-950)] text-[var(--brand-cream)]">
@@ -43,7 +44,7 @@ export default function GlobalFooter() {
               Informacion
             </h3>
             <nav aria-label="Links informativos del footer" className="mt-4 flex flex-col gap-2.5 md:items-center">
-              {supportLinks.map((link) => (
+              {visibleSupportLinks.map((link) => (
                 <Link
                   key={link.href}
                   href={link.href}

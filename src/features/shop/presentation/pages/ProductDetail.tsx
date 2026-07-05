@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
+import ProductVariantSelector from "@/src/features/shop/presentation/components/ProductVariantSelector/ProductVariantSelector";
 import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs";
 import { showCartAddedToast } from "@/src/features/shop/presentation/lib/cartToast";
 import {
@@ -282,14 +283,16 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
     return () => window.clearTimeout(timer);
   }, [product]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
+  const handleSelectVariant = useCallback(
+    (variantId: string) => {
+      if (variantId === selectedVariantId) return;
+
+      setSelectedVariantId(variantId);
       setQty(1);
       setCurrentImageIndex(0);
-    }, 0);
-
-    return () => window.clearTimeout(timer);
-  }, [selectedVariantId]);
+    },
+    [selectedVariantId],
+  );
 
   const safeUnitPrice = isValidPrice(currentProduct.price) ? currentProduct.price : 0;
   const displayPrice = isValidPrice(currentProduct.price) ? formatMoney(currentProduct.price) : "Consultar";
@@ -381,18 +384,27 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
           { label: currentProduct.name },
         ]}
       />
-      <section className="grid gap-8 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.35)] p-5 shadow-[0_20px_50px_rgba(18,8,35,0.35)] lg:grid-cols-2 lg:p-8">
-        <div>
+      <section className="grid gap-5 rounded-3xl border border-[var(--brand-gold-400)]/20 bg-[rgba(58,31,95,0.35)] p-5 shadow-[0_20px_50px_rgba(18,8,35,0.35)] lg:grid-cols-2 lg:gap-x-8 lg:gap-y-4 lg:p-8">
+        <div className="min-w-0 lg:row-span-3">
           <ProductImageGalleryZoom
             images={images}
             productName={currentProduct.name}
             currentImageIndex={currentImageIndex}
             onImageIndexChange={setCurrentImageIndex}
             theme="pdp"
+            thumbnailsDesktopOnly
           />
         </div>
 
-        <div className="flex flex-col gap-4">
+        <ProductVariantSelector
+          variants={variants}
+          selectedProductId={currentProduct.id}
+          onSelectVariant={handleSelectVariant}
+          theme="pdp"
+          className="lg:col-start-2 lg:row-start-2"
+        />
+
+        <div className="flex flex-col gap-4 lg:col-start-2 lg:row-start-1">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs uppercase tracking-[0.22em] text-[var(--brand-gold-300)]">
               {formatProductCategories(currentProduct)}
@@ -426,46 +438,9 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
               </p>
             )}
           </div>
+        </div>
 
-          {hasVariants ? (
-            <fieldset className="rounded-2xl border border-[var(--brand-gold-300)]/20 bg-white/[0.06] p-3 shadow-[0_12px_28px_rgba(18,8,35,0.16)]">
-              <legend className="px-1 text-xs font-bold uppercase tracking-[0.16em] text-[var(--brand-gold-300)]">
-                Diseño
-              </legend>
-              <div className="mt-2 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Elegir diseño">
-                {variants.map((variant, index) => {
-                  const selected = variant.id === currentProduct.id;
-                  const disabled = !isProductPurchasable(variant);
-                  const label = getProductVariantLabel(variant, index);
-
-                  return (
-                    <button
-                      key={variant.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      disabled={disabled}
-                      onClick={() => setSelectedVariantId(variant.id)}
-                      className={`min-h-12 rounded-xl border px-3 py-2 text-sm font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)] ${
-                        selected
-                          ? "border-[var(--brand-gold-300)] bg-[var(--brand-gold-300)] text-[var(--brand-violet-950)] shadow-md"
-                          : "border-white/18 bg-white/[0.10] text-[var(--brand-cream)] hover:border-[var(--brand-gold-300)]/55 hover:bg-white/[0.14]"
-                      } disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-[var(--brand-cream)]/38`}
-                      title={disabled ? `${label} sin stock` : `Elegir ${label}`}
-                    >
-                      <span className="block truncate">{label}</span>
-                      {disabled ? (
-                        <span className="mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.08em]">
-                          Sin stock
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            </fieldset>
-          ) : null}
-
+        <div className="flex flex-col gap-4 lg:col-start-2 lg:row-start-3">
           <div className="flex flex-row items-center gap-3">
             <div className="inline-flex items-center rounded-2xl bg-white/10 border border-white/15 p-1 backdrop-blur-sm">
               <button

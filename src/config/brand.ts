@@ -1,6 +1,7 @@
 export type BrandLink = {
   label: string;
   href: string;
+  visible?: boolean;
 };
 
 export type BrandImage = {
@@ -82,7 +83,8 @@ export const brandConfig = {
       { label: "Tienda", href: "/tienda" },
     ],
     support: [
-      { label: "Preguntas Frecuentes", href: "/preguntas-frecuentes" },
+      { label: "Preguntas Frecuentes", href: "/preguntas-frecuentes", visible: false },
+      { label: "Quién soy", href: "/quien-soy", visible: false },
       { label: "Contacto y Redes", href: "/contacto" },
     ],
   } as BrandFooterLinks,

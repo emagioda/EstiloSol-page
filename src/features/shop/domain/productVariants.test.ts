@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
-import { attachProductVariants, groupProductsForDisplay } from "./productVariants";
+import { attachProductVariants, getProductVariantDisplayLabel, groupProductsForDisplay } from "./productVariants";
 
 const baseVariant = (overrides: Partial<Product>): Product => ({
   id: "variant",
@@ -51,5 +51,18 @@ describe("productVariants", () => {
       "BN",
       "T3",
     ]);
+  });
+
+  it("hides internal variant codes from the visual selector", () => {
+    expect(getProductVariantDisplayLabel(baseVariant({ variant_name: "BN" }))).toBeNull();
+    expect(getProductVariantDisplayLabel(baseVariant({ variant_name: "I3" }))).toBeNull();
+    expect(getProductVariantDisplayLabel(baseVariant({ variant_name: "T3" }))).toBeNull();
+    expect(getProductVariantDisplayLabel(baseVariant({ variant_name: "" }))).toBeNull();
+  });
+
+  it("keeps descriptive variant names readable", () => {
+    expect(getProductVariantDisplayLabel(baseVariant({ variant_name: "perla dorada" }))).toBe("perla dorada");
+    expect(getProductVariantDisplayLabel(baseVariant({ variant_name: "DORADO" }))).toBe("Dorado");
+    expect(getProductVariantDisplayLabel(baseVariant({ variant_name: "ORO" }))).toBe("Oro");
   });
 });

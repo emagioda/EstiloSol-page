@@ -20,6 +20,42 @@ export const getProductVariantLabel = (
   return normalizeVariantText(product.name) || "Opcion";
 };
 
+const INTERNAL_VARIANT_CODE_PATTERN = /^[A-Z]{1,3}\d{0,3}$/;
+const SHORT_DESCRIPTIVE_VARIANT_WORDS = new Set(["ORO", "SOL"]);
+
+const normalizeVariantCode = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/gi, "")
+    .toUpperCase();
+
+const toReadableVariantLabel = (value: string) => {
+  const compact = value.replace(/\s+/g, " ").trim();
+  const hasLowerCase = compact !== compact.toLocaleUpperCase("es");
+  const hasLetter = /[a-z]/i.test(compact);
+
+  if (!hasLetter || hasLowerCase) return compact;
+
+  return compact
+    .toLocaleLowerCase("es")
+    .replace(/(^|[\s/-])(\S)/g, (_match, separator: string, char: string) => {
+      return `${separator}${char.toLocaleUpperCase("es")}`;
+    });
+};
+
+export const getProductVariantDisplayLabel = (product: Pick<Product, "variant_name">): string | null => {
+  const variantName = normalizeVariantText(product.variant_name);
+  if (!variantName) return null;
+
+  const normalizedCode = normalizeVariantCode(variantName);
+  const looksLikeInternalCode =
+    INTERNAL_VARIANT_CODE_PATTERN.test(normalizedCode) &&
+    !SHORT_DESCRIPTIVE_VARIANT_WORDS.has(normalizedCode);
+
+  return looksLikeInternalCode ? null : toReadableVariantLabel(variantName);
+};
+
 export const getProductVariants = (product: Product): Product[] => {
   if (!Array.isArray(product.variants) || product.variants.length === 0) {
     return [product];

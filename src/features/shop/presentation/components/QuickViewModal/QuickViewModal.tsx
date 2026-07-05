@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
+import ProductVariantSelector from "@/src/features/shop/presentation/components/ProductVariantSelector/ProductVariantSelector";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import {
@@ -61,14 +62,16 @@ export default function QuickViewModal({
     return () => window.clearTimeout(timer);
   }, [product]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
+  const handleSelectVariant = useCallback(
+    (variantId: string) => {
+      if (variantId === selectedVariantId) return;
+
+      setSelectedVariantId(variantId);
       setQty(1);
       setCurrentImageIndex(0);
-    }, 0);
-
-    return () => window.clearTimeout(timer);
-  }, [selectedVariantId]);
+    },
+    [selectedVariantId],
+  );
 
   const images = useMemo(
     () =>
@@ -195,6 +198,13 @@ export default function QuickViewModal({
                 thumbnailsDesktopOnly={false}
                 alwaysColumn
               />
+              <ProductVariantSelector
+                variants={variants}
+                selectedProductId={activeProduct.id}
+                onSelectVariant={handleSelectVariant}
+                theme="quickview"
+                className="mt-4"
+              />
             </div>
 
           <div className="flex flex-col gap-4 p-5 pr-14 sm:p-7 sm:pr-16 text-[var(--brand-violet-950)]">
@@ -208,7 +218,7 @@ export default function QuickViewModal({
                     ? "border-rose-300 bg-rose-100 text-rose-700"
                     : isLastUnit
                     ? "border-amber-300 bg-amber-100 text-[var(--brand-violet-950)]"
-                    : product.stock_status === "preorder"
+                    : activeProduct.stock_status === "preorder"
                     ? "border-amber-200 bg-amber-50 text-amber-700"
                     : "border-emerald-200 bg-emerald-50 text-emerald-700"
                 }`}
@@ -238,45 +248,6 @@ export default function QuickViewModal({
             </div>
 
             <div className="flex flex-col gap-4 pt-2">
-              {hasVariants ? (
-                <fieldset className="rounded-2xl border border-[var(--brand-violet-950)]/15 bg-[var(--brand-violet-950)]/[0.04] p-3">
-                  <legend className="px-1 text-xs font-bold uppercase tracking-[0.14em] text-[var(--brand-violet-700)]">
-                    Diseño
-                  </legend>
-                  <div className="mt-2 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Elegir diseño">
-                    {variants.map((variant, index) => {
-                      const selected = variant.id === activeProduct.id;
-                      const disabled = !isProductPurchasable(variant);
-                      const label = getProductVariantLabel(variant, index);
-
-                      return (
-                        <button
-                          key={variant.id}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          disabled={disabled}
-                          onClick={() => setSelectedVariantId(variant.id)}
-                          className={`min-h-11 rounded-xl border px-2.5 py-2 text-sm font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-violet-900)]/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-cream)] ${
-                            selected
-                              ? "border-[var(--brand-violet-950)] bg-[var(--brand-violet-950)] text-white shadow-md"
-                              : "border-[var(--brand-violet-950)]/18 bg-white/70 text-[var(--brand-violet-950)] hover:border-[var(--brand-violet-950)]/45 hover:bg-white"
-                          } disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400`}
-                          title={disabled ? `${label} sin stock` : `Elegir ${label}`}
-                        >
-                          <span className="block truncate">{label}</span>
-                          {disabled ? (
-                            <span className="mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.08em]">
-                              Sin stock
-                            </span>
-                          ) : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </fieldset>
-              ) : null}
-
               <div className="flex flex-nowrap items-center justify-between gap-3 w-full">
                 <div className="inline-flex items-center rounded-2xl bg-[var(--brand-violet-950)]/10 border border-[var(--brand-violet-950)]/15 p-1 backdrop-blur-sm">
                   <button

@@ -182,7 +182,7 @@ export default function ProductImageGalleryZoom({
   const thumbnailWrapperClassName = alwaysColumn
     ? "mt-4 flex flex-row gap-2 overflow-x-auto"
     : thumbnailsDesktopOnly
-    ? "mt-4 gap-2 md:mt-0 md:flex md:flex-col md:w-16 md:order-first"
+    ? "hidden gap-2 md:order-first md:mt-0 md:flex md:w-16 md:flex-col"
     : "mt-4 grid grid-cols-5 gap-2 md:mt-0 md:w-16 md:flex-col md:flex md:order-first";
 
   // Use the same desktop gallery layout even for a single image, so the
