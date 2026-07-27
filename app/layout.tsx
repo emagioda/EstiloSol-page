@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist_Mono, Lora } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import brandConfig from "@/src/config/brand";
 import Navbar from "@/src/core/presentation/components/Navbar/Navbar";
@@ -102,6 +103,7 @@ export default function RootLayout({
             </CartBadgeVisibilityProvider>
           </CartDrawerProvider>
         </CartProvider>
+        <Analytics />
       </body>
     </html>
   );
