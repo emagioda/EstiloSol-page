@@ -30,6 +30,9 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          KV_REST_API_URL: https://ci-kv.example.test
+          KV_REST_API_TOKEN: ci-build-placeholder
 
       - name: Test (if present)
         run: npm run test --if-present
