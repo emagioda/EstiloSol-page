@@ -6,11 +6,17 @@ import { describe, expect, it } from "vitest";
 type ProductRow = {
   id: string;
   name?: string;
+  price?: unknown;
   active: unknown;
   stockStatus: unknown;
   stockQty: unknown;
   slug?: string;
   currency?: unknown;
+};
+
+type HarnessOptions = {
+  activeHeader?: "active" | "activo" | "is_active";
+  cachePut?: () => void;
 };
 
 type WriteRecord = { sheet: string; row: number; column: number; value: unknown };
@@ -20,8 +26,18 @@ const scriptSource = readFileSync(
   "utf8",
 );
 
-const createHarness = (products: ProductRow[], options: { cachePut?: () => void } = {}) => {
-  const productHeaders = ["id", "name", "active", "stock_status", "stock_qty", "slug", "updated_at", "currency"];
+const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => {
+  const productHeaders = [
+    "id",
+    "name",
+    options.activeHeader ?? "active",
+    "stock_status",
+    "stock_qty",
+    "slug",
+    "updated_at",
+    "currency",
+    "price",
+  ];
   const productRows = products.map((product) => [
     product.id,
     product.name ?? product.id,
@@ -31,6 +47,7 @@ const createHarness = (products: ProductRow[], options: { cachePut?: () => void 
     product.slug ?? "",
     "",
     product.currency ?? "ARS",
+    product.price === undefined ? 1000 : product.price,
   ]);
   const salesHeaders = ["nro_de_compra", "items_json"];
   const salesRows: unknown[][] = [];
@@ -107,7 +124,7 @@ const createHarness = (products: ProductRow[], options: { cachePut?: () => void 
   });
 
   vm.runInContext(
-    `${scriptSource}\n;globalThis.__inventoryApi = { normalizeStockItems_, handleDecrementStock, handleAppendOrderAndDecrementStock, normalizeProduct, buildProductsPayloadObject, doPost };`,
+    `${scriptSource}\n;globalThis.__inventoryApi = { normalizeStockItems_, handleDecrementStock, handleAppendOrderAndDecrementStock, normalizeProduct, buildProductsPayloadObject, doGet, doPost };`,
     context,
   );
 
@@ -404,5 +421,150 @@ describe("Apps Script authoritative inventory planning", () => {
       stock_qty: 1,
     }) as Record<string, unknown>;
     expect(missingCurrency.authoritative_currency).toBeNull();
+
+    const aliasedId = harness.api.normalizeProduct({
+      product_id: "alias-id",
+      name: "Alias",
+      price: 1000,
+      currency: "ARS",
+      active: true,
+      stock_status: "in_stock",
+      stock_qty: 1,
+    }) as Record<string, unknown>;
+    expect(aliasedId.id).toBe("alias-id");
   });
+
+  it("TEST-HF-01/02/09 preserves malformed duplicate rows in authoritative reads", () => {
+    const missingName = createHarness([
+      availableProduct({ id: "125", name: "Aros" }),
+      availableProduct({ id: "125", name: "" }),
+    ]);
+    const missingPrice = createHarness([
+      availableProduct({ id: "125", name: "Aros" }),
+      availableProduct({ id: "125", name: "Duplicado", price: "" }),
+    ]);
+
+    const namePayload = missingName.api.buildProductsPayloadObject({
+      authoritative: true,
+      includeInactive: true,
+      force: true,
+    }) as { items: Array<Record<string, unknown>> };
+    const pricePayload = missingPrice.api.buildProductsPayloadObject({
+      authoritative: true,
+      includeInactive: true,
+      force: true,
+    }) as { items: Array<Record<string, unknown>> };
+
+    expect(namePayload.items).toHaveLength(2);
+    expect(namePayload.items[1]).toMatchObject({ id: "125", name: null });
+    expect(pricePayload.items).toHaveLength(2);
+    expect(pricePayload.items[1]).toMatchObject({ id: "125", authoritative_price: null });
+    expect(missingName.writes).toHaveLength(0);
+    expect(missingPrice.writes).toHaveLength(0);
+  });
+
+  it("TEST-HF-09 exposes authoritative rows through doGet only with an admin token", () => {
+    const harness = createHarness([
+      availableProduct({ id: "125", name: "Aros" }),
+      availableProduct({ id: "125", name: "" }),
+    ]);
+    const readOutput = harness.api.doGet({
+      parameter: {
+        sheet: "products",
+        token: "read-token",
+        authoritative: "1",
+        force: "1",
+      },
+    }) as { getContent: () => string };
+    const adminOutput = harness.api.doGet({
+      parameter: {
+        sheet: "products",
+        token: "admin-token",
+        authoritative: "1",
+        includeInactive: "1",
+        force: "1",
+      },
+    }) as { getContent: () => string };
+
+    expect(JSON.parse(readOutput.getContent())).toEqual({ ok: false, error: "Unauthorized" });
+    expect(JSON.parse(adminOutput.getContent())).toHaveLength(2);
+    expect(harness.writes).toHaveLength(0);
+  });
+
+  it("TEST-HF-04/05 preserves a unique malformed row for fail-closed validation", () => {
+    const missingName = createHarness([availableProduct({ id: "125", name: "" })]);
+    const missingPrice = createHarness([availableProduct({ id: "126", price: "" })]);
+
+    const namePayload = missingName.api.buildProductsPayloadObject({
+      authoritative: true,
+      includeInactive: true,
+      force: true,
+    }) as { items: Array<Record<string, unknown>> };
+    const pricePayload = missingPrice.api.buildProductsPayloadObject({
+      authoritative: true,
+      includeInactive: true,
+      force: true,
+    }) as { items: Array<Record<string, unknown>> };
+
+    expect(namePayload.items).toEqual([
+      expect.objectContaining({ id: "125", name: null }),
+    ]);
+    expect(pricePayload.items).toEqual([
+      expect.objectContaining({ id: "126", authoritative_price: null }),
+    ]);
+  });
+
+  it("TEST-HF-08 keeps malformed rows out of the public catalog", () => {
+    const harness = createHarness([
+      availableProduct({ id: "valid", name: "Valido" }),
+      availableProduct({ id: "missing-name", name: "" }),
+      availableProduct({ id: "missing-price", price: "" }),
+    ]);
+
+    const payload = harness.api.buildProductsPayloadObject({ force: true }) as {
+      items: Array<{ id: string }>;
+    };
+
+    expect(payload.items.map((item) => item.id)).toEqual(["valid"]);
+  });
+
+  it("TEST-HF-18 final stock planning still detects a malformed duplicate without writes", () => {
+    const harness = createHarness([
+      availableProduct({ id: "125", name: "Aros" }),
+      availableProduct({ id: "125", name: "" }),
+    ]);
+
+    expectInventoryError(
+      () => decrement(harness.api, "order-hf-duplicate", [{ productId: "125", qty: 1 }]),
+      "DUPLICATE_PRODUCT_ID",
+    );
+    expect(harness.stockWrites()).toHaveLength(0);
+  });
+
+  it.each([
+    ["active", true, true],
+    ["activo", true, true],
+    ["is_active", true, true],
+    ["is_active", false, false],
+    ["is_active", "", null],
+    ["is_active", "quizas", null],
+    ["is_active", "si", true],
+    ["is_active", "no", false],
+  ] as const)(
+    "TEST-HF-10/15 reads %s=%s as strict authoritative active %s",
+    (activeHeader, active, expected) => {
+      const harness = createHarness(
+        [availableProduct({ active })],
+        { activeHeader },
+      );
+      const payload = harness.api.buildProductsPayloadObject({
+        authoritative: true,
+        includeInactive: true,
+        force: true,
+      }) as { items: Array<{ authoritative_active: boolean | null }> };
+
+      expect(payload.items).toHaveLength(1);
+      expect(payload.items[0].authoritative_active).toBe(expected);
+    },
+  );
 });

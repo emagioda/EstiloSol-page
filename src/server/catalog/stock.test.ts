@@ -166,9 +166,9 @@ describe("authoritative catalog inventory validation", () => {
     expectCode([product(), product({ name: "Duplicado" })], [demand()], "DUPLICATE_PRODUCT_ID");
   });
 
-  it("does not block a request for an unrelated unique id when another id is duplicated", () => {
+  it("TEST-HF-17 does not block an unrelated unique id when another id has a malformed duplicate", () => {
     const result = validateAuthoritativeInventory(
-      [product(), product({ name: "Duplicado" }), product({ id: "b", name: "Producto B" })],
+      [product(), product({ name: "" }), product({ id: "b", name: "Producto B" })],
       [demand("b")],
     );
     expect(result.ok).toBe(true);
@@ -198,5 +198,21 @@ describe("authoritative catalog inventory validation", () => {
   it("rejects invalid authoritative price or currency", () => {
     expectCode([product({ price: Number.NaN })], [demand()], "INVENTORY_VALIDATION_FAILED");
     expectCode([product({ currency: "USD" })], [demand()], "INVENTORY_VALIDATION_FAILED");
+  });
+
+  it("TEST-HF-04 rejects a unique row with a missing name as invalid integrity", () => {
+    expectCode([product({ name: null })], [demand()], "INVENTORY_VALIDATION_FAILED");
+  });
+
+  it("TEST-HF-05 rejects a unique row with a missing price as invalid integrity", () => {
+    expectCode([product({ price: null })], [demand()], "INVENTORY_VALIDATION_FAILED");
+  });
+
+  it("TEST-HF-06 rejects a unique row with a missing currency as invalid integrity", () => {
+    expectCode([product({ currency: null })], [demand()], "INVENTORY_VALIDATION_FAILED");
+  });
+
+  it("TEST-HF-07 rejects a unique row with missing active metadata fail-closed", () => {
+    expectCode([product({ active: null })], [demand()], "PRODUCT_INACTIVE");
   });
 });

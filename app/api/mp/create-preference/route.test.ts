@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/mp/create-preference/route";
+import * as orderStore from "@/src/server/orders/store";
 
 type FetchMockOptions = {
   catalog?: Array<Record<string, unknown>>;
@@ -142,6 +143,27 @@ describe("create-preference local development flow", () => {
       reason: "insufficient_stock",
       availableQty: 1,
     });
+    expect(mpBodies).toHaveLength(0);
+    expect(sheetPostBodies).toHaveLength(0);
+
+    fetchMock.mockRestore();
+  });
+
+  it("TEST-HF-03 rejects a malformed duplicate before creating an order or preference", async () => {
+    const createOrderSpy = vi.spyOn(orderStore, "createOrder");
+    const { fetchMock, mpBodies, sheetPostBodies } = installPreferenceFetchMock({
+      catalog: [
+        baseCatalogProduct,
+        { ...baseCatalogProduct, name: "" },
+      ],
+    });
+
+    const response = await POST(createRequest(buildCheckoutBody()));
+    const body = (await response.json()) as { code?: string };
+
+    expect(response.status).toBe(400);
+    expect(body.code).toBe("DUPLICATE_PRODUCT_ID");
+    expect(createOrderSpy).not.toHaveBeenCalled();
     expect(mpBodies).toHaveLength(0);
     expect(sheetPostBodies).toHaveLength(0);
 
