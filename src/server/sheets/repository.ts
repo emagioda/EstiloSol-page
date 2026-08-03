@@ -10,6 +10,18 @@ import type {
   OrderShippingStatus,
 } from "@/src/server/orders/types";
 import type { StockStatus } from "@/src/features/shop/domain/entities/Product";
+import {
+  InventoryOperationError,
+  isInventoryErrorCode,
+} from "@/src/server/inventory/errors";
+import {
+  aggregateInventoryItems,
+  isValidProductId,
+  MAX_CHECKOUT_LINES,
+  MAX_QUANTITY_PER_PRODUCT,
+  normalizeProductId,
+  type ParsedInventoryItem,
+} from "@/src/server/inventory/items";
 
 const SALES_SHEET_NAME = "ventas";
 const PRODUCTS_SHEET_NAME = "products";
@@ -39,7 +51,19 @@ type ParsedRowsPayload = {
 type SheetsMutationResponse = {
   ok?: boolean;
   error?: string;
+  code?: unknown;
+  productId?: unknown;
+  itemIndex?: unknown;
   [key: string]: unknown;
+};
+
+export type StockMutationResult = {
+  deduped: boolean;
+  updated: Array<{
+    productId: string;
+    previousQty: number;
+    nextQty: number;
+  }>;
 };
 
 export type AdminDepartament = "PELUQUERIA" | "BIJOUTERIE";
@@ -391,12 +415,22 @@ async function postMutation(
     status = response.status;
 
     const data = (await response.json().catch(() => null)) as SheetsMutationResponse | null;
-    if (!response.ok) {
-      throw new Error(data?.error || `Sheets mutation failed with status ${response.status}`);
-    }
-
-    if (!data || data.ok === false) {
-      throw new Error(data?.error || "Sheets mutation failed");
+    if (!response.ok || !data || data.ok === false) {
+      const message = data?.error ||
+        (!response.ok ? `Sheets mutation failed with status ${response.status}` : "Sheets mutation failed");
+      if (isInventoryErrorCode(data?.code)) {
+        throw new InventoryOperationError({
+          code: data.code,
+          message,
+          ...(typeof data.itemIndex === "number" && Number.isInteger(data.itemIndex)
+            ? { itemIndex: data.itemIndex }
+            : {}),
+          ...(typeof data.productId === "string" && isValidProductId(data.productId)
+            ? { productId: data.productId }
+            : {}),
+        });
+      }
+      throw new Error(message);
     }
 
     logEvent("info", "sheets.mutation.timing", {
@@ -420,6 +454,119 @@ async function postMutation(
     throw error;
   }
 }
+
+const normalizeStockMutationItems = (
+  items: readonly { productId: string; qty: number }[],
+) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new InventoryOperationError({
+      code: "INVALID_ITEMS",
+      message: "La operación de inventario requiere al menos un producto.",
+    });
+  }
+
+  if (items.length > MAX_CHECKOUT_LINES) {
+    throw new InventoryOperationError({
+      code: "TOO_MANY_ITEMS",
+      message: `La operación de inventario no puede superar las ${MAX_CHECKOUT_LINES} líneas.`,
+    });
+  }
+
+  const parsedItems: ParsedInventoryItem[] = items.map((item, itemIndex) => {
+    const productId = typeof item?.productId === "string"
+      ? normalizeProductId(item.productId)
+      : "";
+    if (!isValidProductId(productId)) {
+      throw new InventoryOperationError({
+        code: "INVALID_ITEMS",
+        message: `El producto de la línea ${itemIndex + 1} es inválido.`,
+        itemIndex,
+      });
+    }
+
+    if (
+      typeof item.qty !== "number" ||
+      !Number.isFinite(item.qty) ||
+      !Number.isInteger(item.qty) ||
+      item.qty < 1 ||
+      item.qty > MAX_QUANTITY_PER_PRODUCT
+    ) {
+      throw new InventoryOperationError({
+        code: "INVALID_QUANTITY",
+        message: `La cantidad de la línea ${itemIndex + 1} es inválida.`,
+        itemIndex,
+        productId,
+      });
+    }
+
+    return { productId, qty: item.qty };
+  });
+
+  const aggregated = aggregateInventoryItems(parsedItems);
+  if (!aggregated.ok) throw new InventoryOperationError(aggregated.error);
+  return aggregated.items.map((item) => ({ productId: item.productId, qty: item.qty }));
+};
+
+const parseStockMutationResult = (
+  response: SheetsMutationResponse,
+  expectedItems: readonly { productId: string; qty: number }[],
+): StockMutationResult => {
+  if (response.deduped === true) return { deduped: true, updated: [] };
+  if (!Array.isArray(response.updated)) {
+    throw new InventoryOperationError({
+      code: "INVENTORY_VALIDATION_FAILED",
+      message: "Apps Script devolvió un resultado de inventario incompleto.",
+    });
+  }
+
+  const expectedByProductId = new Map(
+    expectedItems.map((item) => [item.productId.toLowerCase(), item]),
+  );
+  const seenProductIds = new Set<string>();
+  const updated = response.updated.map((rawUpdate) => {
+    if (!rawUpdate || typeof rawUpdate !== "object" || Array.isArray(rawUpdate)) {
+      throw new InventoryOperationError({
+        code: "INVENTORY_VALIDATION_FAILED",
+        message: "Apps Script devolvió una actualización de inventario inválida.",
+      });
+    }
+    const update = rawUpdate as Record<string, unknown>;
+    const productId = typeof update.productId === "string" ? update.productId : "";
+    const previousQty = update.previousQty;
+    const nextQty = update.nextQty;
+    const key = productId.toLowerCase();
+    const expected = expectedByProductId.get(key);
+    if (
+      !isValidProductId(productId) ||
+      typeof previousQty !== "number" ||
+      !Number.isInteger(previousQty) ||
+      typeof nextQty !== "number" ||
+      !Number.isInteger(nextQty) ||
+      previousQty <= 0 ||
+      nextQty < 0 ||
+      !expected ||
+      previousQty - nextQty !== expected.qty ||
+      seenProductIds.has(key)
+    ) {
+      throw new InventoryOperationError({
+        code: "INVENTORY_VALIDATION_FAILED",
+        message: "Apps Script devolvió una actualización de inventario inválida.",
+        ...(isValidProductId(productId) ? { productId } : {}),
+      });
+    }
+    seenProductIds.add(key);
+    return { productId, previousQty, nextQty };
+  });
+
+  if (updated.length !== expectedItems.length) {
+    throw new InventoryOperationError({
+      code: "INVENTORY_VALIDATION_FAILED",
+      message: "Apps Script no confirmó todas las actualizaciones de inventario.",
+    });
+  }
+
+  return { deduped: false, updated };
+};
 
 async function fetchRows(
   sheetName: string,
@@ -568,8 +715,9 @@ export async function appendOrderToSalesSheet(order: Order): Promise<void> {
 export async function appendOrderAndDecrementStockInSheet(
   order: Order,
   stockDeductedAt: number
-): Promise<void> {
-  await postMutation({
+): Promise<StockMutationResult> {
+  const items = normalizeStockMutationItems(order.items);
+  const response = await postMutation({
     action: "appendOrderAndDecrementStock",
     sheet: SALES_SHEET_NAME,
     productsSheet: PRODUCTS_SHEET_NAME,
@@ -578,12 +726,9 @@ export async function appendOrderAndDecrementStockInSheet(
       ...order,
       stockDeductedAt,
     }),
-    items: order.items.map((item) => ({
-      productId: item.productId,
-      qty: item.qty,
-      title: item.title,
-    })),
+    items,
   }, "write");
+  return parseStockMutationResult(response, items);
 }
 
 export async function updateOrderRowInSalesSheet(
@@ -716,27 +861,20 @@ export async function updateProductRowInSheet(
 export async function decrementProductsStockInSheet(
   orderId: string,
   items: Array<{ productId: string; qty: number; title?: string }>
-): Promise<void> {
+): Promise<StockMutationResult> {
   if (!orderId.trim()) {
     throw new Error("decrementProductsStockInSheet requires orderId");
   }
 
-  const normalizedItems = items
-    .map((item) => ({
-      productId: String(item.productId || "").trim(),
-      qty: Math.max(0, Math.trunc(Number(item.qty))),
-      title: String(item.title || "").trim(),
-    }))
-    .filter((item) => item.productId && item.qty > 0);
+  const normalizedItems = normalizeStockMutationItems(items);
 
-  if (normalizedItems.length === 0) return;
-
-  await postMutation({
+  const response = await postMutation({
     action: "decrementStock",
     sheet: PRODUCTS_SHEET_NAME,
     orderId,
     items: normalizedItems,
   }, "write");
+  return parseStockMutationResult(response, normalizedItems);
 }
 
 const parseOrderItemsSummary = (value: unknown): AdminOrderItem[] => {

@@ -21,6 +21,9 @@ const CACHE_PRODUCTS_KEY = "catalog:products:active:v4";
 const CACHE_PRODUCTS_TTL_SECONDS = 180;
 const ALLOWED_SHEETS = [SHEET_PRODUCTS, SHEET_SALES, SHEET_FULFILLMENT];
 const ORDER_ID_KEYS = ["nro_de_compra", "order_id", "id_pedido", "orderid", "external_reference", "id"];
+const MAX_STOCK_ITEM_LINES = 30;
+const MAX_STOCK_QTY_PER_PRODUCT = 50;
+const MAX_PRODUCT_ID_LENGTH = 120;
 
 const HEADER_ALIASES = {
   id_pedido: ["order_id", "orderid", "id", "nro_de_compra"],
@@ -117,6 +120,63 @@ function legacyFallbackToken_() {
     getScriptProperty_("SHEETS_WRITE_TOKEN") ||
     getScriptProperty_("SHEETS_ADMIN_TOKEN");
   return hasScopedToken ? "" : (getScriptProperty_("SHEETS_API_TOKEN") || getScriptProperty_("API_TOKEN"));
+}
+
+function firstDefinedValue_() {
+  for (let i = 0; i < arguments.length; i++) {
+    if (arguments[i] !== undefined) return arguments[i];
+  }
+  return undefined;
+}
+
+function toStrictNumberOrNull_(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "number") return isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (!trimmed || !/^[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)$/.test(trimmed)) return null;
+  const parsed = Number(trimmed.replace(",", "."));
+  return isFinite(parsed) ? parsed : null;
+}
+
+function toStrictActiveOrNull_(value) {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0) return false;
+  const token = compactKey(value);
+  if (["true", "verdadero", "si", "yes", "1", "active", "activo"].indexOf(token) !== -1) return true;
+  if (["false", "falso", "no", "0", "inactive", "inactivo"].indexOf(token) !== -1) return false;
+  return null;
+}
+
+function toStrictStockStatusOrNull_(value) {
+  const token = compactKey(value);
+  if (["instock", "disponible"].indexOf(token) !== -1) return "in_stock";
+  if (["outofstock", "sinstock", "agotado", "nodisponible"].indexOf(token) !== -1) return "out_of_stock";
+  if (["preorder", "preventa", "preventas", "reserva", "areserva"].indexOf(token) !== -1) return "preorder";
+  return null;
+}
+
+function toStrictCurrencyOrNull_(value) {
+  if (typeof value !== "string") return null;
+  const currency = value.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(currency) ? currency : null;
+}
+
+function isValidInventoryProductId_(value) {
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_PRODUCT_ID_LENGTH &&
+    /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(value);
+}
+
+function inventoryError_(code, message, context) {
+  const error = new Error(message);
+  error.name = "InventoryError";
+  error.code = code;
+  if (context && typeof context.itemIndex === "number") error.itemIndex = context.itemIndex;
+  if (context && isValidInventoryProductId_(context.productId)) error.productId = context.productId;
+  return error;
 }
 
 function expectedTokensForScope_(scope) {
@@ -218,10 +278,15 @@ function normalizeProduct(p) {
     });
   }
 
-  const price = toNumberOrNull_(p.price || p.precio);
+  const priceRaw = firstDefinedValue_(p.price, p.precio);
+  const stockQtyRaw = firstDefinedValue_(p.stock_qty, p.stock, p.cantidad_stock);
+  const stockStatusRaw = firstDefinedValue_(p.stock_status, p.estado_stock);
+  const activeRaw = firstDefinedValue_(p.active, p.activo);
+  const currencyRaw = firstDefinedValue_(p.currency, p.moneda);
+  const price = toNumberOrNull_(priceRaw);
   const oldPrice = toNumberOrNull_(p.old_price || p.precio_anterior);
-  const stockQty = toNumberOrNull_(p.stock_qty || p.stock || p.cantidad_stock);
-  const rawStockStatus = compactKey(p.stock_status || p.estado_stock);
+  const stockQty = toNumberOrNull_(stockQtyRaw);
+  const rawStockStatus = compactKey(stockStatusRaw);
   const stockStatus =
     rawStockStatus === "outofstock" || rawStockStatus === "sinstock" || rawStockStatus === "agotado"
       ? "out_of_stock"
@@ -239,7 +304,7 @@ function normalizeProduct(p) {
     category: p.category ? String(p.category) : null,
     price: typeof price === "number" ? price : null,
     old_price: typeof oldPrice === "number" ? oldPrice : null,
-    currency: p.currency ? String(p.currency) : "ARS",
+    currency: currencyRaw ? String(currencyRaw) : "ARS",
     short_description: p.short_description ? String(p.short_description) : null,
     description: p.description ? String(p.description) : null,
     product_type: compactKey(p.product_type) === "kit" ? "KIT" : "UNICO",
@@ -252,7 +317,12 @@ function normalizeProduct(p) {
     is_sale: toBool(p.is_sale || p.oferta) || (typeof oldPrice === "number" && typeof price === "number" && oldPrice > price),
     stock_status: stockStatus,
     stock_qty: typeof stockQty === "number" ? stockQty : null,
-    active: p.active === undefined && p.activo === undefined ? true : toBool(p.active || p.activo),
+    active: activeRaw === undefined ? true : toBool(activeRaw),
+    authoritative_price: toStrictNumberOrNull_(priceRaw),
+    authoritative_currency: toStrictCurrencyOrNull_(currencyRaw),
+    authoritative_active: toStrictActiveOrNull_(activeRaw),
+    authoritative_stock_status: toStrictStockStatusOrNull_(stockStatusRaw),
+    authoritative_stock_qty: toStrictNumberOrNull_(stockQtyRaw),
     created_at: p.created_at ? String(p.created_at) : null,
     updated_at: p.updated_at ? String(p.updated_at) : null
   };
@@ -541,14 +611,71 @@ function handleUpdateRow(payload) {
 }
 
 function normalizeStockItems_(items) {
-  if (!Array.isArray(items)) throw new Error("decrementStock requires items array");
-  return items.map(function(item) {
-    const productId = String(item && (item.productId || item.product_id || item.id) || "").trim();
-    const qty = Math.trunc(Number(item && item.qty));
-    const title = String(item && (item.title || item.name) || "").trim();
-    if (!productId || !isFinite(qty) || qty <= 0) return null;
-    return { productId: productId, qty: qty, title: title };
-  }).filter(Boolean);
+  if (!Array.isArray(items) || items.length === 0) {
+    throw inventoryError_("INVALID_ITEMS", "Inventory items are required");
+  }
+  if (items.length > MAX_STOCK_ITEM_LINES) {
+    throw inventoryError_("TOO_MANY_ITEMS", "Too many inventory item lines");
+  }
+
+  const parsedItems = [];
+  for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+    const item = items[itemIndex];
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw inventoryError_("INVALID_ITEMS", "Invalid inventory item structure", { itemIndex: itemIndex });
+    }
+
+    const allowedKeys = ["productId", "product_id", "id", "qty", "title", "name"];
+    const hasUnexpectedKey = Object.keys(item).some(function(key) {
+      return allowedKeys.indexOf(key) === -1;
+    });
+    if (hasUnexpectedKey) {
+      throw inventoryError_("INVALID_ITEMS", "Invalid inventory item structure", { itemIndex: itemIndex });
+    }
+
+    const productIdValue = firstDefinedValue_(item.productId, item.product_id, item.id);
+    const productId = (typeof productIdValue === "string" || typeof productIdValue === "number")
+      ? String(productIdValue).trim()
+      : "";
+    if (!isValidInventoryProductId_(productId)) {
+      throw inventoryError_("INVALID_ITEMS", "Invalid inventory product id", { itemIndex: itemIndex });
+    }
+
+    const qty = item.qty;
+    if (typeof qty !== "number" || !isFinite(qty) || !Number.isInteger(qty) || qty < 1 || qty > MAX_STOCK_QTY_PER_PRODUCT) {
+      throw inventoryError_("INVALID_QUANTITY", "Invalid inventory quantity", {
+        itemIndex: itemIndex,
+        productId: productId
+      });
+    }
+
+    parsedItems.push({ productId: productId, qty: qty });
+  }
+
+  return aggregateStockItems_(parsedItems);
+}
+
+function aggregateStockItems_(items) {
+  const demandsByProductId = {};
+  const orderedKeys = [];
+
+  items.forEach(function(item) {
+    const key = normalizeCompareValue(item.productId);
+    if (!Object.prototype.hasOwnProperty.call(demandsByProductId, key)) {
+      demandsByProductId[key] = { productId: item.productId, qty: 0 };
+      orderedKeys.push(key);
+    }
+
+    const nextQty = demandsByProductId[key].qty + item.qty;
+    if (!Number.isSafeInteger(nextQty) || nextQty > MAX_STOCK_QTY_PER_PRODUCT) {
+      throw inventoryError_("AGGREGATED_QUANTITY_LIMIT", "Aggregated inventory quantity exceeds limit", {
+        productId: item.productId
+      });
+    }
+    demandsByProductId[key].qty = nextQty;
+  });
+
+  return orderedKeys.map(function(key) { return demandsByProductId[key]; });
 }
 
 function stockDeductionPropertyKey_(orderId) {
@@ -566,7 +693,6 @@ function handleDecrementStock(payload) {
   if (!orderId) throw new Error("decrementStock requires orderId");
 
   const items = normalizeStockItems_(payload.items);
-  if (items.length === 0) throw new Error("decrementStock requires at least one valid item");
 
   const props = PropertiesService.getScriptProperties();
   const deductionKey = stockDeductionPropertyKey_(orderId);
@@ -574,59 +700,9 @@ function handleDecrementStock(payload) {
     return { ok: true, action: "decrementStock", deduped: true, orderId: orderId };
   }
 
-  const sheet = getSheetOrThrow(SHEET_PRODUCTS);
-  const headers = getHeaders(sheet);
-  const lastRow = sheet.getLastRow();
-  if (headers.length === 0 || lastRow < 2) throw new Error("Products sheet has no data rows");
-
-  const idCol = findColumnIndex(headers, ["id", "product_id", "id_producto"]);
-  const stockQtyCol = findColumnIndex(headers, ["stock_qty", "stock", "cantidad_stock"]);
-  const updatedAtCol = findColumnIndex(headers, ["updated_at", "actualizado_en", "fecha_actualizacion"]);
-
-  if (idCol === -1) throw new Error("Products sheet is missing product id column");
-  if (stockQtyCol === -1) throw new Error("Products sheet is missing stock_qty column");
-
-  const data = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
-  const rowsByProductId = {};
-  for (let i = 0; i < data.length; i++) {
-    rowsByProductId[normalizeCompareValue(data[i][idCol])] = {
-      rowNumber: i + 2,
-      row: data[i]
-    };
-  }
-
-  const updates = [];
-  const skipped = [];
-  items.forEach(function(item) {
-    const found = rowsByProductId[normalizeCompareValue(item.productId)];
-    if (!found) throw new Error("Product not found for stock decrement: " + item.productId);
-
-    const currentStock = toNumberOrNull_(found.row[stockQtyCol]);
-    if (currentStock === null) {
-      skipped.push({ productId: item.productId, reason: "stock_untracked" });
-      return;
-    }
-
-    const currentQty = Math.max(0, Math.trunc(currentStock));
-    if (currentQty < item.qty) {
-      throw new Error("Insufficient stock for " + (item.title || item.productId) + ". Available: " + currentQty + ", requested: " + item.qty);
-    }
-
-    const nextQty = currentQty - item.qty;
-    updates.push({
-      productId: item.productId,
-      rowNumber: found.rowNumber,
-      previousQty: currentQty,
-      nextQty: nextQty
-    });
-  });
-
+  const stockPlan = planStockDecrement_(items);
   const now = new Date().toISOString();
-  updates.forEach(function(update) {
-    sheet.getRange(update.rowNumber, stockQtyCol + 1).setValue(update.nextQty);
-    if (updatedAtCol !== -1) sheet.getRange(update.rowNumber, updatedAtCol + 1).setValue(now);
-  });
-
+  applyStockPlan_(stockPlan, now);
   props.setProperty(deductionKey, now);
   clearCatalogCache_();
 
@@ -634,14 +710,14 @@ function handleDecrementStock(payload) {
     ok: true,
     action: "decrementStock",
     orderId: orderId,
-    updated: updates.map(function(update) {
+    deduped: false,
+    updated: stockPlan.updates.map(function(update) {
       return {
         productId: update.productId,
         previousQty: update.previousQty,
         nextQty: update.nextQty
       };
-    }),
-    skipped: skipped
+    })
   };
 }
 
@@ -649,39 +725,67 @@ function planStockDecrement_(items) {
   const sheet = getSheetOrThrow(SHEET_PRODUCTS);
   const headers = getHeaders(sheet);
   const lastRow = sheet.getLastRow();
-  if (headers.length === 0 || lastRow < 2) throw new Error("Products sheet has no data rows");
+  if (headers.length === 0 || lastRow < 2) {
+    throw inventoryError_("INVENTORY_VALIDATION_FAILED", "Products sheet has no inventory rows");
+  }
 
   const idCol = findColumnIndex(headers, ["id", "product_id", "id_producto"]);
+  const activeCol = findColumnIndex(headers, ["active", "activo", "is_active"]);
+  const stockStatusCol = findColumnIndex(headers, ["stock_status", "estado_stock"]);
   const stockQtyCol = findColumnIndex(headers, ["stock_qty", "stock", "cantidad_stock"]);
   const updatedAtCol = findColumnIndex(headers, ["updated_at", "actualizado_en", "fecha_actualizacion"]);
 
-  if (idCol === -1) throw new Error("Products sheet is missing product id column");
-  if (stockQtyCol === -1) throw new Error("Products sheet is missing stock_qty column");
+  if (idCol === -1 || activeCol === -1 || stockStatusCol === -1 || stockQtyCol === -1) {
+    throw inventoryError_("INVENTORY_VALIDATION_FAILED", "Products sheet is missing required inventory columns");
+  }
 
   const data = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
   const rowsByProductId = {};
   for (let i = 0; i < data.length; i++) {
-    rowsByProductId[normalizeCompareValue(data[i][idCol])] = {
+    const productId = String(data[i][idCol] === null || data[i][idCol] === undefined ? "" : data[i][idCol]).trim();
+    if (!productId) continue;
+    const key = normalizeCompareValue(productId);
+    if (!Object.prototype.hasOwnProperty.call(rowsByProductId, key)) rowsByProductId[key] = [];
+    rowsByProductId[key].push({
       rowNumber: i + 2,
       row: data[i]
-    };
+    });
   }
 
   const updates = [];
-  const skipped = [];
   items.forEach(function(item) {
-    const found = rowsByProductId[normalizeCompareValue(item.productId)];
-    if (!found) throw new Error("Product not found for stock decrement: " + item.productId);
-
-    const currentStock = toNumberOrNull_(found.row[stockQtyCol]);
-    if (currentStock === null) {
-      skipped.push({ productId: item.productId, reason: "stock_untracked" });
-      return;
+    const matches = rowsByProductId[normalizeCompareValue(item.productId)] || [];
+    if (matches.length === 0) {
+      throw inventoryError_("PRODUCT_NOT_FOUND", "Product not found for stock decrement", {
+        productId: item.productId
+      });
+    }
+    if (matches.length > 1) {
+      throw inventoryError_("DUPLICATE_PRODUCT_ID", "Duplicate product id in inventory", {
+        productId: item.productId
+      });
     }
 
-    const currentQty = Math.max(0, Math.trunc(currentStock));
+    const found = matches[0];
+    if (toStrictActiveOrNull_(found.row[activeCol]) !== true) {
+      throw inventoryError_("PRODUCT_INACTIVE", "Product is inactive", { productId: item.productId });
+    }
+
+    if (toStrictStockStatusOrNull_(found.row[stockStatusCol]) !== "in_stock") {
+      throw inventoryError_("PRODUCT_NOT_AVAILABLE", "Product is not available", { productId: item.productId });
+    }
+
+    const currentQty = toStrictNumberOrNull_(found.row[stockQtyCol]);
+    if (currentQty === null || !Number.isInteger(currentQty) || currentQty <= 0) {
+      throw inventoryError_("INVALID_STOCK_QTY", "Product stock quantity is invalid", {
+        productId: item.productId
+      });
+    }
+
     if (currentQty < item.qty) {
-      throw new Error("Insufficient stock for " + (item.title || item.productId) + ". Available: " + currentQty + ", requested: " + item.qty);
+      throw inventoryError_("INSUFFICIENT_STOCK", "Insufficient product stock", {
+        productId: item.productId
+      });
     }
 
     const nextQty = currentQty - item.qty;
@@ -698,8 +802,7 @@ function planStockDecrement_(items) {
     headers: headers,
     stockQtyCol: stockQtyCol,
     updatedAtCol: updatedAtCol,
-    updates: updates,
-    skipped: skipped
+    updates: updates
   };
 }
 
@@ -713,6 +816,8 @@ function applyStockPlan_(plan, now) {
 function handleAppendOrderAndDecrementStock(payload) {
   const orderId = String(payload.orderId || payload.order_id || payload.externalReference || "").trim();
   if (!orderId) throw new Error("appendOrderAndDecrementStock requires orderId");
+
+  const items = normalizeStockItems_(payload.items);
 
   const props = PropertiesService.getScriptProperties();
   const deductionKey = stockDeductionPropertyKey_(orderId);
@@ -728,9 +833,6 @@ function handleAppendOrderAndDecrementStock(payload) {
 
   const rowInput = payload.row || payload.data || payload.values || payload.order;
   if (rowInput === undefined || rowInput === null) throw new Error("appendOrderAndDecrementStock requires row");
-
-  const items = normalizeStockItems_(payload.items);
-  if (items.length === 0) throw new Error("appendOrderAndDecrementStock requires at least one valid item");
 
   const salesSheet = getSheetOrThrow(SHEET_SALES);
   const salesHeaders = getHeaders(salesSheet);
@@ -750,6 +852,7 @@ function handleAppendOrderAndDecrementStock(payload) {
     ok: true,
     action: "appendOrderAndDecrementStock",
     orderId: orderId,
+    deduped: false,
     salesRowNumber: existingSalesRow === -1 ? salesSheet.getLastRow() : existingSalesRow,
     dedupedSalesRow: existingSalesRow !== -1,
     updated: stockPlan.updates.map(function(update) {
@@ -758,8 +861,7 @@ function handleAppendOrderAndDecrementStock(payload) {
         previousQty: update.previousQty,
         nextQty: update.nextQty
       };
-    }),
-    skipped: stockPlan.skipped
+    })
   };
 }
 
@@ -777,6 +879,33 @@ function publicErrorMessage_(err) {
     return "Server misconfigured";
   }
   return "Request failed";
+}
+
+function inventoryPublicErrorMessage_(code) {
+  if (code === "INVALID_ITEMS" || code === "INVALID_QUANTITY" || code === "TOO_MANY_ITEMS" || code === "AGGREGATED_QUANTITY_LIMIT") {
+    return "Invalid inventory items";
+  }
+  if (code === "PRODUCT_NOT_FOUND") return "Product not found";
+  if (code === "DUPLICATE_PRODUCT_ID") return "Inventory catalog integrity error";
+  if (code === "PRODUCT_INACTIVE" || code === "PRODUCT_NOT_AVAILABLE") return "Product not available";
+  if (code === "INVALID_STOCK_QTY") return "Invalid product stock";
+  if (code === "INSUFFICIENT_STOCK") return "Insufficient stock";
+  return "Inventory validation failed";
+}
+
+function publicPostErrorPayload_(err) {
+  if (!err || typeof err.code !== "string") {
+    return { ok: false, error: publicErrorMessage_(err) };
+  }
+
+  const payload = {
+    ok: false,
+    error: inventoryPublicErrorMessage_(err.code),
+    code: err.code
+  };
+  if (typeof err.itemIndex === "number" && Number.isInteger(err.itemIndex)) payload.itemIndex = err.itemIndex;
+  if (isValidInventoryProductId_(err.productId)) payload.productId = err.productId;
+  return payload;
 }
 
 function doGet(e) {
@@ -824,7 +953,7 @@ function doPost(e) {
     throw new Error("Unsupported action");
   } catch (err) {
     logInternalError_("doPost", err);
-    return jsonOutput({ ok: false, error: publicErrorMessage_(err) });
+    return jsonOutput(publicPostErrorPayload_(err));
   } finally {
     if (lock) lock.releaseLock();
   }
