@@ -7,6 +7,7 @@ import { logEvent } from "@/src/server/observability/log";
 import { getSheetsToken } from "@/src/server/sheets/tokens";
 
 type FetchCatalogSourceOptions = {
+  authoritative?: boolean;
   includeInactive?: boolean;
   forceFresh?: boolean;
 };
@@ -24,13 +25,19 @@ export type AuthoritativeCatalogProduct = {
 const PRODUCTS_SHEET = "products";
 const CATALOG_DISPLAY_REVALIDATE_SECONDS = 180;
 
-const buildSheetsUrl = (options: Required<Pick<FetchCatalogSourceOptions, "includeInactive" | "forceFresh">>) => {
+const buildSheetsUrl = (
+  options: Required<Pick<FetchCatalogSourceOptions, "authoritative" | "includeInactive" | "forceFresh">>,
+) => {
   const endpoint = env.getOptionalServer("SHEETS_ENDPOINT");
   if (!endpoint) return null;
 
   const url = new URL(endpoint);
   url.searchParams.set("sheet", PRODUCTS_SHEET);
-  url.searchParams.set("token", getSheetsToken(options.includeInactive ? "admin" : "read"));
+  url.searchParams.set("token", getSheetsToken(options.includeInactive || options.authoritative ? "admin" : "read"));
+
+  if (options.authoritative) {
+    url.searchParams.set("authoritative", "1");
+  }
 
   if (options.includeInactive) {
     url.searchParams.set("includeInactive", "1");
@@ -48,8 +55,9 @@ const fetchCatalogRows = async (
   options: FetchCatalogSourceOptions = {},
 ): Promise<Record<string, unknown>[]> => {
   const includeInactive = options.includeInactive === true;
+  const authoritative = options.authoritative === true;
   const forceFresh = options.forceFresh === true;
-  const requestUrl = buildSheetsUrl({ includeInactive, forceFresh });
+  const requestUrl = buildSheetsUrl({ authoritative, includeInactive, forceFresh });
 
   if (!requestUrl) {
     throw new Error("SHEETS_ENDPOINT missing");
@@ -88,6 +96,7 @@ const fetchCatalogRows = async (
 
     logEvent("info", "sheets.read.timing", {
       sheet: PRODUCTS_SHEET,
+      authoritative,
       includeInactive,
       forceFresh,
       status,
@@ -102,6 +111,7 @@ const fetchCatalogRows = async (
   } catch (error) {
     logEvent("warn", "sheets.read.timing", {
       sheet: PRODUCTS_SHEET,
+      authoritative,
       includeInactive,
       forceFresh,
       status,
@@ -134,6 +144,6 @@ export const adaptAuthoritativeCatalogRows = (
   }));
 
 export async function fetchAuthoritativeProductsFromCatalogSource(): Promise<AuthoritativeCatalogProduct[]> {
-  const rows = await fetchCatalogRows({ includeInactive: true, forceFresh: true });
+  const rows = await fetchCatalogRows({ authoritative: true, includeInactive: true, forceFresh: true });
   return adaptAuthoritativeCatalogRows(rows);
 }

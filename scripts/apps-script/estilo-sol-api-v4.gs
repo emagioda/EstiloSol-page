@@ -209,7 +209,11 @@ function requireTokenFor_(token, scope) {
 function getScopeForGet_(sheetName, params) {
   const normalized = normalizeKey(sheetName);
   if (normalized === normalizeKey(SHEET_PRODUCTS)) {
-    return toBool(params.includeInactive) || toBool(params.include_inactive) ? "admin" : "read";
+    return toBool(params.includeInactive) ||
+      toBool(params.include_inactive) ||
+      toBool(params.authoritative)
+      ? "admin"
+      : "read";
   }
   if (normalized === normalizeKey(SHEET_FULFILLMENT)) return "read";
   if (normalized === normalizeKey(SHEET_SALES)) return "admin";
@@ -281,7 +285,8 @@ function normalizeProduct(p) {
   const priceRaw = firstDefinedValue_(p.price, p.precio);
   const stockQtyRaw = firstDefinedValue_(p.stock_qty, p.stock, p.cantidad_stock);
   const stockStatusRaw = firstDefinedValue_(p.stock_status, p.estado_stock);
-  const activeRaw = firstDefinedValue_(p.active, p.activo);
+  const activeRaw = firstDefinedValue_(p.active, p.activo, p.is_active);
+  const idRaw = firstDefinedValue_(p.id, p.product_id, p.id_producto);
   const currencyRaw = firstDefinedValue_(p.currency, p.moneda);
   const price = toNumberOrNull_(priceRaw);
   const oldPrice = toNumberOrNull_(p.old_price || p.precio_anterior);
@@ -294,10 +299,10 @@ function normalizeProduct(p) {
         ? "preorder"
         : (typeof stockQty === "number" && stockQty <= 0 ? "out_of_stock" : "in_stock");
   const rawSlug = p.slug ? String(p.slug).trim() : "";
-  const finalSlug = rawSlug || String(p.id || p.product_id || "");
+  const finalSlug = rawSlug || String(idRaw || "");
 
   return {
-    id: p.id ? String(p.id) : null,
+    id: isNonEmptyCell_(idRaw) ? String(idRaw) : null,
     name: p.name ? String(p.name) : null,
     slug: finalSlug,
     departament: p.departament ? String(p.departament).toUpperCase() : null,
@@ -451,10 +456,11 @@ function findOrderRowNumber_(sheet, headers, orderId) {
 
 function buildProductsPayloadObject(options) {
   const includeInactive = Boolean(options && options.includeInactive);
+  const authoritative = Boolean(options && options.authoritative);
   const force = Boolean(options && options.force);
   const cache = CacheService.getScriptCache();
 
-  if (!includeInactive && !force) {
+  if (!includeInactive && !authoritative && !force) {
     const cached = cache.get(CACHE_PRODUCTS_KEY);
     if (cached) {
       const items = JSON.parse(cached);
@@ -473,6 +479,9 @@ function buildProductsPayloadObject(options) {
   const priceCol = findColumnIndex(headers, ["price", "precio"]);
   const hasRequiredProductCols = idCol !== -1 && nameCol !== -1 && priceCol !== -1;
   const rows = values.filter((r) => {
+    if (authoritative) {
+      return idCol !== -1 && isNonEmptyCell_(r[idCol]);
+    }
     if (hasRequiredProductCols) {
       return isNonEmptyCell_(r[idCol]) && isNonEmptyCell_(r[nameCol]) && isNonEmptyCell_(r[priceCol]);
     }
@@ -481,9 +490,9 @@ function buildProductsPayloadObject(options) {
   const items = rows
     .map((r) => rowToObject(headers, r))
     .map(normalizeProduct)
-    .filter((p) => p.id && p.name && (includeInactive ? true : p.active));
+    .filter((p) => authoritative ? Boolean(p.id) : Boolean(p.id && p.name && (includeInactive ? true : p.active)));
 
-  if (!includeInactive) cacheCatalogItemsSafely_(cache, items);
+  if (!includeInactive && !authoritative) cacheCatalogItemsSafely_(cache, items);
 
   return {
     ok: true,
@@ -936,6 +945,7 @@ function doGet(e) {
 
     const payloadObj = buildProductsPayloadObject({
       includeInactive: toBool(params.includeInactive) || toBool(params.include_inactive),
+      authoritative: toBool(params.authoritative),
       force: toBool(params.force)
     });
 
