@@ -35,7 +35,15 @@ const createRequest = (body: Record<string, unknown>) =>
 const installPreferenceFetchMock = (options: FetchMockOptions = {}) => {
   const mpBodies: Array<Record<string, unknown>> = [];
   const sheetPostBodies: Array<Record<string, unknown>> = [];
-  const catalog = options.catalog || [baseCatalogProduct];
+  const rawCatalog: Array<Record<string, unknown>> = options.catalog || [baseCatalogProduct];
+  const catalog = rawCatalog.map((item) => ({
+    ...item,
+    authoritative_price: item.authoritative_price ?? item.price,
+    authoritative_currency: item.authoritative_currency ?? item.currency,
+    authoritative_active: item.authoritative_active ?? item.active,
+    authoritative_stock_status: item.authoritative_stock_status ?? item.stock_status,
+    authoritative_stock_qty: item.authoritative_stock_qty ?? item.stock_qty,
+  }));
 
   const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
@@ -197,6 +205,11 @@ describe("create-preference local development flow", () => {
               price: 1000,
               currency: "ARS",
               active: true,
+              authoritative_price: 1000,
+              authoritative_currency: "ARS",
+              authoritative_active: true,
+              authoritative_stock_status: "in_stock",
+              authoritative_stock_qty: 5,
             },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } }
@@ -296,6 +309,11 @@ describe("create-preference local development flow", () => {
               active: true,
               stock_status: "in_stock",
               stock_qty: 5,
+              authoritative_price: 1000,
+              authoritative_currency: "ARS",
+              authoritative_active: true,
+              authoritative_stock_status: "in_stock",
+              authoritative_stock_qty: 5,
             },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } }
@@ -329,7 +347,7 @@ describe("create-preference local development flow", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        items: [{ productId: "p-1", qty: 2, name: "Producto 1", shippingFee: -4000 }],
+        items: [{ productId: "p-1", qty: 2, name: "Producto 1" }],
         paymentMethod: "mercadopago",
         deliveryMethod: "delivery",
         fulfillment: {
@@ -361,6 +379,48 @@ describe("create-preference local development flow", () => {
       shipping_fee: 3500,
     });
 
+    fetchMock.mockRestore();
+  });
+
+  it("builds one Mercado Pago item from repeated product lines", async () => {
+    const { fetchMock, mpBodies } = installPreferenceFetchMock({
+      catalog: [{ ...baseCatalogProduct, stock_qty: 3 }],
+    });
+
+    const response = await POST(createRequest(buildCheckoutBody({
+      items: [
+        { productId: "p-1", qty: 1, name: "Nombre falso", unitPrice: 1000 },
+        { productId: "p-1", qty: 2, name: "Otro nombre", unitPrice: 1000 },
+      ],
+    })));
+
+    expect(response.status).toBe(200);
+    const items = mpBodies[0].items as Array<{ id?: string; title?: string; quantity?: number; unit_price?: number }>;
+    expect(items).toEqual([expect.objectContaining({
+      id: "p-1",
+      title: "Producto 1",
+      quantity: 3,
+      unit_price: 1000,
+    })]);
+    fetchMock.mockRestore();
+  });
+
+  it("does not read catalog, create an order or create a preference for a partially invalid cart", async () => {
+    const { fetchMock, mpBodies, sheetPostBodies } = installPreferenceFetchMock();
+
+    const response = await POST(createRequest(buildCheckoutBody({
+      items: [
+        { productId: "p-1", qty: 1, unitPrice: 1000 },
+        { productId: "bad", qty: -1, unitPrice: 1000 },
+      ],
+    })));
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({ code: "INVALID_QUANTITY", itemIndex: 1, productId: "bad" });
+    expect(mpBodies).toHaveLength(0);
+    expect(sheetPostBodies).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
     fetchMock.mockRestore();
   });
 });

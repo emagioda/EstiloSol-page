@@ -37,6 +37,11 @@ describe("orders create manual payment flow", () => {
               active: true,
               stock_status: "in_stock",
               stock_qty: 5,
+              authoritative_price: 2000,
+              authoritative_currency: "ARS",
+              authoritative_active: true,
+              authoritative_stock_status: "in_stock",
+              authoritative_stock_qty: 5,
             },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } }
@@ -91,6 +96,11 @@ describe("orders create manual payment flow", () => {
               active: true,
               stock_status: "in_stock",
               stock_qty: 5,
+              authoritative_price: 20000,
+              authoritative_currency: "ARS",
+              authoritative_active: true,
+              authoritative_stock_status: "in_stock",
+              authoritative_stock_qty: 5,
             },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } }
@@ -104,7 +114,7 @@ describe("orders create manual payment flow", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        items: [{ productId: "p-1", qty: 1, name: "Producto 1", shippingFee: -20000 }],
+        items: [{ productId: "p-1", qty: 1, name: "Producto 1" }],
         paymentMethod: "transfer",
         deliveryMethod: "delivery",
         fulfillment: {
