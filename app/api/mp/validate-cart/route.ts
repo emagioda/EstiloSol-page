@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { env } from "@/src/config/env";
-import { getProductsCatalog } from "@/src/server/catalog/getProducts";
+import { getAuthoritativeProductsCatalog } from "@/src/server/catalog/getProducts";
 import {
-  dedupeInvalidProducts,
-  type InvalidCheckoutProduct,
   invalidProductsMessage,
-  validateCatalogItem,
+  validateAuthoritativeInventory,
 } from "@/src/server/catalog/stock";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
@@ -73,11 +71,20 @@ export async function POST(request: NextRequest) {
 
   if (!parsedBody.ok) {
     await trackBusinessEvent("checkout.validation.invalid_input", { route: "validate-cart" });
-    return respond({ error: parsedBody.message }, { status: 400 }, "invalid_input");
+    return respond(
+      {
+        error: parsedBody.message,
+        ...(parsedBody.code ? { code: parsedBody.code } : {}),
+        ...(parsedBody.itemIndex !== undefined ? { itemIndex: parsedBody.itemIndex } : {}),
+        ...(parsedBody.productId ? { productId: parsedBody.productId } : {}),
+      },
+      { status: 400 },
+      "invalid_input",
+    );
   }
 
   const catalog = await measure("catalogReadMs", () =>
-    getProductsCatalog({ forceFresh: true }).catch((error) => {
+    getAuthoritativeProductsCatalog().catch((error) => {
       logEvent("error", "payments.catalog_fetch_error", {
         route: "validate-cart",
         message: error instanceof Error ? error.message : "unknown",
@@ -97,37 +104,36 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const invalidProducts = (() => {
+  const inventory = (() => {
     const stepStartedAt = Date.now();
     try {
-      return dedupeInvalidProducts(
-        parsedBody.value.items
-          .map((requestedItem) => validateCatalogItem(catalog, requestedItem))
-          .filter((item): item is InvalidCheckoutProduct => Boolean(item)),
-      );
+      return validateAuthoritativeInventory(catalog, parsedBody.value.items);
     } finally {
       timings.cartValidationMs = Date.now() - stepStartedAt;
     }
   })();
 
-  if (invalidProducts.length > 0) {
+  if (!inventory.ok) {
+    const primaryError = inventory.errors[0];
     await trackBusinessEvent("checkout.validation.invalid_product", {
       route: "validate-cart",
-      invalidCount: invalidProducts.length,
-      invalidProducts: invalidProducts.map((item) => item.name),
+      invalidCount: inventory.errors.length,
+      errorCodes: inventory.errors.map((item) => item.code),
+      productIds: inventory.errors.map((item) => item.productId),
     });
 
     return respond(
       {
         valid: false,
-        error: invalidProductsMessage(invalidProducts),
-        invalidProducts,
+        error: invalidProductsMessage(inventory.errors),
+        code: primaryError.code,
+        invalidProducts: inventory.errors,
       },
       { status: 400 },
       "invalid_product",
       {
         itemCount: parsedBody.value.items.length,
-        invalidCount: invalidProducts.length,
+        invalidCount: inventory.errors.length,
       }
     );
   }
@@ -140,7 +146,7 @@ export async function POST(request: NextRequest) {
   return respond(
     {
       valid: true,
-      checkedItems: parsedBody.value.items.length,
+      checkedItems: inventory.items.length,
     },
     { status: 200 },
     "ok",

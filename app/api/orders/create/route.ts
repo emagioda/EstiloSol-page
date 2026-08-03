@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getProductsCatalog } from "@/src/server/catalog/getProducts";
+import { getAuthoritativeProductsCatalog } from "@/src/server/catalog/getProducts";
 import { getActivePickupPointById } from "@/src/config/fulfillment";
 import { getFulfillmentConfig } from "@/src/server/fulfillment/source";
 import { scheduleAfterResponse } from "@/src/server/http/afterResponse";
@@ -8,7 +8,7 @@ import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { sendOrderReceivedEmail } from "@/src/server/notifications/orderReceived";
 import { buildOrderFromCheckout } from "@/src/server/orders/createFromCheckout";
 import { createOrder } from "@/src/server/orders/store";
-import { invalidProductsMessage } from "@/src/server/catalog/stock";
+import { invalidProductsMessage, validateAuthoritativeInventory } from "@/src/server/catalog/stock";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { parseCheckoutBody } from "@/src/server/validation/payments";
 
@@ -33,7 +33,15 @@ export async function POST(request: NextRequest) {
   const parsedBody = parseCheckoutBody(rawBody, { requirePayer: true, requireFulfillment: true });
   if (!parsedBody.ok) {
     await trackBusinessEvent("checkout.order_create.invalid_input", { route: "orders-create" });
-    return NextResponse.json({ error: parsedBody.message }, { status: 400 });
+    return NextResponse.json(
+      {
+        error: parsedBody.message,
+        ...(parsedBody.code ? { code: parsedBody.code } : {}),
+        ...(parsedBody.itemIndex !== undefined ? { itemIndex: parsedBody.itemIndex } : {}),
+        ...(parsedBody.productId ? { productId: parsedBody.productId } : {}),
+      },
+      { status: 400 },
+    );
   }
 
   const {
@@ -66,7 +74,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Punto de encuentro inválido." }, { status: 400 });
   }
 
-  const catalog = await getProductsCatalog({ forceFresh: true }).catch((error) => {
+  const catalog = await getAuthoritativeProductsCatalog().catch((error) => {
     logEvent("error", "orders.catalog_fetch_error", {
       route: "orders-create",
       message: error instanceof Error ? error.message : "unknown",
@@ -79,9 +87,28 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No se pudo validar el catalogo de productos" }, { status: 503 });
   }
 
-  const { order, invalidProducts } = buildOrderFromCheckout({
-    items,
-    catalog,
+  const inventory = validateAuthoritativeInventory(catalog, items);
+  if (!inventory.ok) {
+    const primaryError = inventory.errors[0];
+    await trackBusinessEvent("checkout.order_create.invalid_product", {
+      route: "orders-create",
+      invalidCount: inventory.errors.length,
+      errorCodes: inventory.errors.map((item) => item.code),
+      productIds: inventory.errors.map((item) => item.productId),
+    });
+
+    return NextResponse.json(
+      {
+        error: invalidProductsMessage(inventory.errors),
+        code: primaryError.code,
+        invalidProducts: inventory.errors,
+      },
+      { status: 400 },
+    );
+  }
+
+  const { order } = buildOrderFromCheckout({
+    items: inventory.items,
     customerName,
     customerPhone,
     customerEmail,
@@ -92,22 +119,6 @@ export async function POST(request: NextRequest) {
     fulfillmentConfig,
     status: "pending",
   });
-
-  if (invalidProducts.length > 0) {
-    await trackBusinessEvent("checkout.order_create.invalid_product", {
-      route: "orders-create",
-      invalidCount: invalidProducts.length,
-      invalidProducts: invalidProducts.map((item) => item.name),
-    });
-
-    return NextResponse.json(
-      {
-        error: invalidProductsMessage(invalidProducts),
-        invalidProducts,
-      },
-      { status: 400 }
-    );
-  }
 
   if (!order) {
     return NextResponse.json({ error: "No se pudo construir la orden con los datos de entrega." }, { status: 400 });

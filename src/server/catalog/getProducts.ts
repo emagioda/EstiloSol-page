@@ -1,7 +1,13 @@
 import { revalidatePath, revalidateTag } from "next/cache";
 import { del, getJson, setJson } from "@/src/server/kv";
 import type { StockStatus } from "@/src/features/shop/domain/entities/Product";
-import { fetchProductsFromCatalogSource } from "./source";
+import {
+  fetchAuthoritativeProductsFromCatalogSource,
+  fetchProductsFromCatalogSource,
+  type AuthoritativeCatalogProduct,
+} from "./source";
+
+export type { AuthoritativeCatalogProduct } from "./source";
 
 export type CatalogProduct = {
   id: string;
@@ -51,6 +57,10 @@ export async function getProductsCatalog(
   await setJson(CATALOG_CACHE_KEY, catalogProducts, CATALOG_CACHE_TTL);
 
   return new Map(catalogProducts.map((item) => [item.id, item]));
+}
+
+export async function getAuthoritativeProductsCatalog(): Promise<AuthoritativeCatalogProduct[]> {
+  return fetchAuthoritativeProductsFromCatalogSource();
 }
 
 export async function invalidateProductsCatalogCache(): Promise<void> {

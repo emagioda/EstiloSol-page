@@ -1,10 +1,14 @@
 import type { OrderDeliveryMethod, OrderPaymentMethod } from "@/src/server/orders/types";
-type CheckoutItemInput = {
-  productId?: unknown;
-  qty?: unknown;
-  name?: unknown;
-  unitPrice?: unknown;
-};
+import type { InventoryErrorCode } from "@/src/server/inventory/errors";
+import {
+  aggregateInventoryItems,
+  isValidProductId,
+  MAX_CHECKOUT_LINES,
+  MAX_QUANTITY_PER_PRODUCT,
+  normalizeProductId,
+  type InventoryDemandItem,
+  type ParsedInventoryItem,
+} from "@/src/server/inventory/items";
 
 type CheckoutBodyInput = {
   items?: unknown;
@@ -20,12 +24,7 @@ type CheckoutBodyInput = {
   notes?: unknown;
 };
 
-export type ParsedCheckoutItem = {
-  productId: string;
-  qty: number;
-  name?: string;
-  unitPrice?: number;
-};
+export type ParsedCheckoutItem = InventoryDemandItem;
 
 export type ParsedDeliveryAddress = {
   street: string;
@@ -55,14 +54,20 @@ export type ParsedCheckoutBody = {
 
 export type ValidationResult<T> =
   | { ok: true; value: T }
-  | { ok: false; message: string };
+  | {
+      ok: false;
+      message: string;
+      code?: InventoryErrorCode;
+      itemIndex?: number;
+      productId?: string;
+    };
 
 type ParseCheckoutOptions = {
   requirePayer?: boolean;
   requireFulfillment?: boolean;
 };
 
-const MAX_ITEMS = 30;
+const CHECKOUT_ITEM_KEYS = new Set(["productId", "qty", "name", "unitPrice"]);
 
 const sanitizeText = (value: unknown, maxLength: number) => {
   if (typeof value !== "string") return "";
@@ -74,18 +79,115 @@ const sanitizeText = (value: unknown, maxLength: number) => {
     .slice(0, maxLength);
 };
 
-const normalizeQuantity = (value: unknown) => {
-  const quantity = Number(value);
-  if (!Number.isInteger(quantity)) return null;
-  if (quantity < 1 || quantity > 50) return null;
-  return quantity;
-};
-
 const normalizePrice = (value: unknown) => {
   if (value === undefined || value === null || value === "") return undefined;
-  const price = Number(value);
+  if (typeof value !== "number") return null;
+  const price = value;
   if (!Number.isFinite(price) || price < 0) return null;
   return Number(price.toFixed(2));
+};
+
+const parseCheckoutItems = (items: unknown): ValidationResult<ParsedCheckoutItem[]> => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return { ok: false, code: "INVALID_ITEMS", message: "El carrito no contiene productos válidos." };
+  }
+
+  if (items.length > MAX_CHECKOUT_LINES) {
+    return {
+      ok: false,
+      code: "TOO_MANY_ITEMS",
+      message: `El carrito no puede superar las ${MAX_CHECKOUT_LINES} líneas.`,
+    };
+  }
+
+  const parsedItems: ParsedInventoryItem[] = [];
+
+  for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+    const rawItem = items[itemIndex];
+    if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+      return {
+        ok: false,
+        code: "INVALID_ITEMS",
+        itemIndex,
+        message: `La línea ${itemIndex + 1} del carrito tiene una estructura inválida.`,
+      };
+    }
+
+    const item = rawItem as Record<string, unknown>;
+    if (Object.keys(item).some((key) => !CHECKOUT_ITEM_KEYS.has(key))) {
+      return {
+        ok: false,
+        code: "INVALID_ITEMS",
+        itemIndex,
+        message: `La línea ${itemIndex + 1} del carrito tiene una estructura inválida.`,
+      };
+    }
+
+    const productId = typeof item.productId === "string"
+      ? normalizeProductId(sanitizeText(item.productId, 120))
+      : "";
+    const safeProductId = isValidProductId(productId) ? productId : undefined;
+
+    if (!safeProductId) {
+      return {
+        ok: false,
+        code: "INVALID_ITEMS",
+        itemIndex,
+        message: `La línea ${itemIndex + 1} no tiene un identificador de producto válido.`,
+      };
+    }
+
+    const qty = item.qty;
+    if (
+      typeof qty !== "number" ||
+      !Number.isFinite(qty) ||
+      !Number.isInteger(qty) ||
+      qty < 1 ||
+      qty > MAX_QUANTITY_PER_PRODUCT
+    ) {
+      return {
+        ok: false,
+        code: "INVALID_QUANTITY",
+        itemIndex,
+        productId: safeProductId,
+        message: `La cantidad de la línea ${itemIndex + 1} es inválida.`,
+      };
+    }
+
+    if (item.name !== undefined && typeof item.name !== "string") {
+      return {
+        ok: false,
+        code: "INVALID_ITEMS",
+        itemIndex,
+        productId: safeProductId,
+        message: `La línea ${itemIndex + 1} del carrito tiene una estructura inválida.`,
+      };
+    }
+
+    const unitPrice = normalizePrice(item.unitPrice);
+    if (unitPrice === null) {
+      return {
+        ok: false,
+        code: "INVALID_ITEMS",
+        itemIndex,
+        productId: safeProductId,
+        message: `El precio informado en la línea ${itemIndex + 1} es inválido.`,
+      };
+    }
+
+    parsedItems.push({
+      productId: safeProductId,
+      qty,
+      ...(unitPrice !== undefined ? { unitPrice } : {}),
+    });
+  }
+
+  const aggregated = aggregateInventoryItems(parsedItems);
+  if (!aggregated.ok) {
+    return { ok: false, ...aggregated.error };
+  }
+
+  return { ok: true, value: aggregated.items };
 };
 
 const normalizeCheckoutAttemptId = (value: unknown) => {
@@ -185,31 +287,8 @@ export const parseCheckoutBody = (
 
   const body = rawBody as CheckoutBodyInput;
 
-  if (!Array.isArray(body.items) || body.items.length === 0 || body.items.length > MAX_ITEMS) {
-    return { ok: false, message: "Invalid cart items" };
-  }
-
-  const parsedItems = body.items
-    .map((item): CheckoutItemInput => (item && typeof item === "object" ? item : {}))
-    .map((item) => {
-      const productId = sanitizeText(item.productId, 120);
-      const qty = normalizeQuantity(item.qty);
-      const name = sanitizeText(item.name, 120);
-      const unitPrice = normalizePrice(item.unitPrice);
-      if (!productId || !qty) return null;
-      if (unitPrice === null) return null;
-      return {
-        productId,
-        qty,
-        ...(name ? { name } : {}),
-        ...(unitPrice !== undefined ? { unitPrice } : {}),
-      };
-    })
-    .filter((item): item is ParsedCheckoutItem => item !== null);
-
-  if (parsedItems.length === 0) {
-    return { ok: false, message: "Invalid cart items" };
-  }
+  const parsedItems = parseCheckoutItems(body.items);
+  if (!parsedItems.ok) return parsedItems;
 
   const payerName = sanitizeText(body.payer?.name, 100);
   const payerPhone = sanitizeText(body.payer?.phone, 30).replace(/[^\d+]/g, "");
@@ -251,7 +330,7 @@ export const parseCheckoutBody = (
   return {
     ok: true,
     value: {
-      items: parsedItems,
+      items: parsedItems.value,
       paymentMethod,
       deliveryMethod,
       fulfillment: parsedFulfillment.value,

@@ -11,6 +11,16 @@ type FetchCatalogSourceOptions = {
   forceFresh?: boolean;
 };
 
+export type AuthoritativeCatalogProduct = {
+  id: unknown;
+  name: unknown;
+  price: unknown;
+  currency: unknown;
+  active: unknown;
+  stock_status: unknown;
+  stock_qty: unknown;
+};
+
 const PRODUCTS_SHEET = "products";
 const CATALOG_DISPLAY_REVALIDATE_SECONDS = 180;
 
@@ -20,7 +30,7 @@ const buildSheetsUrl = (options: Required<Pick<FetchCatalogSourceOptions, "inclu
 
   const url = new URL(endpoint);
   url.searchParams.set("sheet", PRODUCTS_SHEET);
-  url.searchParams.set("token", getSheetsToken("read"));
+  url.searchParams.set("token", getSheetsToken(options.includeInactive ? "admin" : "read"));
 
   if (options.includeInactive) {
     url.searchParams.set("includeInactive", "1");
@@ -34,9 +44,9 @@ const buildSheetsUrl = (options: Required<Pick<FetchCatalogSourceOptions, "inclu
   return url.toString();
 };
 
-export async function fetchProductsFromCatalogSource(
+const fetchCatalogRows = async (
   options: FetchCatalogSourceOptions = {},
-): Promise<Product[]> {
+): Promise<Record<string, unknown>[]> => {
   const includeInactive = options.includeInactive === true;
   const forceFresh = options.forceFresh === true;
   const requestUrl = buildSheetsUrl({ includeInactive, forceFresh });
@@ -86,9 +96,8 @@ export async function fetchProductsFromCatalogSource(
       rowCount: rows.length,
     });
 
-    return adaptSheetRowsToProducts(
-      rows.filter((row): row is Record<string, unknown> => row !== null && typeof row === "object"),
-      { includeInactive },
+    return rows.filter(
+      (row): row is Record<string, unknown> => row !== null && typeof row === "object" && !Array.isArray(row),
     );
   } catch (error) {
     logEvent("warn", "sheets.read.timing", {
@@ -102,4 +111,29 @@ export async function fetchProductsFromCatalogSource(
     });
     throw error;
   }
+};
+
+export async function fetchProductsFromCatalogSource(
+  options: FetchCatalogSourceOptions = {},
+): Promise<Product[]> {
+  const rows = await fetchCatalogRows(options);
+  return adaptSheetRowsToProducts(rows, { includeInactive: options.includeInactive === true });
+}
+
+export const adaptAuthoritativeCatalogRows = (
+  rows: readonly Record<string, unknown>[],
+): AuthoritativeCatalogProduct[] =>
+  rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    price: row.authoritative_price,
+    currency: row.authoritative_currency,
+    active: row.authoritative_active,
+    stock_status: row.authoritative_stock_status,
+    stock_qty: row.authoritative_stock_qty,
+  }));
+
+export async function fetchAuthoritativeProductsFromCatalogSource(): Promise<AuthoritativeCatalogProduct[]> {
+  const rows = await fetchCatalogRows({ includeInactive: true, forceFresh: true });
+  return adaptAuthoritativeCatalogRows(rows);
 }
