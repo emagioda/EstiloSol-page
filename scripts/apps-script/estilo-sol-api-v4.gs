@@ -399,6 +399,16 @@ function clearCatalogCache_() {
   CacheService.getScriptCache().remove(CACHE_PRODUCTS_KEY);
 }
 
+function cacheCatalogItemsSafely_(cache, items) {
+  try {
+    cache.put(CACHE_PRODUCTS_KEY, JSON.stringify(items), CACHE_PRODUCTS_TTL_SECONDS);
+  } catch (err) {
+    // CacheService rejects values larger than 100 KB. The cache is an
+    // optimization, so a failed write must never make the catalog unavailable.
+    logInternalError_("catalogCachePut", err);
+  }
+}
+
 function isNonEmptyCell_(value) {
   return value !== "" && value !== null && value !== undefined;
 }
@@ -473,7 +483,7 @@ function buildProductsPayloadObject(options) {
     .map(normalizeProduct)
     .filter((p) => p.id && p.name && (includeInactive ? true : p.active));
 
-  if (!includeInactive) cache.put(CACHE_PRODUCTS_KEY, JSON.stringify(items), CACHE_PRODUCTS_TTL_SECONDS);
+  if (!includeInactive) cacheCatalogItemsSafely_(cache, items);
 
   return {
     ok: true,

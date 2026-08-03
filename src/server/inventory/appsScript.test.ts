@@ -20,7 +20,7 @@ const scriptSource = readFileSync(
   "utf8",
 );
 
-const createHarness = (products: ProductRow[]) => {
+const createHarness = (products: ProductRow[], options: { cachePut?: () => void } = {}) => {
   const productHeaders = ["id", "name", "active", "stock_status", "stock_qty", "slug", "updated_at", "currency"];
   const productRows = products.map((product) => [
     product.id,
@@ -83,7 +83,11 @@ const createHarness = (products: ProductRow[]) => {
     },
     PropertiesService: { getScriptProperties: () => scriptProperties },
     CacheService: {
-      getScriptCache: () => ({ get: () => null, put: () => undefined, remove: () => undefined }),
+      getScriptCache: () => ({
+        get: () => null,
+        put: options.cachePut ?? (() => undefined),
+        remove: () => undefined,
+      }),
     },
     LockService: {
       getScriptLock: () => ({
@@ -103,7 +107,7 @@ const createHarness = (products: ProductRow[]) => {
   });
 
   vm.runInContext(
-    `${scriptSource}\n;globalThis.__inventoryApi = { normalizeStockItems_, handleDecrementStock, handleAppendOrderAndDecrementStock, normalizeProduct, doPost };`,
+    `${scriptSource}\n;globalThis.__inventoryApi = { normalizeStockItems_, handleDecrementStock, handleAppendOrderAndDecrementStock, normalizeProduct, buildProductsPayloadObject, doPost };`,
     context,
   );
 
@@ -144,6 +148,19 @@ const expectInventoryError = (operation: () => unknown, code: string) => {
 };
 
 describe("Apps Script authoritative inventory planning", () => {
+  it("AS-00 returns the public catalog when CacheService rejects an oversized payload", () => {
+    const harness = createHarness(
+      [availableProduct()],
+      { cachePut: () => { throw new Error("Argument too large: value"); } },
+    );
+
+    expect(harness.api.buildProductsPayloadObject({ force: true })).toMatchObject({
+      ok: true,
+      meta: { count: 1 },
+      items: [{ id: "a", name: "Producto A" }],
+    });
+  });
+
   it("AS-01 rejects repeated demand above stock before writing", () => {
     const harness = createHarness([availableProduct({ stockQty: 1 })]);
     expectInventoryError(
