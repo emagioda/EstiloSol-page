@@ -6,7 +6,7 @@ import {
   getShippingFeeForDeliveryMethod,
   type FulfillmentConfig,
 } from "@/src/config/fulfillment";
-import type { CatalogProduct } from "@/src/server/catalog/getProducts";
+import type { AuthoritativeCheckoutItem } from "@/src/server/catalog/stock";
 import type {
   Order,
   OrderDeliveryMethod,
@@ -15,17 +15,11 @@ import type {
   OrderPaymentMethod,
   OrderStatus,
 } from "@/src/server/orders/types";
-import type { ParsedCheckoutFulfillment, ParsedCheckoutItem } from "@/src/server/validation/payments";
-import {
-  dedupeInvalidProducts,
-  type InvalidCheckoutProduct,
-  validateCatalogItem,
-} from "@/src/server/catalog/stock";
+import type { ParsedCheckoutFulfillment } from "@/src/server/validation/payments";
 import { getCashTransferDiscountAmount } from "@/src/features/shop/domain/cashTransferDiscount";
 
 type BuildOrderInput = {
-  items: ParsedCheckoutItem[];
-  catalog: Map<string, CatalogProduct>;
+  items: AuthoritativeCheckoutItem[];
   customerName: string;
   customerPhone: string;
   customerEmail: string;
@@ -39,7 +33,6 @@ type BuildOrderInput = {
 
 type BuildOrderResult = {
   order: Order | null;
-  invalidProducts: InvalidCheckoutProduct[];
 };
 
 const buildExternalReference = () => {
@@ -128,33 +121,7 @@ const buildOrderFulfillment = ({
 };
 
 export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult => {
-  const orderItems: OrderItem[] = [];
-  const invalidProducts: InvalidCheckoutProduct[] = [];
-
-  for (const requestedItem of input.items) {
-    const product = input.catalog.get(requestedItem.productId);
-    const invalidProduct = validateCatalogItem(input.catalog, requestedItem);
-
-    if (!product || invalidProduct) {
-      if (invalidProduct) invalidProducts.push(invalidProduct);
-      continue;
-    }
-
-    orderItems.push({
-      productId: product.id,
-      title: product.name,
-      unitPrice: product.price,
-      qty: requestedItem.qty,
-      currency: "ARS",
-    });
-  }
-
-  if (invalidProducts.length > 0) {
-    return {
-      order: null,
-      invalidProducts: dedupeInvalidProducts(invalidProducts),
-    };
-  }
+  const orderItems: OrderItem[] = input.items.map((item) => ({ ...item }));
 
   const now = Date.now();
   const subtotalProducts = Number(
@@ -183,7 +150,6 @@ export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult
   if (!fulfillment) {
     return {
       order: null,
-      invalidProducts: [],
     };
   }
 
@@ -215,6 +181,5 @@ export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult
 
   return {
     order,
-    invalidProducts: [],
   };
 };

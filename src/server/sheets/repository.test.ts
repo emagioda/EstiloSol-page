@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSalesSheetRow, getOrdersForAdmin } from "@/src/server/sheets/repository";
+import {
+  buildSalesSheetRow,
+  decrementProductsStockInSheet,
+  getOrdersForAdmin,
+} from "@/src/server/sheets/repository";
+import { InventoryOperationError } from "@/src/server/inventory/errors";
 import type { Order } from "@/src/server/orders/types";
 
 const baseOrder: Order = {
@@ -127,5 +132,85 @@ describe("getOrdersForAdmin", () => {
     expect(orders).toHaveLength(1);
     expect(orders[0]?.customerName).toBe("Rocio Gonzalez");
     expect(orders[0]?.whatsapp).toBe("3413432914");
+  });
+});
+
+describe("inventory mutation contract", () => {
+  it("sends one aggregated demand per product id", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        ok: true,
+        deduped: false,
+        updated: [{ productId: "a", previousQty: 3, nextQty: 0 }],
+      }), { status: 200 }),
+    );
+
+    const result = await decrementProductsStockInSheet("order-aggregate", [
+      { productId: "a", qty: 1, title: "Nombre no autoritativo" },
+      { productId: "a", qty: 2, title: "Otro nombre" },
+    ]);
+
+    const requestBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      items: unknown[];
+    };
+    expect(requestBody.items).toEqual([{ productId: "a", qty: 3 }]);
+    expect(result).toEqual({
+      deduped: false,
+      updated: [{ productId: "a", previousQty: 3, nextQty: 0 }],
+    });
+  });
+
+  it("rejects every invalid mutation payload without calling Apps Script", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    await expect(decrementProductsStockInSheet("order-invalid", [
+      { productId: "a", qty: 1 },
+      { productId: "b", qty: 1.5 },
+    ])).rejects.toMatchObject({ code: "INVALID_QUANTITY", productId: "b" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves structured Apps Script inventory errors for PR 2", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        ok: false,
+        error: "Insufficient stock",
+        code: "INSUFFICIENT_STOCK",
+        productId: "a",
+      }), { status: 200 }),
+    );
+
+    const error = await decrementProductsStockInSheet("order-stock", [{ productId: "a", qty: 2 }])
+      .catch((caught) => caught);
+    expect(error).toBeInstanceOf(InventoryOperationError);
+    expect(error).toMatchObject({ code: "INSUFFICIENT_STOCK", productId: "a" });
+  });
+
+  it("rejects incomplete successful mutation responses", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, deduped: false }), { status: 200 }),
+    );
+
+    await expect(
+      decrementProductsStockInSheet("order-incomplete", [{ productId: "a", qty: 1 }]),
+    ).rejects.toMatchObject({ code: "INVENTORY_VALIDATION_FAILED" });
+  });
+
+  it("accepts an idempotent deduplication response without repeated updates", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, deduped: true }), { status: 200 }),
+    );
+
+    await expect(
+      decrementProductsStockInSheet("order-deduped", [{ productId: "a", qty: 1 }]),
+    ).resolves.toEqual({ deduped: true, updated: [] });
   });
 });

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getActivePickupPointById } from "@/src/config/fulfillment";
 import { env } from "@/src/config/env";
-import { getProductsCatalog } from "@/src/server/catalog/getProducts";
+import { getAuthoritativeProductsCatalog } from "@/src/server/catalog/getProducts";
 import { getFulfillmentConfig } from "@/src/server/fulfillment/source";
 import { getJson, setJson } from "@/src/server/kv";
 import { logEvent } from "@/src/server/observability/log";
@@ -12,7 +12,7 @@ import { createOrder, markPreferenceCreated } from "@/src/server/orders/store";
 import { createPreferenceOnMp } from "@/src/server/payments/mpClient";
 import { buildPreferencePayload, buildPreferenceUrls } from "@/src/server/payments/preferencePayload";
 import type { MpPreferenceResponse } from "@/src/server/payments/shared";
-import { invalidProductsMessage } from "@/src/server/catalog/stock";
+import { invalidProductsMessage, validateAuthoritativeInventory } from "@/src/server/catalog/stock";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { parseCheckoutBody, type ParsedCheckoutBody } from "@/src/server/validation/payments";
 
@@ -46,7 +46,7 @@ const buildCheckoutAttemptFingerprint = (body: ParsedCheckoutBody) =>
         items: body.items.map((item) => ({
           productId: item.productId,
           qty: item.qty,
-          unitPrice: item.unitPrice,
+          requestedUnitPrices: item.requestedUnitPrices,
         })),
         paymentMethod: body.paymentMethod,
         deliveryMethod: body.deliveryMethod,
@@ -141,7 +141,16 @@ export async function POST(request: NextRequest) {
   const parsedBody = parseCheckoutBody(rawBody, { requirePayer: true, requireFulfillment: true });
   if (!parsedBody.ok) {
     await trackBusinessEvent("checkout.preference.invalid_input", { route: "create-preference" });
-    return respond({ error: parsedBody.message }, { status: 400 }, "invalid_input");
+    return respond(
+      {
+        error: parsedBody.message,
+        ...(parsedBody.code ? { code: parsedBody.code } : {}),
+        ...(parsedBody.itemIndex !== undefined ? { itemIndex: parsedBody.itemIndex } : {}),
+        ...(parsedBody.productId ? { productId: parsedBody.productId } : {}),
+      },
+      { status: 400 },
+      "invalid_input",
+    );
   }
 
   const checkoutFingerprint = buildCheckoutAttemptFingerprint(parsedBody.value);
@@ -196,7 +205,7 @@ export async function POST(request: NextRequest) {
   }
 
   const catalog = await measure("catalogReadMs", () =>
-    getProductsCatalog({ forceFresh: true }).catch((error) => {
+    getAuthoritativeProductsCatalog().catch((error) => {
       logEvent("error", "payments.catalog_fetch_error", {
         route: "create-preference",
         message: error instanceof Error ? error.message : "unknown",
@@ -215,12 +224,36 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { order, invalidProducts } = (() => {
+  const inventory = validateAuthoritativeInventory(catalog, requestedItems);
+  if (!inventory.ok) {
+    const primaryError = inventory.errors[0];
+    await trackBusinessEvent("checkout.preference.invalid_product", {
+      route: "create-preference",
+      invalidCount: inventory.errors.length,
+      errorCodes: inventory.errors.map((item) => item.code),
+      productIds: inventory.errors.map((item) => item.productId),
+    });
+
+    return respond(
+      {
+        error: invalidProductsMessage(inventory.errors),
+        code: primaryError.code,
+        invalidProducts: inventory.errors,
+      },
+      { status: 400 },
+      "invalid_product",
+      {
+        invalidCount: inventory.errors.length,
+        itemCount: requestedItems.length,
+      },
+    );
+  }
+
+  const { order } = (() => {
     const stepStartedAt = Date.now();
     try {
       return buildOrderFromCheckout({
-        items: requestedItems,
-        catalog,
+        items: inventory.items,
         customerName,
         customerPhone,
         customerEmail,
@@ -234,27 +267,6 @@ export async function POST(request: NextRequest) {
       timings.orderBuildMs = elapsedSince(stepStartedAt);
     }
   })();
-
-  if (invalidProducts.length > 0) {
-    await trackBusinessEvent("checkout.preference.invalid_product", {
-      route: "create-preference",
-      invalidCount: invalidProducts.length,
-      invalidProducts: invalidProducts.map((item) => item.name),
-    });
-
-    return respond(
-      {
-        error: invalidProductsMessage(invalidProducts),
-        invalidProducts,
-      },
-      { status: 400 },
-      "invalid_product",
-      {
-        invalidCount: invalidProducts.length,
-        itemCount: requestedItems.length,
-      }
-    );
-  }
 
   if (!order) {
     return respond(
