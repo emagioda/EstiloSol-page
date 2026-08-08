@@ -15,10 +15,12 @@ import {
 } from "@/src/server/payments/webhookSignature";
 import {
   WEBHOOK_DEDUPE_TTL_SECONDS,
+  claimReceiptEmailDelivery,
   getOrder,
   markApproved,
   markTerminalPaymentState,
   paymentDedupeKey,
+  releaseReceiptEmailDelivery,
   updateOrder,
   webhookDedupeKey,
 } from "@/src/server/orders/store";
@@ -40,6 +42,11 @@ const trySendReceiptEmail = async (
   approvedAt: number
 ) => {
   if (order.receiptEmailSentAt) return;
+  const claimed = await claimReceiptEmailDelivery(order.externalReference);
+  if (!claimed) return;
+
+  const latestOrder = await getOrder(order.externalReference);
+  if (latestOrder?.receiptEmailSentAt) return;
 
   const result = await sendOrderReceiptEmail({
     order,
@@ -54,6 +61,7 @@ const trySendReceiptEmail = async (
   }
 
   if (result.reason === "missing_customer_email") {
+    await releaseReceiptEmailDelivery(order.externalReference);
     return;
   }
 
@@ -66,6 +74,7 @@ const trySendReceiptEmail = async (
     externalReference: order.externalReference,
     reason: result.reason,
   });
+  await releaseReceiptEmailDelivery(order.externalReference);
 };
 
 export async function POST(request: NextRequest) {
@@ -191,11 +200,23 @@ export async function POST(request: NextRequest) {
     const paymentProcessed = await getJson<string>(paymentKey);
     if (!paymentProcessed) {
       const approvedAt = Date.now();
-      await markApproved(externalReference, {
-        paymentId: resolvedPaymentId,
-        mpStatus: status,
-        approvedAt,
-      });
+      let approvedOrder: Order | null;
+      try {
+        approvedOrder = await markApproved(externalReference, {
+          paymentId: resolvedPaymentId,
+          mpStatus: status,
+          approvedAt,
+        });
+      } catch (error) {
+        logEvent("error", "payments.webhook_order_persistence_failed", {
+          externalReference,
+          errorName: error instanceof Error ? error.name : "unknown",
+        });
+        return NextResponse.json({ error: "Order persistence failed" }, { status: 503 });
+      }
+      if (!approvedOrder || approvedOrder.paymentStatus !== "confirmed") {
+        return NextResponse.json({ error: "Order persistence failed" }, { status: 503 });
+      }
       scheduleAfterResponse(() => trySendReceiptEmail(order, resolvedPaymentId, approvedAt));
       await setJson(paymentKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
       logEvent("info", "payments.approved_from_webhook", {
