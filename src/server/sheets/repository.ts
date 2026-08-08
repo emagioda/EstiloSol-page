@@ -39,6 +39,12 @@ const DEFAULT_MUTATION_POLICY = {
   retryDelayMs: 400,
 } as const;
 
+export const SHEETS_MUTATION_WORST_CASE_MS =
+  DEFAULT_MUTATION_POLICY.timeoutMs * (DEFAULT_MUTATION_POLICY.retries + 1) +
+  DEFAULT_MUTATION_POLICY.retryDelayMs * DEFAULT_MUTATION_POLICY.retries;
+
+export const UPDATE_ORDER_ROW_WORST_CASE_MS = SHEETS_MUTATION_WORST_CASE_MS * 2;
+
 type SheetRow = Record<string, unknown>;
 
 type GetSheetRowsOptions = {
@@ -98,6 +104,7 @@ export type AdminOrderSheetRow = {
   itemsSummary: string;
   notes: string;
   receiptEmailSentAt: string;
+  salesSheetSyncPending?: boolean;
   raw: SheetRow;
 };
 

@@ -3,7 +3,11 @@ import type { OrderInventoryStatus, OrderPaymentStatus, OrderShippingStatus } fr
 
 type InventoryOrder = Pick<
   AdminOrderSheetRow,
-  "inventoryStatus" | "inventoryIssueCode" | "paymentStatus" | "shippingStatus"
+  | "inventoryStatus"
+  | "inventoryIssueCode"
+  | "paymentStatus"
+  | "shippingStatus"
+  | "salesSheetSyncPending"
 >;
 
 const CONFLICT_LABELS: Record<string, string> = {
@@ -35,6 +39,9 @@ export const getInventoryIssueLabel = (
 export const inventoryRequiresAttention = (status: OrderInventoryStatus | undefined) =>
   status === "conflict" || status === "error";
 
+export const orderRequiresAttention = (order: InventoryOrder) =>
+  Boolean(order.salesSheetSyncPending) || inventoryRequiresAttention(order.inventoryStatus);
+
 export const canRetryInventory = (status: OrderInventoryStatus | undefined) =>
   inventoryRequiresAttention(status);
 
@@ -44,18 +51,23 @@ export const canCompleteShipping = (status: OrderInventoryStatus | undefined) =>
 export const isOrderReadyForShipping = (order: InventoryOrder) =>
   order.paymentStatus === "confirmed" &&
   order.shippingStatus === "in_process" &&
-  !inventoryRequiresAttention(order.inventoryStatus);
+  !orderRequiresAttention(order);
 
 export const isOrderNormallyCompleted = (order: InventoryOrder) =>
   order.paymentStatus === "confirmed" &&
   order.shippingStatus === "completed" &&
-  !inventoryRequiresAttention(order.inventoryStatus);
+  !orderRequiresAttention(order);
 
 export const getOrderAction = (
-  order: Pick<InventoryOrder, "inventoryStatus">,
+  order: Pick<InventoryOrder, "inventoryStatus" | "salesSheetSyncPending">,
   draft: { paymentStatus: OrderPaymentStatus; shippingStatus: OrderShippingStatus }
 ) => {
-  if (inventoryRequiresAttention(order.inventoryStatus)) {
+  if (orderRequiresAttention({
+    ...order,
+    inventoryIssueCode: "",
+    paymentStatus: draft.paymentStatus,
+    shippingStatus: draft.shippingStatus,
+  })) {
     return { label: "Requiere atención", tone: "review" as const };
   }
   if (draft.paymentStatus === "pending") {

@@ -6,6 +6,7 @@ vi.mock("@/src/server/sheets/repository", () => ({
   appendOrderToSalesSheet: vi.fn(),
   decrementProductsStockInSheet: vi.fn(),
   updateOrderRowInSalesSheet: vi.fn(),
+  UPDATE_ORDER_ROW_WORST_CASE_MS: 48_800,
 }));
 
 vi.mock("@/src/server/catalog/getProducts", () => ({
@@ -23,6 +24,9 @@ import {
   markCancelled,
   markChargedBack,
   markRefunded,
+  ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS,
+  ORDER_WRITE_LOCK_TTL_SECONDS,
+  orderWriteLockCoversWorstCaseSheetUpdate,
   retryPaidOrderInventory,
   updateOrder,
 } from "./store";
@@ -33,6 +37,12 @@ import {
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
 import { invalidateProductsCatalogCache } from "@/src/server/catalog/getProducts";
+import { trackBusinessEvent } from "@/src/server/observability/metrics";
+import {
+  addPendingSalesSheetOrder,
+  isPendingSalesSheetOrder,
+  removePendingSalesSheetOrder,
+} from "./salesSheetSync";
 
 let sequence = 0;
 const makeOrder = (patch: Partial<Order> = {}): Order => {
@@ -273,9 +283,63 @@ describe("PR 2 recoverable Sheets synchronization", () => {
       inventoryIssueCode: "SHEETS_UNAVAILABLE",
     });
   });
+
+  it("PR2-SYNC-09 failed approved append keeps the confirmed KV order indexed", async () => {
+    const order = makeOrder();
+    await createOrder(order, { syncSheet: false });
+    vi.mocked(appendOrderToSalesSheet).mockRejectedValueOnce(new Error("Sheets unavailable"));
+
+    const updated = await approve(order);
+
+    expect(updated).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      salesSheetSyncFailedAt: expect.any(Number),
+    });
+    await expect(isPendingSalesSheetOrder(order.externalReference)).resolves.toBe(true);
+    await removePendingSalesSheetOrder(order.externalReference);
+  });
+
+  it("PR2-SYNC-09A indexing survives an observability failure", async () => {
+    const order = makeOrder();
+    await createOrder(order, { syncSheet: false });
+    vi.mocked(appendOrderToSalesSheet).mockRejectedValueOnce(new Error("Sheets unavailable"));
+    vi.mocked(trackBusinessEvent).mockRejectedValueOnce(new Error("Metrics unavailable"));
+
+    const updated = await approve(order);
+
+    expect(updated?.paymentStatus).toBe("confirmed");
+    await expect(isPendingSalesSheetOrder(order.externalReference)).resolves.toBe(true);
+    await removePendingSalesSheetOrder(order.externalReference);
+  });
+
+  it("PR2-SYNC-INDEX-04 an unpaid deferred preference is never indexed", async () => {
+    const order = makeOrder();
+    await createOrder(order, { syncSheet: false });
+
+    await expect(isPendingSalesSheetOrder(order.externalReference)).resolves.toBe(false);
+  });
+
+  it("PR2-SYNC-INDEX-05 a successful initial append removes a stale index entry", async () => {
+    const order = makeOrder();
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+
+    await approve(order);
+
+    await expect(isPendingSalesSheetOrder(order.externalReference)).resolves.toBe(false);
+  });
 });
 
 describe("PR 2 monotonic deducted persistence", () => {
+  it("PR2-CONC-LOCK-TTL covers both Sheet update attempts plus a safety margin", () => {
+    expect(ORDER_WRITE_LOCK_TTL_SECONDS).toBe(75);
+    expect(ORDER_WRITE_LOCK_TTL_SECONDS * 1000).toBeGreaterThanOrEqual(
+      48_800 + ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS
+    );
+    expect(orderWriteLockCoversWorstCaseSheetUpdate()).toBe(true);
+  });
+
   it("PR2-CONC-06 concurrent real and deduped approvals finish deducted with one authoritative decrement", async () => {
     const firstAttemptEntered = deferred();
     const releaseFirstAttempt = deferred();

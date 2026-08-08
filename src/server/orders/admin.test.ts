@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AdminOrderSheetRow } from "@/src/server/sheets/repository";
 import type { Order } from "./types";
 import { getOrdersForAdminWithKvState, resolveAdminOrderState } from "./admin";
+import { recoverPendingSalesSheetOrder } from "./salesSheetRecovery";
 
 const INVENTORY_ISSUE_AT = Date.parse("2026-08-08T12:00:00.000Z");
 const STOCK_DEDUCTED_AT = Date.parse("2026-08-08T12:05:00.000Z");
@@ -184,5 +185,142 @@ describe("PR 2 admin KV and Sheets reconciliation", () => {
     expect(first?.inventoryStatus).toBe("error");
     expect(second?.inventoryStatus).toBe("error");
     expect(syncSheetState).toHaveBeenCalledTimes(2);
+  });
+
+  it("PR2-SYNC-10 an indexed KV-only paid order is visible in admin", async () => {
+    const kvOrder = makeKvOrder({
+      salesSheetDeferredUntilApprovedAt: 1,
+      salesSheetSyncFailedAt: 2,
+      customer: { name: "Cliente real", phone: "3410000000", email: "cliente@example.com" },
+    });
+
+    const result = await getOrdersForAdminWithKvState({
+      getSheetOrders: async () => [],
+      listPendingOrderIds: async () => [kvOrder.externalReference],
+      getKvOrder: async () => kvOrder,
+      recoverPendingOrder: vi.fn().mockResolvedValue({ outcome: "pending", order: kvOrder }),
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      orderId: kvOrder.externalReference,
+      customerName: "Cliente real",
+      salesSheetSyncPending: true,
+    });
+  });
+
+  it("PR2-SYNC-11 a KV-only row preserves payment, inventory and stock evidence", async () => {
+    const kvOrder = makeKvOrder({
+      salesSheetDeferredUntilApprovedAt: 1,
+      salesSheetSyncFailedAt: 2,
+      inventoryStatus: "deducted",
+      stockDeductedAt: STOCK_DEDUCTED_AT,
+    });
+
+    const [result] = await getOrdersForAdminWithKvState({
+      getSheetOrders: async () => [],
+      listPendingOrderIds: async () => [kvOrder.externalReference],
+      getKvOrder: async () => kvOrder,
+      recoverPendingOrder: vi.fn().mockResolvedValue({ outcome: "pending", order: kvOrder }),
+    });
+
+    expect(result).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: new Date(STOCK_DEDUCTED_AT).toISOString(),
+      salesSheetSyncPending: true,
+    });
+  });
+
+  it("PR2-SYNC-17-ADMIN a failed recovery remains visible for another attempt", async () => {
+    const kvOrder = makeKvOrder({
+      salesSheetDeferredUntilApprovedAt: 1,
+      salesSheetSyncFailedAt: 2,
+    });
+    const removePendingOrder = vi.fn();
+    const recoverPendingOrder = vi
+      .fn()
+      .mockResolvedValue({ outcome: "pending", order: kvOrder });
+
+    const [result] = await getOrdersForAdminWithKvState({
+      getSheetOrders: async () => [],
+      listPendingOrderIds: async () => [kvOrder.externalReference],
+      getKvOrder: async () => kvOrder,
+      recoverPendingOrder,
+      removePendingOrder,
+    });
+
+    expect(result.salesSheetSyncPending).toBe(true);
+    expect(recoverPendingOrder).toHaveBeenCalledTimes(1);
+    expect(removePendingOrder).not.toHaveBeenCalled();
+  });
+
+  it("PR2-SYNC-INDEX-03 an expired KV order is removed from the pending index", async () => {
+    const removePendingOrder = vi.fn().mockResolvedValue(true);
+
+    const result = await getOrdersForAdminWithKvState({
+      getSheetOrders: async () => [],
+      listPendingOrderIds: async () => ["expired-order"],
+      getKvOrder: async () => null,
+      removePendingOrder,
+    });
+
+    expect(result).toEqual([]);
+    expect(removePendingOrder).toHaveBeenCalledWith("expired-order");
+  });
+
+  it("PR2-SYNC-20 two concurrent admin loads perform at most one append", async () => {
+    const kvOrder = makeKvOrder({
+      externalReference: `order-sync-concurrent-${Date.now()}`,
+      salesSheetDeferredUntilApprovedAt: 1,
+      salesSheetSyncFailedAt: 2,
+    });
+    let releaseAppend!: () => void;
+    let signalAppendEntered!: () => void;
+    const appendEntered = new Promise<void>((resolve) => {
+      signalAppendEntered = resolve;
+    });
+    const appendReleased = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    let indexed = true;
+    const appendOrder = vi.fn(async () => {
+      signalAppendEntered();
+      await appendReleased;
+    });
+    const recoveryDependencies = {
+      isPending: vi.fn(async () => indexed),
+      readOrder: vi.fn(async () => kvOrder),
+      appendOrder,
+      updateSheetRow: vi.fn(),
+      persistOrder: vi.fn(async (_orderId: string, patch: Partial<Order>) => ({
+        ...kvOrder,
+        ...patch,
+      })),
+      addPending: vi.fn(async () => false),
+      removePending: vi.fn(async () => {
+        indexed = false;
+        return true;
+      }),
+      now: vi.fn(() => 1_000),
+    };
+    const adminDependencies = {
+      getSheetOrders: async () => [],
+      listPendingOrderIds: async () => [kvOrder.externalReference],
+      getKvOrder: async () => kvOrder,
+      recoverPendingOrder: (orderId: string, options: { rowExists: boolean }) =>
+        recoverPendingSalesSheetOrder(orderId, options, recoveryDependencies),
+    };
+
+    const firstLoad = getOrdersForAdminWithKvState(adminDependencies);
+    await appendEntered;
+    const secondLoad = getOrdersForAdminWithKvState(adminDependencies);
+    const secondResult = await secondLoad;
+    releaseAppend();
+    const firstResult = await firstLoad;
+
+    expect(firstResult).toHaveLength(1);
+    expect(secondResult).toHaveLength(1);
+    expect(appendOrder).toHaveBeenCalledTimes(1);
   });
 });

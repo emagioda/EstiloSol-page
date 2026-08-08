@@ -18,6 +18,7 @@ import {
   inventoryRequiresAttention,
   isOrderNormallyCompleted,
   isOrderReadyForShipping,
+  orderRequiresAttention,
 } from "./inventoryUi";
 
 type VentasTableProps = {
@@ -601,7 +602,7 @@ export default function VentasTable({ orders }: VentasTableProps) {
       if (
         paymentFilter === "confirmed" &&
         shippingFilter !== "all" &&
-        inventoryRequiresAttention(order.inventoryStatus)
+        orderRequiresAttention(order)
       ) {
         return false;
       }
@@ -1051,6 +1052,11 @@ export default function VentasTable({ orders }: VentasTableProps) {
                 {inventoryRequiresAttention(order.inventoryStatus) ? (
                   <span className="text-[11px] font-black text-rose-800">⚠ Requiere atención</span>
                 ) : null}
+                {order.salesSheetSyncPending ? (
+                  <span className="rounded-full border border-amber-500/60 bg-amber-100 px-2 py-1 text-[11px] font-black text-amber-950">
+                    ⚠ Registro en ventas pendiente
+                  </span>
+                ) : null}
               </div>
 
               <div className="mt-3 grid grid-cols-2 gap-2">
@@ -1265,14 +1271,21 @@ export default function VentasTable({ orders }: VentasTableProps) {
                     </div>
                   </td>
                   <td className="px-3 py-3.5 text-center">
-                    <span
-                      className={`inline-flex max-w-full items-center justify-center rounded-full border px-2 py-1 text-[11px] font-bold ${
-                        inventoryBadgeClass[order.inventoryStatus ?? "legacy"]
-                      }`}
-                      title={getInventoryIssueLabel(order.inventoryStatus, order.inventoryIssueCode)}
-                    >
-                      {getInventoryStatusLabel(order.inventoryStatus)}
-                    </span>
+                    <div className="flex flex-col items-center gap-1">
+                      <span
+                        className={`inline-flex max-w-full items-center justify-center rounded-full border px-2 py-1 text-[11px] font-bold ${
+                          inventoryBadgeClass[order.inventoryStatus ?? "legacy"]
+                        }`}
+                        title={getInventoryIssueLabel(order.inventoryStatus, order.inventoryIssueCode)}
+                      >
+                        {getInventoryStatusLabel(order.inventoryStatus)}
+                      </span>
+                      {order.salesSheetSyncPending ? (
+                        <span className="inline-flex rounded-full border border-amber-500/60 bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-950">
+                          Registro pendiente
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               );
@@ -1554,6 +1567,16 @@ export default function VentasTable({ orders }: VentasTableProps) {
             </div>
 
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 md:px-5">
+              {selectedOrder.salesSheetSyncPending ? (
+                <section className="rounded-2xl border border-amber-300/55 bg-amber-950/35 p-3 text-amber-50 md:p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-amber-200">
+                    Registro en ventas pendiente
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed">
+                    El pago está confirmado en el sistema, pero este pedido todavía requiere sincronizarse con la hoja de Ventas.
+                  </p>
+                </section>
+              ) : null}
               <section className="rounded-2xl border border-[#e2d7ea] bg-[#fbf8ff] p-3 text-[#2a1644] md:p-4">
                 <dl className="grid grid-cols-2 gap-3 text-sm">
                   <div className="min-w-0">

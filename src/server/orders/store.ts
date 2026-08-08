@@ -5,6 +5,7 @@ import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { privacyPolicy } from "@/src/server/privacy/policy";
 import {
   appendOrderToSalesSheet,
+  UPDATE_ORDER_ROW_WORST_CASE_MS,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
 import {
@@ -14,6 +15,10 @@ import {
   shouldAttemptInventoryAutomatically,
   type InventoryAttemptResult,
 } from "./inventory";
+import {
+  addPendingSalesSheetOrder,
+  removePendingSalesSheetOrder,
+} from "./salesSheetSync";
 import type { Order, OrderPaymentStatus, OrderStatus } from "./types";
 
 export const WEBHOOK_DEDUPE_TTL_SECONDS = 7 * 24 * 3600;
@@ -23,7 +28,8 @@ const orderWriteLockKey = (externalReference: string) => `es:order:write-lock:${
 const salesSheetSyncKey = (externalReference: string) => `es:order:sales-sheet-sync:${externalReference}`;
 const receiptEmailSyncKey = (externalReference: string) => `es:order:receipt-email-sync:${externalReference}`;
 
-const ORDER_WRITE_LOCK_TTL_SECONDS = 45;
+export const ORDER_WRITE_LOCK_TTL_SECONDS = 75;
+export const ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS = 20_000;
 const ORDER_WRITE_LOCK_WAIT_MS = 30_000;
 const ORDER_WRITE_LOCK_RETRY_MS = 20;
 
@@ -150,8 +156,10 @@ async function appendApprovedOrderToSalesSheet(order: Order): Promise<{ order: O
     return { order, synced: false };
   }
 
+  let appendCompleted = false;
   try {
     await appendOrderToSalesSheet(order);
+    appendCompleted = true;
     const salesSheetSyncedAt = Date.now();
     await setJson(salesSheetSyncKey(order.externalReference), "synced", WEBHOOK_DEDUPE_TTL_SECONDS);
     const updated = await updateOrder(
@@ -159,27 +167,75 @@ async function appendApprovedOrderToSalesSheet(order: Order): Promise<{ order: O
       { salesSheetSyncedAt },
       { syncSheet: false }
     );
+    try {
+      await removePendingSalesSheetOrder(order.externalReference);
+    } catch (error) {
+      logEvent("warn", "orders.sales_sheet_pending_index_remove_failed", {
+        orderId: order.externalReference,
+        paymentStatus: order.paymentStatus,
+        inventoryStatus: resolveOrderInventoryStatus(order) ?? "legacy",
+        outcome: error instanceof Error ? error.name : "unknown",
+      });
+    }
     return {
       order: updated ?? { ...order, salesSheetSyncedAt },
       synced: true,
     };
   } catch (error) {
-    await del(salesSheetSyncKey(order.externalReference));
+    if (!appendCompleted) {
+      try {
+        await del(salesSheetSyncKey(order.externalReference));
+      } catch (deleteError) {
+        logEvent("warn", "orders.sales_sheet_sync_lock_delete_failed", {
+          orderId: order.externalReference,
+          outcome: deleteError instanceof Error ? deleteError.name : "unknown",
+        });
+      }
+    }
     const salesSheetSyncFailedAt = Date.now();
     logEvent("error", "orders.sales_sheet_approved_append_failed", {
       externalReference: order.externalReference,
       paymentId: order.mpPaymentId,
       error,
     });
-    await trackBusinessEvent("payment.sales_sheet_sync_failed", {
-      externalReference: order.externalReference,
-      paymentId: order.mpPaymentId,
-    });
-    const updated = await updateOrder(
-      order.externalReference,
-      { salesSheetSyncFailedAt },
-      { syncSheet: false }
-    );
+    try {
+      await trackBusinessEvent("payment.sales_sheet_sync_failed", {
+        externalReference: order.externalReference,
+        paymentId: order.mpPaymentId,
+      });
+    } catch (metricError) {
+      logEvent("warn", "orders.sales_sheet_sync_failure_metric_failed", {
+        orderId: order.externalReference,
+        paymentStatus: order.paymentStatus,
+        inventoryStatus: resolveOrderInventoryStatus(order) ?? "legacy",
+        outcome: metricError instanceof Error ? metricError.name : "unknown",
+      });
+    }
+    let updated: Order | null = null;
+    try {
+      updated = await updateOrder(
+        order.externalReference,
+        { salesSheetSyncFailedAt },
+        { syncSheet: false }
+      );
+    } catch (updateError) {
+      logEvent("error", "orders.sales_sheet_sync_failure_state_failed", {
+        orderId: order.externalReference,
+        paymentStatus: order.paymentStatus,
+        inventoryStatus: resolveOrderInventoryStatus(order) ?? "legacy",
+        outcome: updateError instanceof Error ? updateError.name : "unknown",
+      });
+    }
+    try {
+      await addPendingSalesSheetOrder(order.externalReference);
+    } catch (indexError) {
+      logEvent("error", "orders.sales_sheet_pending_index_failed", {
+        orderId: order.externalReference,
+        paymentStatus: order.paymentStatus,
+        inventoryStatus: resolveOrderInventoryStatus(order) ?? "legacy",
+        outcome: indexError instanceof Error ? indexError.name : "unknown",
+      });
+    }
     return {
       order: updated ?? { ...order, salesSheetSyncFailedAt },
       synced: false,
@@ -192,6 +248,10 @@ export async function getOrder(externalReference: string): Promise<Order | null>
   if (!stored) return null;
   return ensureOrderDefaults(stored);
 }
+
+export const orderWriteLockCoversWorstCaseSheetUpdate = (): boolean =>
+  ORDER_WRITE_LOCK_TTL_SECONDS * 1000 >=
+  UPDATE_ORDER_ROW_WORST_CASE_MS + ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS;
 
 export const mergeOrderUpdate = (
   current: Order,

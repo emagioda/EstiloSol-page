@@ -6,6 +6,10 @@ type KvClient = {
   get<T = KvValue>(key: string): Promise<T | null>;
   set(key: string, value: KvValue, options?: { ex?: number; nx?: boolean }): Promise<"OK" | null>;
   del(key: string): Promise<number>;
+  sadd(key: string, ...members: string[]): Promise<number>;
+  srem(key: string, ...members: string[]): Promise<number>;
+  smembers<T = string>(key: string): Promise<T[]>;
+  sismember(key: string, member: string): Promise<number>;
   incr(key: string): Promise<number>;
   incrby(key: string, amount: number): Promise<number>;
   expire(key: string, seconds: number): Promise<number>;
@@ -59,6 +63,39 @@ const memoryKv: KvClient = {
   },
   async del(key: string): Promise<number> {
     return memoryStore.delete(key) ? 1 : 0;
+  },
+  async sadd(key: string, ...members: string[]): Promise<number> {
+    const entry = getMemoryEntry(key);
+    const values = entry?.value instanceof Set ? entry.value : new Set<string>();
+    const sizeBefore = values.size;
+    members.forEach((member) => values.add(member));
+    memoryStore.set(key, {
+      value: values,
+      expiresAt: entry?.expiresAt ?? null,
+    });
+    return values.size - sizeBefore;
+  },
+  async srem(key: string, ...members: string[]): Promise<number> {
+    const entry = getMemoryEntry(key);
+    if (!(entry?.value instanceof Set)) return 0;
+
+    let removed = 0;
+    members.forEach((member) => {
+      if (entry.value instanceof Set && entry.value.delete(member)) removed += 1;
+    });
+    if (entry.value.size === 0) {
+      memoryStore.delete(key);
+    }
+    return removed;
+  },
+  async smembers<T = string>(key: string): Promise<T[]> {
+    const entry = getMemoryEntry(key);
+    if (!(entry?.value instanceof Set)) return [];
+    return Array.from(entry.value) as T[];
+  },
+  async sismember(key: string, member: string): Promise<number> {
+    const entry = getMemoryEntry(key);
+    return entry?.value instanceof Set && entry.value.has(member) ? 1 : 0;
   },
   async incr(key: string): Promise<number> {
     const entry = getMemoryEntry(key);
@@ -124,6 +161,22 @@ export async function setJsonIfNotExists<T>(key: string, value: T, ttlSeconds: n
 
 export async function del(key: string): Promise<void> {
   await kv.del(key);
+}
+
+export async function addSetMember(key: string, member: string): Promise<boolean> {
+  return (await kv.sadd(key, member)) === 1;
+}
+
+export async function removeSetMember(key: string, member: string): Promise<boolean> {
+  return (await kv.srem(key, member)) === 1;
+}
+
+export async function listSetMembers(key: string): Promise<string[]> {
+  return kv.smembers<string>(key);
+}
+
+export async function isSetMember(key: string, member: string): Promise<boolean> {
+  return (await kv.sismember(key, member)) === 1;
 }
 
 type EvalKvClient = KvClient & {

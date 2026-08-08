@@ -7,6 +7,7 @@ import {
   getOrderAction,
   isOrderNormallyCompleted,
   isOrderReadyForShipping,
+  orderRequiresAttention,
 } from "./inventoryUi";
 
 describe("PR 2 admin inventory UI helpers", () => {
@@ -61,5 +62,34 @@ describe("PR 2 admin inventory UI helpers", () => {
     expect(canRetryInventory("pending")).toBe(false);
     expect(canRetryInventory("deducted")).toBe(false);
     expect(canRetryInventory(undefined)).toBe(false);
+  });
+
+  it("marks a pending sales Sheet registration as requiring attention", () => {
+    const order = {
+      paymentStatus: "confirmed" as const,
+      shippingStatus: "in_process" as const,
+      inventoryStatus: "deducted" as const,
+      inventoryIssueCode: "",
+      salesSheetSyncPending: true,
+    };
+
+    expect(orderRequiresAttention(order)).toBe(true);
+    expect(getOrderAction(order, order)).toEqual({
+      label: "Requiere atención",
+      tone: "review",
+    });
+  });
+
+  it("excludes pending sales Sheet registrations from normal operational counters", () => {
+    const order = {
+      paymentStatus: "confirmed" as const,
+      shippingStatus: "in_process" as const,
+      inventoryStatus: "deducted" as const,
+      inventoryIssueCode: "",
+      salesSheetSyncPending: true,
+    };
+
+    expect(isOrderReadyForShipping(order)).toBe(false);
+    expect(isOrderNormallyCompleted({ ...order, shippingStatus: "completed" })).toBe(false);
   });
 });
