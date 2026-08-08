@@ -66,6 +66,14 @@ const makeOrder = (patch: Partial<Order> = {}): Order => {
   };
 };
 
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
 const dependenciesFor = (order: Order) => {
   const removePending = vi.fn().mockResolvedValue(true);
   const persistOrder = vi.fn().mockImplementation(async (_orderId, patch) => ({
@@ -223,8 +231,8 @@ describe("PR 2 indexed sales Sheet recovery", () => {
 
   it("PR2-SYNC-20-LOCK concurrent recovery allows at most one effective append", async () => {
     const order = makeOrder();
-    const firstAppendEntered = Promise.withResolvers<void>();
-    const releaseFirstAppend = Promise.withResolvers<void>();
+    const firstAppendEntered = deferred();
+    const releaseFirstAppend = deferred();
     const dependencies = dependenciesFor(order);
     vi.mocked(appendOrderToSalesSheet).mockImplementationOnce(async () => {
       firstAppendEntered.resolve();
