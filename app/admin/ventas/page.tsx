@@ -1,10 +1,10 @@
 import VentasTable from "@/app/admin/ventas/VentasTable";
-import { getOrdersForAdmin } from "@/src/server/sheets/repository";
+import { getOrdersForAdminWithKvState } from "@/src/server/orders/admin";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminVentasPage() {
-  const orders = await getOrdersForAdmin();
+  const orders = await getOrdersForAdminWithKvState();
 
   return (
     <section className="pb-1 [font-family:Arial,Helvetica,sans-serif]">

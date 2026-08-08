@@ -24,6 +24,7 @@ import {
   markChargedBack,
   markRefunded,
   retryPaidOrderInventory,
+  updateOrder,
 } from "./store";
 import { resolveOrderInventoryStatus } from "./inventory";
 import {
@@ -58,6 +59,20 @@ const approve = (order: Order) =>
     mpStatus: "approved",
     approvedAt: Date.now(),
   });
+
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = () => resolvePromise();
+  });
+  return { promise, resolve };
+};
+
+const timeoutAfterCommit = () => {
+  const error = new Error("timed out after commit");
+  error.name = "AbortError";
+  return error;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -228,6 +243,314 @@ describe("PR 2 order store inventory state", () => {
     await createOrder(order);
     const updated = await transition(order.externalReference, { paymentId: "pay", mpStatus: expectedStatus });
     expect(updated).toMatchObject({ inventoryStatus: "deducted", stockDeductedAt: 123 });
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+  });
+});
+
+describe("PR 2 recoverable Sheets synchronization", () => {
+  it("PR2-SYNC-01 KV keeps confirmed payment and inventory error when Sheets sync fails", async () => {
+    const order = makeOrder();
+    await createOrder(order);
+    vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(new Error("Sheets unavailable"));
+
+    const updated = await updateOrder(order.externalReference, {
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "error",
+      inventoryIssueCode: "SHEETS_UNAVAILABLE",
+      inventoryIssueAt: 123,
+      stockDeductedAt: undefined,
+    });
+
+    expect(updated).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "error",
+      inventoryIssueCode: "SHEETS_UNAVAILABLE",
+    });
+    expect(await getOrder(order.externalReference)).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "error",
+      inventoryIssueCode: "SHEETS_UNAVAILABLE",
+    });
+  });
+});
+
+describe("PR 2 monotonic deducted persistence", () => {
+  it("PR2-CONC-06 concurrent real and deduped approvals finish deducted with one authoritative decrement", async () => {
+    const firstAttemptEntered = deferred();
+    const releaseFirstAttempt = deferred();
+    let callCount = 0;
+    let authoritativeDecrements = 0;
+    vi.mocked(decrementProductsStockInSheet).mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        authoritativeDecrements += 1;
+        firstAttemptEntered.resolve();
+        await releaseFirstAttempt.promise;
+        return {
+          deduped: false,
+          updated: [{ productId: "p1", previousQty: 2, nextQty: 1 }],
+        };
+      }
+      return { deduped: true, updated: [] };
+    });
+    const order = makeOrder();
+    await createOrder(order);
+
+    const firstApproval = approve(order);
+    await firstAttemptEntered.promise;
+    const secondApproval = approve(order);
+    await secondApproval;
+    releaseFirstAttempt.resolve();
+    await firstApproval;
+
+    expect(await getOrder(order.externalReference)).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: expect.any(Number),
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(2);
+    expect(authoritativeDecrements).toBe(1);
+  });
+
+  it("PR2-CONC-07 timeout after commit cannot overwrite a later deduped deduction", async () => {
+    const timeoutAttemptEntered = deferred();
+    const releaseTimeout = deferred();
+    let callCount = 0;
+    let authoritativeDecrements = 0;
+    vi.mocked(decrementProductsStockInSheet).mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        authoritativeDecrements += 1;
+        timeoutAttemptEntered.resolve();
+        await releaseTimeout.promise;
+        throw timeoutAfterCommit();
+      }
+      return { deduped: true, updated: [] };
+    });
+    const order = makeOrder();
+    await createOrder(order);
+
+    const timeoutApproval = approve(order);
+    await timeoutAttemptEntered.promise;
+    const dedupedApproval = approve(order);
+    await dedupedApproval;
+    releaseTimeout.resolve();
+    await timeoutApproval;
+
+    expect(await getOrder(order.externalReference)).toMatchObject({
+      inventoryStatus: "deducted",
+      stockDeductedAt: expect.any(Number),
+    });
+    expect(authoritativeDecrements).toBe(1);
+  });
+
+  it("PR2-CONC-08 an earlier temporary error followed by dedupe finishes deducted", async () => {
+    const errorAttemptEntered = deferred();
+    const releaseError = deferred();
+    const dedupeAttemptEntered = deferred();
+    const releaseDedupe = deferred();
+    let callCount = 0;
+    vi.mocked(decrementProductsStockInSheet).mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        errorAttemptEntered.resolve();
+        await releaseError.promise;
+        throw timeoutAfterCommit();
+      }
+      dedupeAttemptEntered.resolve();
+      await releaseDedupe.promise;
+      return { deduped: true, updated: [] };
+    });
+    const order = makeOrder();
+    await createOrder(order);
+
+    const errorApproval = approve(order);
+    await errorAttemptEntered.promise;
+    const dedupedApproval = approve(order);
+    await dedupeAttemptEntered.promise;
+    releaseError.resolve();
+    await errorApproval;
+    expect((await getOrder(order.externalReference))?.inventoryStatus).toBe("error");
+    releaseDedupe.resolve();
+    await dedupedApproval;
+
+    expect(await getOrder(order.externalReference)).toMatchObject({
+      inventoryStatus: "deducted",
+      stockDeductedAt: expect.any(Number),
+    });
+  });
+
+  it("PR2-CONC-09 a late conflict patch cannot degrade deducted", async () => {
+    const order = makeOrder({ inventoryStatus: "deducted", stockDeductedAt: 100 });
+    await createOrder(order);
+
+    const updated = await updateOrder(order.externalReference, {
+      inventoryStatus: "conflict",
+      inventoryIssueCode: "INSUFFICIENT_STOCK",
+      inventoryIssueAt: 200,
+      stockDeductedAt: undefined,
+    });
+
+    expect(updated).toMatchObject({ inventoryStatus: "deducted", stockDeductedAt: 100 });
+    expect(updated?.inventoryIssueCode).toBeUndefined();
+  });
+
+  it("PR2-CONC-10 a late technical error patch cannot degrade deducted", async () => {
+    const order = makeOrder({ inventoryStatus: "deducted", stockDeductedAt: 101 });
+    await createOrder(order);
+
+    await updateOrder(order.externalReference, {
+      inventoryStatus: "error",
+      inventoryIssueCode: "SHEETS_TIMEOUT",
+      inventoryIssueAt: 201,
+      stockDeductedAt: undefined,
+    });
+
+    expect(await getOrder(order.externalReference)).toMatchObject({
+      inventoryStatus: "deducted",
+      stockDeductedAt: 101,
+    });
+  });
+
+  it("PR2-CONC-11 a late pending patch cannot erase deducted evidence", async () => {
+    const order = makeOrder({ inventoryStatus: "deducted", stockDeductedAt: 102 });
+    await createOrder(order);
+
+    await updateOrder(order.externalReference, {
+      inventoryStatus: "pending",
+      stockDeductedAt: undefined,
+    });
+
+    expect(await getOrder(order.externalReference)).toMatchObject({
+      inventoryStatus: "deducted",
+      stockDeductedAt: 102,
+    });
+  });
+
+  it("PR2-CONC-12 different orders do not share a global write lock", async () => {
+    const firstSheetSyncEntered = deferred();
+    const releaseFirstSheetSync = deferred();
+    const firstOrder = makeOrder();
+    const secondOrder = makeOrder();
+    await createOrder(firstOrder);
+    await createOrder(secondOrder);
+    vi.mocked(updateOrderRowInSalesSheet).mockImplementation(async (orderId) => {
+      if (orderId === firstOrder.externalReference) {
+        firstSheetSyncEntered.resolve();
+        await releaseFirstSheetSync.promise;
+      }
+    });
+
+    const firstUpdate = updateOrder(firstOrder.externalReference, { mpStatus: "first" });
+    await firstSheetSyncEntered.promise;
+    const secondUpdate = updateOrder(secondOrder.externalReference, { mpStatus: "second" });
+    await expect(secondUpdate).resolves.toMatchObject({ mpStatus: "second" });
+    releaseFirstSheetSync.resolve();
+    await firstUpdate;
+  });
+
+  it("PR2-CONC-13 admin retry concurrent with approval decrements once and finishes deducted", async () => {
+    const retryAttemptEntered = deferred();
+    const releaseRetry = deferred();
+    let authoritativeDecrements = 0;
+    vi.mocked(decrementProductsStockInSheet).mockImplementationOnce(async () => {
+      authoritativeDecrements += 1;
+      retryAttemptEntered.resolve();
+      await releaseRetry.promise;
+      return {
+        deduped: false,
+        updated: [{ productId: "p1", previousQty: 2, nextQty: 1 }],
+      };
+    });
+    const order = makeOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "error",
+      inventoryIssueCode: "SHEETS_TIMEOUT",
+      inventoryIssueAt: 123,
+    });
+    await createOrder(order);
+
+    const retry = retryPaidOrderInventory(order.externalReference);
+    await retryAttemptEntered.promise;
+    const webhookApproval = markApproved(order.externalReference, {
+      paymentId: "webhook-payment",
+      mpStatus: "approved",
+    });
+    await webhookApproval;
+    releaseRetry.resolve();
+    await retry;
+
+    expect(await getOrder(order.externalReference)).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: expect.any(Number),
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(authoritativeDecrements).toBe(1);
+  });
+
+  it("PR2-CONC-14 verify-payment and webhook concurrency finishes confirmed and deducted", async () => {
+    const verifyAttemptEntered = deferred();
+    const releaseVerifyTimeout = deferred();
+    let callCount = 0;
+    let authoritativeDecrements = 0;
+    vi.mocked(decrementProductsStockInSheet).mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        authoritativeDecrements += 1;
+        verifyAttemptEntered.resolve();
+        await releaseVerifyTimeout.promise;
+        throw timeoutAfterCommit();
+      }
+      return { deduped: true, updated: [] };
+    });
+    const order = makeOrder();
+    await createOrder(order);
+
+    const verifyPayment = markApproved(order.externalReference, {
+      paymentId: "verify-payment-id",
+      mpStatus: "approved",
+    });
+    await verifyAttemptEntered.promise;
+    const webhook = markApproved(order.externalReference, {
+      paymentId: "webhook-payment-id",
+      mpStatus: "approved",
+    });
+    await webhook;
+    releaseVerifyTimeout.resolve();
+    await verifyPayment;
+
+    expect(await getOrder(order.externalReference)).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: expect.any(Number),
+    });
+    expect(authoritativeDecrements).toBe(1);
+  });
+
+  it("PR2-CONC-15 refund cancellation and chargeback preserve deducted history", async () => {
+    const transitions = [
+      [markRefunded, "refunded"],
+      [markCancelled, "cancelled"],
+      [markChargedBack, "charged_back"],
+    ] as const;
+
+    for (const [transition, status] of transitions) {
+      const order = makeOrder({
+        status: "approved",
+        paymentStatus: "confirmed",
+        inventoryStatus: "deducted",
+        stockDeductedAt: 500,
+      });
+      await createOrder(order);
+      await transition(order.externalReference, { paymentId: "pay", mpStatus: status });
+      expect(await getOrder(order.externalReference)).toMatchObject({
+        inventoryStatus: "deducted",
+        stockDeductedAt: 500,
+      });
+    }
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
   });
 });

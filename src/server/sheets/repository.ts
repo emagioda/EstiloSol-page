@@ -761,7 +761,7 @@ export async function updateOrderRowInSalesSheet(
     mpPaymentId: string;
     mpPreferenceId: string;
     receiptEmailSentAt: number;
-    stockDeductedAt: number;
+    stockDeductedAt: number | null;
     inventoryStatus: OrderInventoryStatus | null;
     inventoryIssueCode: string | null;
     inventoryIssueAt: number | null;
@@ -797,8 +797,8 @@ export async function updateOrderRowInSalesSheet(
   if (updates.receiptEmailSentAt) {
     payload.receipt_email_sent_at = toIsoString(updates.receiptEmailSentAt);
   }
-  if (updates.stockDeductedAt) {
-    payload.stock_deducted_at = toIsoString(updates.stockDeductedAt);
+  if ("stockDeductedAt" in updates) {
+    payload.stock_deducted_at = toIsoString(updates.stockDeductedAt ?? undefined);
   }
   if ("inventoryStatus" in updates) {
     payload.inventory_status = updates.inventoryStatus ?? "";

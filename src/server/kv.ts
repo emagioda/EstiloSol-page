@@ -125,3 +125,33 @@ export async function setJsonIfNotExists<T>(key: string, value: T, ttlSeconds: n
 export async function del(key: string): Promise<void> {
   await kv.del(key);
 }
+
+type EvalKvClient = KvClient & {
+  eval<TArgs extends unknown[], TData = unknown>(
+    script: string,
+    keys: string[],
+    args: TArgs
+  ): Promise<TData>;
+};
+
+const DELETE_IF_VALUE_MATCHES_SCRIPT = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("del", KEYS[1])
+end
+return 0
+`;
+
+export async function delIfValue(key: string, expectedValue: string): Promise<boolean> {
+  if (!hasRedisEnv) {
+    const entry = getMemoryEntry(key);
+    if (entry?.value !== expectedValue) return false;
+    return memoryStore.delete(key);
+  }
+
+  const result = await (kv as EvalKvClient).eval<[string], number>(
+    DELETE_IF_VALUE_MATCHES_SCRIPT,
+    [key],
+    [expectedValue]
+  );
+  return result === 1;
+}

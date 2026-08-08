@@ -311,4 +311,15 @@ describe("PR 2 ventas inventory persistence", () => {
     }), { status: 200 }));
     expect((await getOrdersForAdmin())[0]?.inventoryStatus).toBeUndefined();
   });
+
+  it("PR2-SHEET-11 updateOrderRow can explicitly clear stale stock evidence", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    );
+    await updateOrderRowInSalesSheet("order-clear-stock", { stockDeductedAt: null });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.updates.stock_deducted_at).toBe("");
+  });
 });

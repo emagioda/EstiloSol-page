@@ -1,4 +1,5 @@
-import { del, getJson, setJson, setJsonIfNotExists } from "@/src/server/kv";
+import { randomUUID } from "node:crypto";
+import { del, delIfValue, getJson, setJson, setJsonIfNotExists } from "@/src/server/kv";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { privacyPolicy } from "@/src/server/privacy/policy";
@@ -18,8 +19,13 @@ import type { Order, OrderPaymentStatus, OrderStatus } from "./types";
 export const WEBHOOK_DEDUPE_TTL_SECONDS = 7 * 24 * 3600;
 
 const orderKey = (externalReference: string) => `es:order:${externalReference}`;
+const orderWriteLockKey = (externalReference: string) => `es:order:write-lock:${externalReference}`;
 const salesSheetSyncKey = (externalReference: string) => `es:order:sales-sheet-sync:${externalReference}`;
 const receiptEmailSyncKey = (externalReference: string) => `es:order:receipt-email-sync:${externalReference}`;
+
+const ORDER_WRITE_LOCK_TTL_SECONDS = 45;
+const ORDER_WRITE_LOCK_WAIT_MS = 30_000;
+const ORDER_WRITE_LOCK_RETRY_MS = 20;
 
 export const webhookDedupeKey = (eventId: string) => `es:mp:webhook:${eventId}`;
 export const paymentDedupeKey = (paymentId: string) => `es:mp:payment:${paymentId}`;
@@ -33,6 +39,44 @@ type UpdateOrderOptions = {
 
 type CreateOrderOptions = {
   syncSheet?: boolean;
+};
+
+type OrderPatch = Partial<Omit<Order, "externalReference" | "createdAt">>;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const withOrderWriteLock = async <T>(
+  externalReference: string,
+  operation: () => Promise<T>
+): Promise<T> => {
+  const lockKey = orderWriteLockKey(externalReference);
+  const ownerToken = randomUUID();
+  const deadline = Date.now() + ORDER_WRITE_LOCK_WAIT_MS;
+
+  while (!(await setJsonIfNotExists(lockKey, ownerToken, ORDER_WRITE_LOCK_TTL_SECONDS))) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for order write lock: ${externalReference}`);
+    }
+    await sleep(ORDER_WRITE_LOCK_RETRY_MS);
+  }
+
+  try {
+    return await operation();
+  } finally {
+    try {
+      const released = await delIfValue(lockKey, ownerToken);
+      if (!released) {
+        logEvent("warn", "orders.write_lock_release_skipped", {
+          orderId: externalReference,
+        });
+      }
+    } catch (error) {
+      logEvent("warn", "orders.write_lock_release_failed", {
+        orderId: externalReference,
+        errorName: error instanceof Error ? error.name : "unknown",
+      });
+    }
+  }
 };
 
 const statusToPaymentStatus = (status: OrderStatus): OrderPaymentStatus => {
@@ -149,62 +193,116 @@ export async function getOrder(externalReference: string): Promise<Order | null>
   return ensureOrderDefaults(stored);
 }
 
-export async function updateOrder(
-  externalReference: string,
-  patch: Partial<Omit<Order, "externalReference" | "createdAt">>,
-  options: UpdateOrderOptions = {}
-): Promise<Order | null> {
-  const current = await getJson<StoredOrder>(orderKey(externalReference));
-  if (!current) return null;
-
-  const normalizedCurrent = ensureOrderDefaults(current);
-
-  const updated: Order = {
-    ...normalizedCurrent,
+export const mergeOrderUpdate = (
+  current: Order,
+  patch: OrderPatch,
+  updatedAt = Date.now()
+): { order: Order; inventoryStatePreserved: boolean } => {
+  const candidate: Order = {
+    ...current,
     ...patch,
-    externalReference: normalizedCurrent.externalReference,
-    createdAt: normalizedCurrent.createdAt,
-    updatedAt: Date.now(),
+    externalReference: current.externalReference,
+    createdAt: current.createdAt,
+    updatedAt,
   };
+  const currentInventoryStatus = resolveOrderInventoryStatus(current);
+  const inventoryPatchTouched =
+    "inventoryStatus" in patch ||
+    "inventoryIssueCode" in patch ||
+    "inventoryIssueAt" in patch ||
+    "stockDeductedAt" in patch;
+  const inventoryStatePreserved =
+    currentInventoryStatus === "deducted" &&
+    inventoryPatchTouched &&
+    (candidate.inventoryStatus !== "deducted" ||
+      candidate.stockDeductedAt !== current.stockDeductedAt ||
+      candidate.inventoryIssueCode !== undefined ||
+      candidate.inventoryIssueAt !== undefined);
 
-  await setJson(
-    orderKey(externalReference),
-    updated,
-    privacyPolicy.ttlSecondsForStatus(updated.status)
-  );
-
-  if (options.syncSheet !== false) {
-    try {
-      const sheetUpdates: Parameters<typeof updateOrderRowInSalesSheet>[1] = {
-        paymentStatus: updated.paymentStatus,
-        shippingStatus: updated.shippingStatus,
-        orderStatus: updated.status,
-        mpStatus: updated.mpStatus,
-        mpPaymentId: updated.mpPaymentId,
-        mpPreferenceId: updated.mpPreferenceId,
-        receiptEmailSentAt: updated.receiptEmailSentAt,
-        stockDeductedAt: updated.stockDeductedAt,
-        updatedAt: updated.updatedAt,
-      };
-      if ("inventoryStatus" in patch) {
-        sheetUpdates.inventoryStatus = updated.inventoryStatus ?? null;
-      }
-      if ("inventoryIssueCode" in patch) {
-        sheetUpdates.inventoryIssueCode = updated.inventoryIssueCode ?? null;
-      }
-      if ("inventoryIssueAt" in patch) {
-        sheetUpdates.inventoryIssueAt = updated.inventoryIssueAt ?? null;
-      }
-      await updateOrderRowInSalesSheet(updated.externalReference, sheetUpdates);
-    } catch (error) {
-      logEvent("warn", "orders.sync_sheet_update_failed", {
-        externalReference: updated.externalReference,
-        error,
-      });
-    }
+  if (!inventoryStatePreserved) {
+    return { order: candidate, inventoryStatePreserved: false };
   }
 
-  return updated;
+  return {
+    order: {
+      ...candidate,
+      inventoryStatus: "deducted",
+      stockDeductedAt: current.stockDeductedAt,
+      inventoryIssueCode: undefined,
+      inventoryIssueAt: undefined,
+    },
+    inventoryStatePreserved: true,
+  };
+};
+
+export async function updateOrder(
+  externalReference: string,
+  patch: OrderPatch,
+  options: UpdateOrderOptions = {}
+): Promise<Order | null> {
+  return withOrderWriteLock(externalReference, async () => {
+    const current = await getJson<StoredOrder>(orderKey(externalReference));
+    if (!current) return null;
+
+    const normalizedCurrent = ensureOrderDefaults(current);
+    const { order: updated, inventoryStatePreserved } = mergeOrderUpdate(
+      normalizedCurrent,
+      patch
+    );
+
+    if (inventoryStatePreserved) {
+      logEvent("info", "orders.inventory_state_preserved", {
+        orderId: externalReference,
+        inventoryStatus: "deducted",
+      });
+    }
+
+    await setJson(
+      orderKey(externalReference),
+      updated,
+      privacyPolicy.ttlSecondsForStatus(updated.status)
+    );
+
+    if (options.syncSheet !== false) {
+      try {
+        const inventoryStateTouched =
+          inventoryStatePreserved ||
+          "inventoryStatus" in patch ||
+          "inventoryIssueCode" in patch ||
+          "inventoryIssueAt" in patch ||
+          "stockDeductedAt" in patch;
+        const sheetUpdates: Parameters<typeof updateOrderRowInSalesSheet>[1] = {
+          paymentStatus: updated.paymentStatus,
+          shippingStatus: updated.shippingStatus,
+          orderStatus: updated.status,
+          mpStatus: updated.mpStatus,
+          mpPaymentId: updated.mpPaymentId,
+          mpPreferenceId: updated.mpPreferenceId,
+          receiptEmailSentAt: updated.receiptEmailSentAt,
+          updatedAt: updated.updatedAt,
+        };
+        if (inventoryStateTouched) {
+          sheetUpdates.inventoryStatus = updated.inventoryStatus ?? null;
+          sheetUpdates.inventoryIssueCode = updated.inventoryIssueCode ?? null;
+          sheetUpdates.inventoryIssueAt = updated.inventoryIssueAt ?? null;
+          sheetUpdates.stockDeductedAt = updated.stockDeductedAt ?? null;
+        }
+        await updateOrderRowInSalesSheet(updated.externalReference, sheetUpdates);
+      } catch (error) {
+        logEvent("warn", "orders.sync_sheet_update_failed", {
+          externalReference: updated.externalReference,
+          error,
+        });
+        logEvent("warn", "orders.sheet_sync_pending", {
+          orderId: updated.externalReference,
+          inventoryStatus: resolveOrderInventoryStatus(updated) ?? "legacy",
+          errorName: error instanceof Error ? error.name : "unknown",
+        });
+      }
+    }
+
+    return updated;
+  });
 }
 
 const reportInventoryAttempt = async (
