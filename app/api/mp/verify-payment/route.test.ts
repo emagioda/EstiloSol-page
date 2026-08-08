@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { InventoryOperationError } from "@/src/server/inventory/errors";
 
 vi.mock("@/src/server/sheets/repository", () => ({
   appendOrderAndDecrementStockInSheet: vi.fn(async () => undefined),
@@ -17,6 +18,8 @@ describe("verify-payment confirmation flow", () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     process.env.MP_ACCESS_TOKEN = "test-token";
+    vi.mocked(appendOrderToSalesSheet).mockResolvedValue(undefined);
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: false, updated: [] });
   });
 
   it("confirms approved payment when Mercado Pago reports approval", async () => {
@@ -460,5 +463,121 @@ describe("verify-payment confirmation flow", () => {
     expect(order?.status).toBe("created");
 
     fetchMock.mockRestore();
+  });
+
+  const createPr2Order = async (suffix: string, patch: Partial<Parameters<typeof createOrder>[0]> = {}) => {
+    const ref = `es-${Date.now()}-${suffix}-${Math.random().toString(16).slice(2)}`;
+    await createOrder({
+      externalReference: ref,
+      status: "created",
+      paymentStatus: "pending",
+      shippingStatus: "in_process",
+      inventoryStatus: "pending",
+      items: [{ productId: "p1", title: "Producto", unitPrice: 1000, qty: 1, currency: "ARS" }],
+      total: 1000,
+      currency: "ARS",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      ...patch,
+    }, { syncSheet: false });
+    return ref;
+  };
+
+  const mockApprovedSearch = (ref: string) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      results: [{
+        id: `pay-${ref}`,
+        status: "approved",
+        external_reference: ref,
+        transaction_amount: 1000,
+        currency_id: "ARS",
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+  };
+
+  const postVerify = (ref: string) => POST(new NextRequest("http://localhost:3000/api/mp/verify-payment", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ref }),
+  }));
+
+  it("PR2-VERIFY-01 deducted inventory still returns approved true", async () => {
+    const ref = await createPr2Order("verify-deducted");
+    mockApprovedSearch(ref);
+    const body = await (await postVerify(ref)).json();
+    expect(body.approved).toBe(true);
+    expect((await getOrder(ref))?.inventoryStatus).toBe("deducted");
+  });
+
+  it("PR2-VERIFY-02 conflict inventory still returns approved true", async () => {
+    vi.mocked(decrementProductsStockInSheet).mockRejectedValueOnce(new InventoryOperationError({
+      code: "INSUFFICIENT_STOCK",
+      message: "none",
+    }));
+    const ref = await createPr2Order("verify-conflict");
+    mockApprovedSearch(ref);
+    const body = await (await postVerify(ref)).json();
+    expect(body.approved).toBe(true);
+    expect((await getOrder(ref))?.inventoryStatus).toBe("conflict");
+  });
+
+  it("PR2-VERIFY-03 technical inventory error still returns approved true", async () => {
+    vi.mocked(decrementProductsStockInSheet).mockRejectedValueOnce(new Error("network down"));
+    const ref = await createPr2Order("verify-error");
+    mockApprovedSearch(ref);
+    const body = await (await postVerify(ref)).json();
+    expect(body.approved).toBe(true);
+    expect((await getOrder(ref))?.inventoryStatus).toBe("error");
+  });
+
+  it.each([
+    ["PR2-VERIFY-04 conflict returns friendly processing copy", new InventoryOperationError({ code: "INSUFFICIENT_STOCK", message: "none" })],
+    ["PR2-VERIFY-05 error returns friendly processing copy", new Error("network down")],
+  ])("%s", async (_name, failure) => {
+    vi.mocked(decrementProductsStockInSheet).mockRejectedValueOnce(failure);
+    const ref = await createPr2Order("verify-friendly");
+    mockApprovedSearch(ref);
+    const body = await (await postVerify(ref)).json();
+    expect(body.message).toContain("estamos procesando tu pedido");
+  });
+
+  it("PR2-VERIFY-06 response never exposes inventoryIssueCode", async () => {
+    vi.mocked(decrementProductsStockInSheet).mockRejectedValueOnce(new InventoryOperationError({
+      code: "INSUFFICIENT_STOCK",
+      message: "none",
+    }));
+    const ref = await createPr2Order("verify-private");
+    mockApprovedSearch(ref);
+    const body = await (await postVerify(ref)).json();
+    expect(JSON.stringify(body)).not.toContain("INSUFFICIENT_STOCK");
+    expect(body).not.toHaveProperty("inventoryIssueCode");
+  });
+
+  it.each([
+    ["PR2-VERIFY-07 repeated POST on conflict does not retry stock", new InventoryOperationError({ code: "INSUFFICIENT_STOCK", message: "none" })],
+    ["PR2-VERIFY-08 repeated POST on error does not retry stock", new Error("network down")],
+  ])("%s", async (_name, failure) => {
+    vi.mocked(decrementProductsStockInSheet).mockRejectedValueOnce(failure);
+    const ref = await createPr2Order("verify-repeat");
+    mockApprovedSearch(ref);
+    await postVerify(ref);
+    await postVerify(ref);
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+  });
+
+  it("PR2-VERIFY-09 cached GET recognizes conflict/error as an approved payment", async () => {
+    const ref = await createPr2Order("verify-cached", {
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "conflict",
+      inventoryIssueCode: "INSUFFICIENT_STOCK",
+      inventoryIssueAt: Date.now(),
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const response = await GET(new NextRequest(`http://localhost:3000/api/mp/verify-payment?ref=${ref}`));
+    const body = await response.json();
+    expect(body.approved).toBe(true);
+    expect(body.message).toContain("estamos procesando tu pedido");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

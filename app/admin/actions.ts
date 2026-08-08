@@ -9,9 +9,25 @@ import { authOptions } from "@/src/server/auth/options";
 import { invalidateProductsCatalogCache } from "@/src/server/catalog/getProducts";
 import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
 import { logEvent } from "@/src/server/observability/log";
-import { trackBusinessEvent } from "@/src/server/observability/metrics";
-import { getOrder, markApproved, markTerminalPaymentState, updateOrder } from "@/src/server/orders/store";
-import type { Order, OrderItem, OrderPaymentStatus, OrderShippingStatus, OrderStatus } from "@/src/server/orders/types";
+import {
+  claimReceiptEmailDelivery,
+  getOrder,
+  markApproved,
+  markTerminalPaymentState,
+  releaseReceiptEmailDelivery,
+  retryPaidOrderInventory,
+  updateOrder,
+} from "@/src/server/orders/store";
+import {
+  attemptInventoryForPaidOrder,
+  inventoryResultToOrderPatch,
+  isInventoryBlockingShipping,
+  resolveOrderInventoryStatus,
+  shouldAttemptInventoryAutomatically,
+  type InventoryAttemptResult,
+} from "@/src/server/orders/inventory";
+import type { Order, OrderPaymentStatus, OrderShippingStatus, OrderStatus } from "@/src/server/orders/types";
+import { parseFallbackOrderItems } from "@/src/server/orders/sheetFallback";
 import {
   fetchPaymentByIdFromMp,
   searchPaymentsByExternalReference,
@@ -23,8 +39,6 @@ import {
   type MpSearchPayment,
 } from "@/src/server/payments/shared";
 import {
-  type AdminOrderSheetRow,
-  decrementProductsStockInSheet,
   getOrderRowById,
   updateOrderRowInSalesSheet,
   updateProductRowInSheet,
@@ -116,27 +130,6 @@ const terminalOrderStatusFromPaymentStatus = (
   return null;
 };
 
-const rawStringValue = (raw: Record<string, unknown>, keys: string[]) => {
-  for (const key of keys) {
-    const value = raw[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-    if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  }
-  return "";
-};
-
-const sheetOrderHasStockDeducted = (sheetOrder: AdminOrderSheetRow) => {
-  const raw = sheetOrder.raw as Record<string, unknown>;
-  return Boolean(
-    rawStringValue(raw, [
-      "stock_deducted_at",
-      "stockDeductedAt",
-      "stock_descontado_en",
-      "stock_discounted_at",
-    ])
-  );
-};
-
 type MpPaymentForValidation = MpPaymentResponse | MpSearchPayment;
 
 const isApprovedMpPaymentForOrder = (
@@ -209,77 +202,6 @@ const assertMercadoPagoApproval = async (
   throw new Error("Mercado Pago no confirma un pago aprobado para esta orden.");
 };
 
-const decrementFallbackOrderStockIfNeeded = async (
-  sheetOrder: AdminOrderSheetRow,
-  order: Order
-): Promise<number | null> => {
-  if (sheetOrderHasStockDeducted(sheetOrder)) return null;
-
-  const stockDeductedAt = Date.now();
-  try {
-    await decrementProductsStockInSheet(
-      order.externalReference,
-      order.items.map((item) => ({
-        productId: item.productId,
-        qty: item.qty,
-        title: item.title,
-      }))
-    );
-  } catch (error) {
-    logEvent("error", "admin.fallback_stock_deduction_failed", {
-      externalReference: order.externalReference,
-      error,
-    });
-    await trackBusinessEvent("payment.stock_deduction_failed", {
-      externalReference: order.externalReference,
-      source: "admin_fallback_order",
-    });
-    return null;
-  }
-
-  try {
-    await invalidateProductsCatalogCache();
-  } catch (error) {
-    logEvent("warn", "admin.catalog_cache_invalidation_failed", {
-      externalReference: order.externalReference,
-      error,
-    });
-  }
-
-  return stockDeductedAt;
-};
-
-const parseOrderItemsFromSheetRaw = (raw: Record<string, unknown>): OrderItem[] => {
-  const itemsRaw = raw.items_json;
-  if (typeof itemsRaw !== "string" || !itemsRaw.trim()) return [];
-
-  try {
-    const parsed = JSON.parse(itemsRaw) as Array<Record<string, unknown>>;
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed
-      .map((item) => {
-        const productId = String(item.productId ?? item.product_id ?? "").trim();
-        const title = String(item.title ?? item.name ?? "").trim();
-        const qty = Number(item.qty);
-        const unitPrice = Number(item.unitPrice ?? item.unit_price);
-        if (!productId || !title || !Number.isFinite(qty) || !Number.isFinite(unitPrice)) {
-          return null;
-        }
-        return {
-          productId,
-          title,
-          qty: Math.max(1, Math.trunc(qty)),
-          unitPrice,
-          currency: "ARS" as const,
-        };
-      })
-      .filter((item): item is OrderItem => item !== null);
-  } catch {
-    return [];
-  }
-};
-
 const buildFallbackOrderFromSheet = async (
   orderId: string,
   paymentStatus: OrderPaymentStatus,
@@ -289,17 +211,7 @@ const buildFallbackOrderFromSheet = async (
   if (!sheetOrder) return null;
 
   const raw = sheetOrder.raw as Record<string, unknown>;
-  const parsedItems = parseOrderItemsFromSheetRaw(raw);
-  const items =
-    parsedItems.length > 0
-      ? parsedItems
-      : sheetOrder.items.map((item) => ({
-          productId: item.productId || item.title,
-          title: item.title,
-          qty: Math.max(1, Math.trunc(item.qty)),
-          unitPrice: typeof item.unitPrice === "number" ? item.unitPrice : 0,
-          currency: "ARS" as const,
-        }));
+  const items = parseFallbackOrderItems(raw, sheetOrder.items);
   const mpPaymentId =
     typeof raw.mp_payment_id === "string" && raw.mp_payment_id.trim() ? raw.mp_payment_id.trim() : undefined;
   const mpStatus =
@@ -320,6 +232,17 @@ const buildFallbackOrderFromSheet = async (
     status: orderStatusFromPaymentStatus(paymentStatus),
     paymentStatus,
     shippingStatus,
+    inventoryStatus: sheetOrder.inventoryStatus,
+    inventoryIssueCode: sheetOrder.inventoryIssueCode || undefined,
+    inventoryIssueAt: sheetOrder.inventoryIssueAt
+      ? Date.parse(sheetOrder.inventoryIssueAt) || undefined
+      : undefined,
+    stockDeductedAt: sheetOrder.stockDeductedAt
+      ? Date.parse(sheetOrder.stockDeductedAt) || undefined
+      : undefined,
+    receiptEmailSentAt: sheetOrder.receiptEmailSentAt
+      ? Date.parse(sheetOrder.receiptEmailSentAt) || undefined
+      : undefined,
     paymentMethod: sheetOrder.paymentMethod,
     deliveryMethod: sheetOrder.deliveryMethod,
     items,
@@ -337,6 +260,47 @@ const buildFallbackOrderFromSheet = async (
   };
 };
 
+type AdminOrderUpdateResult = {
+  orderId: string;
+  inventoryStatus?: Order["inventoryStatus"];
+  shippingStatus: OrderShippingStatus;
+  shippingBlocked: boolean;
+};
+
+const sendReceiptOnce = async ({
+  order,
+  paymentId,
+  approvedAt,
+  persistSentAt,
+}: {
+  order: Order;
+  paymentId: string;
+  approvedAt: number;
+  persistSentAt: (sentAt: number) => Promise<unknown>;
+}) => {
+  if (order.receiptEmailSentAt || !order.customer?.email) return;
+  const claimed = await claimReceiptEmailDelivery(order.externalReference);
+  if (!claimed) return;
+
+  const result = await sendOrderReceiptEmail({ order, paymentId, approvedAt });
+  if (result.sent) {
+    await persistSentAt(Date.now());
+    return;
+  }
+  await releaseReceiptEmailDelivery(order.externalReference);
+};
+
+const inventoryPatchFromAttempt = async (order: Order) => {
+  const result = await attemptInventoryForPaidOrder(order);
+  logEvent(result.status === "deducted" ? "info" : "warn", `inventory.${result.status}`, {
+    orderId: order.externalReference,
+    source: "admin_fallback",
+    inventoryStatus: result.status,
+    ...(result.status === "deducted" ? { deduped: result.deduped } : { issueCode: result.issueCode }),
+  });
+  return { result, patch: inventoryResultToOrderPatch(result) };
+};
+
 const applyOrderStatusesUpdate = async ({
   orderId,
   paymentStatus,
@@ -345,7 +309,7 @@ const applyOrderStatusesUpdate = async ({
   orderId: string;
   paymentStatus: OrderPaymentStatus;
   shippingStatus: OrderShippingStatus;
-}) => {
+}): Promise<AdminOrderUpdateResult> => {
   const currentOrder = await getOrder(orderId);
 
   if (!currentOrder) {
@@ -359,12 +323,19 @@ const applyOrderStatusesUpdate = async ({
       throw new Error("No se pudo reconstruir el pedido desde Google Sheets.");
     }
 
+    const wasConfirmed = sheetOrder.paymentStatus === "confirmed";
+    const wasInventoryBlocked = isInventoryBlockingShipping(fallbackOrder);
+    if (shippingStatus === "completed" && wasInventoryBlocked && wasConfirmed) {
+      throw new Error("No se puede finalizar la entrega mientras el inventario requiere atención.");
+    }
+
     let verifiedPaymentId = fallbackOrder.mpPaymentId;
     let verifiedMpStatus = fallbackOrder.mpStatus;
-    let stockDeductedAt: number | null = null;
+    let inventoryAttempt: InventoryAttemptResult | null = null;
+    let inventoryPatch: Partial<Order> = {};
 
     if (paymentStatus === "confirmed") {
-      if (fallbackOrder.paymentMethod === "mercadopago") {
+      if (fallbackOrder.paymentMethod === "mercadopago" && !wasConfirmed) {
         const verified = await assertMercadoPagoApproval(
           fallbackOrder.externalReference,
           fallbackOrder.total,
@@ -372,42 +343,74 @@ const applyOrderStatusesUpdate = async ({
         );
         verifiedPaymentId = verified.paymentId;
         verifiedMpStatus = verified.mpStatus;
-      } else {
-        stockDeductedAt = await decrementFallbackOrderStockIfNeeded(sheetOrder, fallbackOrder);
+      }
+
+      const isFirstApprovalAttempt = !wasConfirmed || fallbackOrder.inventoryStatus === "pending";
+      if (isFirstApprovalAttempt && shouldAttemptInventoryAutomatically(fallbackOrder)) {
+        const attempted = await inventoryPatchFromAttempt(fallbackOrder);
+        inventoryAttempt = attempted.result;
+        inventoryPatch = attempted.patch;
       }
     }
 
+    const resolvedFallbackOrder = { ...fallbackOrder, ...inventoryPatch };
+    const shippingBlocked =
+      shippingStatus === "completed" && isInventoryBlockingShipping(resolvedFallbackOrder);
+    const resolvedShippingStatus = shippingBlocked ? "in_process" : shippingStatus;
+
     await updateOrderRowInSalesSheet(orderId, {
       paymentStatus,
-      shippingStatus,
+      shippingStatus: resolvedShippingStatus,
       orderStatus: orderStatusFromPaymentStatus(paymentStatus),
       ...(verifiedMpStatus ? { mpStatus: verifiedMpStatus } : {}),
       ...(verifiedPaymentId ? { mpPaymentId: verifiedPaymentId } : {}),
-      ...(stockDeductedAt ? { stockDeductedAt } : {}),
+      ...(inventoryAttempt
+        ? {
+            inventoryStatus: inventoryPatch.inventoryStatus ?? null,
+            inventoryIssueCode: inventoryPatch.inventoryIssueCode ?? null,
+            inventoryIssueAt: inventoryPatch.inventoryIssueAt ?? null,
+            stockDeductedAt: inventoryPatch.stockDeductedAt,
+          }
+        : {}),
       updatedAt: Date.now(),
     });
 
-    if (paymentStatus === "confirmed" && fallbackOrder.customer?.email && !sheetOrder.receiptEmailSentAt) {
+    if (paymentStatus === "confirmed" && !wasConfirmed && !sheetOrder.receiptEmailSentAt) {
       const approvedAt = Date.now();
       const paymentId =
         fallbackOrder.paymentMethod === "mercadopago"
           ? verifiedPaymentId
           : verifiedPaymentId || `manual-${approvedAt}`;
       if (paymentId) {
-        const emailResult = await sendOrderReceiptEmail({
-          order: fallbackOrder,
+        await sendReceiptOnce({
+          order: {
+            ...resolvedFallbackOrder,
+            paymentStatus: "confirmed",
+            shippingStatus: resolvedShippingStatus,
+          },
           paymentId,
           approvedAt,
+          persistSentAt: (sentAt) =>
+            updateOrderRowInSalesSheet(orderId, { receiptEmailSentAt: sentAt }),
         });
-        if (emailResult.sent) {
-          await updateOrderRowInSalesSheet(orderId, { receiptEmailSentAt: Date.now() });
-        }
       }
     }
-    return;
+    return {
+      orderId,
+      inventoryStatus: resolveOrderInventoryStatus(resolvedFallbackOrder),
+      shippingStatus: resolvedShippingStatus,
+      shippingBlocked,
+    };
   }
 
   const wasConfirmed = currentOrder.paymentStatus === "confirmed";
+  if (
+    shippingStatus === "completed" &&
+    isInventoryBlockingShipping(currentOrder) &&
+    wasConfirmed
+  ) {
+    throw new Error("No se puede finalizar la entrega mientras el inventario requiere atención.");
+  }
 
   if (paymentStatus === "confirmed") {
     const approvedAt = currentOrder.approvedAt ?? Date.now();
@@ -427,27 +430,43 @@ const applyOrderStatusesUpdate = async ({
       mpStatus = verified.mpStatus;
     }
 
-    await markApproved(orderId, {
-      paymentId,
-      mpStatus,
-      approvedAt,
-    });
+    const needsApprovalProcessing = !wasConfirmed || currentOrder.inventoryStatus === "pending";
+    const approvedOrder = needsApprovalProcessing
+      ? await markApproved(orderId, {
+          paymentId,
+          mpStatus,
+          approvedAt,
+        })
+      : currentOrder;
+    if (!approvedOrder || approvedOrder.paymentStatus !== "confirmed") {
+      throw new Error("No se pudo persistir la confirmación del pago.");
+    }
 
-    if (shippingStatus !== currentOrder.shippingStatus) {
-      await updateOrder(orderId, { shippingStatus });
+    const shippingBlocked =
+      shippingStatus === "completed" && isInventoryBlockingShipping(approvedOrder);
+    const resolvedShippingStatus = shippingBlocked ? "in_process" : shippingStatus;
+    if (resolvedShippingStatus !== approvedOrder.shippingStatus) {
+      await updateOrder(orderId, { shippingStatus: resolvedShippingStatus });
     }
 
     if (!wasConfirmed && !currentOrder.receiptEmailSentAt) {
-      const emailResult = await sendOrderReceiptEmail({
+      await sendReceiptOnce({
         order: currentOrder,
         paymentId,
         approvedAt,
+        persistSentAt: (sentAt) => updateOrder(orderId, { receiptEmailSentAt: sentAt }),
       });
-      if (emailResult.sent) {
-        await updateOrder(orderId, { receiptEmailSentAt: Date.now() });
-      }
     }
-    return;
+    return {
+      orderId,
+      inventoryStatus: resolveOrderInventoryStatus(approvedOrder),
+      shippingStatus: resolvedShippingStatus,
+      shippingBlocked,
+    };
+  }
+
+  if (shippingStatus === "completed" && isInventoryBlockingShipping(currentOrder)) {
+    throw new Error("No se puede finalizar la entrega mientras el inventario requiere atención.");
   }
 
   const terminalStatus = terminalOrderStatusFromPaymentStatus(paymentStatus);
@@ -460,7 +479,12 @@ const applyOrderStatusesUpdate = async ({
     if (shippingStatus !== currentOrder.shippingStatus) {
       await updateOrder(orderId, { shippingStatus });
     }
-    return;
+    return {
+      orderId,
+      inventoryStatus: resolveOrderInventoryStatus(currentOrder),
+      shippingStatus,
+      shippingBlocked: false,
+    };
   }
 
   await updateOrder(orderId, {
@@ -469,6 +493,12 @@ const applyOrderStatusesUpdate = async ({
     status: "pending",
     mpStatus: "pending",
   });
+  return {
+    orderId,
+    inventoryStatus: resolveOrderInventoryStatus(currentOrder),
+    shippingStatus,
+    shippingBlocked: false,
+  };
 };
 
 export async function updateOrderStatusesAction(formData: FormData) {
@@ -494,6 +524,62 @@ export async function updateOrderStatusesAction(formData: FormData) {
   redirect(redirectTo);
 }
 
+export async function retryOrderInventoryAction(orderIdInput: string) {
+  await requireAdminSession();
+  const orderId = String(orderIdInput || "").trim();
+  if (!orderId) throw new Error("Pedido inválido.");
+
+  const currentOrder = await getOrder(orderId);
+  let inventoryStatus: Order["inventoryStatus"];
+
+  if (currentOrder) {
+    const updated = await retryPaidOrderInventory(orderId);
+    if (!updated) throw new Error("Pedido no encontrado.");
+    inventoryStatus = resolveOrderInventoryStatus(updated);
+  } else {
+    const sheetOrder = await getOrderRowById(orderId);
+    if (!sheetOrder) throw new Error("Pedido no encontrado.");
+    if (sheetOrder.paymentStatus !== "confirmed") {
+      throw new Error("El inventario solo puede reintentarse para un pago confirmado.");
+    }
+
+    const fallbackOrder = await buildFallbackOrderFromSheet(
+      orderId,
+      sheetOrder.paymentStatus,
+      sheetOrder.shippingStatus
+    );
+    if (!fallbackOrder) throw new Error("No se pudo reconstruir el pedido desde Google Sheets.");
+
+    if (resolveOrderInventoryStatus(fallbackOrder) === "deducted") {
+      inventoryStatus = "deducted";
+    } else {
+      const { patch } = await inventoryPatchFromAttempt(fallbackOrder);
+      await updateOrderRowInSalesSheet(orderId, {
+        inventoryStatus: patch.inventoryStatus ?? null,
+        inventoryIssueCode: patch.inventoryIssueCode ?? null,
+        inventoryIssueAt: patch.inventoryIssueAt ?? null,
+        stockDeductedAt: patch.stockDeductedAt,
+        updatedAt: Date.now(),
+      });
+      inventoryStatus = patch.inventoryStatus;
+    }
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/ventas");
+
+  return {
+    ok: inventoryStatus === "deducted",
+    inventoryStatus,
+    message:
+      inventoryStatus === "deducted"
+        ? "El inventario se descontó correctamente."
+        : inventoryStatus === "conflict"
+          ? "El inventario todavía presenta un conflicto."
+          : "No se pudo completar la actualización de inventario.",
+  };
+}
+
 export async function saveOrderStatusesBatchAction(
   updates: Array<{
     orderId: string;
@@ -507,6 +593,7 @@ export async function saveOrderStatusesBatchAction(
     throw new Error("Invalid batch order update payload");
   }
 
+  const results: AdminOrderUpdateResult[] = [];
   for (const update of updates) {
     const orderId = String(update?.orderId || "").trim();
     const paymentStatusRaw = String(update?.paymentStatus || "");
@@ -516,17 +603,17 @@ export async function saveOrderStatusesBatchAction(
       throw new Error("Invalid batch order update payload");
     }
 
-    await applyOrderStatusesUpdate({
+    results.push(await applyOrderStatusesUpdate({
       orderId,
       paymentStatus: paymentStatusRaw,
       shippingStatus: shippingStatusRaw,
-    });
+    }));
   }
 
   revalidatePath("/admin");
   revalidatePath("/admin/ventas");
 
-  return { ok: true };
+  return { ok: true, results };
 }
 
 export async function updateCatalogProductAction(formData: FormData) {

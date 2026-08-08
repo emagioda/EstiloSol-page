@@ -10,6 +10,7 @@ export type OrderStatus =
 
 export type OrderPaymentStatus = "pending" | "confirmed" | "cancelled" | "refunded" | "charged_back";
 export type OrderShippingStatus = "in_process" | "completed";
+export type OrderInventoryStatus = "pending" | "deducted" | "conflict" | "error";
 export type OrderPaymentMethod = "mercadopago" | "transfer" | "cash";
 export type OrderDeliveryMethod = "delivery" | "pickup";
 
@@ -64,6 +65,9 @@ export type Order = {
   mpPaymentId?: string;
   mpStatus?: string;
   approvedAt?: number;
+  inventoryStatus?: OrderInventoryStatus;
+  inventoryIssueCode?: string;
+  inventoryIssueAt?: number;
   stockDeductedAt?: number;
   salesSheetSyncedAt?: number;
   salesSheetDeferredUntilApprovedAt?: number;

@@ -2,9 +2,23 @@
 
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { saveOrderStatusesBatchAction, updateOrderStatusesAction } from "@/app/admin/actions";
+import {
+  retryOrderInventoryAction,
+  saveOrderStatusesBatchAction,
+  updateOrderStatusesAction,
+} from "@/app/admin/actions";
 import type { AdminOrderSheetRow } from "@/src/server/sheets/repository";
 import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
+import {
+  canCompleteShipping,
+  canRetryInventory,
+  getInventoryIssueLabel,
+  getInventoryStatusLabel,
+  getOrderAction,
+  inventoryRequiresAttention,
+  isOrderNormallyCompleted,
+  isOrderReadyForShipping,
+} from "./inventoryUi";
 
 type VentasTableProps = {
   orders: AdminOrderSheetRow[];
@@ -106,6 +120,14 @@ const paymentOptionClass = {
   cancelled: "bg-rose-100 text-rose-900",
   refunded: "bg-slate-100 text-slate-900",
   charged_back: "bg-red-100 text-red-950",
+} as const;
+
+const inventoryBadgeClass = {
+  pending: "border-amber-300/65 bg-amber-100 text-amber-900",
+  deducted: "border-emerald-300/65 bg-emerald-100 text-emerald-900",
+  conflict: "border-rose-300/70 bg-rose-100 text-rose-950",
+  error: "border-red-400/70 bg-red-100 text-red-950",
+  legacy: "border-slate-300/65 bg-slate-100 text-slate-800",
 } as const;
 
 const shippingOptionClass = {
@@ -303,23 +325,6 @@ const getShortOrderId = (value: string) => {
   return `#${compact.slice(-6).toUpperCase() || trimmed.slice(-6)}`;
 };
 
-const getOrderAction = (order: AdminOrderSheetRow, draft: OrderDraft) => {
-  if (draft.paymentStatus === "pending") {
-    return { label: "Falta confirmar pago", tone: "payment" as const };
-  }
-  if (
-    draft.paymentStatus === "cancelled" ||
-    draft.paymentStatus === "refunded" ||
-    draft.paymentStatus === "charged_back"
-  ) {
-    return { label: "Revisar venta", tone: "review" as const };
-  }
-  if (draft.shippingStatus === "in_process") {
-    return { label: "Preparar o entregar", tone: "shipping" as const };
-  }
-  return { label: "Venta finalizada", tone: "done" as const };
-};
-
 const getOrderGeneralStatus = (paymentStatus: PaymentStatus, shippingStatus: ShippingStatus) => {
   if (paymentStatus === "confirmed" && shippingStatus === "completed") return "Completada";
   if (paymentStatus === "confirmed" && shippingStatus === "in_process") return "A preparar";
@@ -419,6 +424,8 @@ export default function VentasTable({ orders }: VentasTableProps) {
   const [isSavingBeforeLeave, setIsSavingBeforeLeave] = useState(false);
   const [leaveDialogError, setLeaveDialogError] = useState<string | null>(null);
   const [isPersistingSale, setIsPersistingSale] = useState(false);
+  const [retryingOrderId, setRetryingOrderId] = useState<string | null>(null);
+  const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
 
   useBodyScrollLock(
     Boolean(
@@ -438,6 +445,10 @@ export default function VentasTable({ orders }: VentasTableProps) {
     () => orders.find((order) => order.orderId === selectedOrderId) || null,
     [orders, selectedOrderId]
   );
+
+  useEffect(() => {
+    setRetryFeedback(null);
+  }, [selectedOrderId]);
 
   const editingOrder = useMemo(
     () => orders.find((order) => order.orderId === editingOrderId) || null,
@@ -515,10 +526,8 @@ export default function VentasTable({ orders }: VentasTableProps) {
       (stats, order) => {
         const isToday = order.createdAtMs >= todayStart;
         const isPendingPayment = order.paymentStatus === "pending";
-        const isReadyForShipping =
-          order.paymentStatus === "confirmed" && order.shippingStatus === "in_process";
-        const isCompleted =
-          order.paymentStatus === "confirmed" && order.shippingStatus === "completed";
+        const isReadyForShipping = isOrderReadyForShipping(order);
+        const isCompleted = isOrderNormallyCompleted(order);
 
         return {
           todayCount: stats.todayCount + (isToday ? 1 : 0),
@@ -586,6 +595,14 @@ export default function VentasTable({ orders }: VentasTableProps) {
       }
 
       if (shippingFilter !== "all" && order.shippingStatus !== shippingFilter) {
+        return false;
+      }
+
+      if (
+        paymentFilter === "confirmed" &&
+        shippingFilter !== "all" &&
+        inventoryRequiresAttention(order.inventoryStatus)
+      ) {
         return false;
       }
 
@@ -846,6 +863,21 @@ export default function VentasTable({ orders }: VentasTableProps) {
     void persistPendingChanges();
   };
 
+  const handleRetryInventory = async (orderId: string) => {
+    if (retryingOrderId) return;
+    setRetryingOrderId(orderId);
+    setRetryFeedback(null);
+    try {
+      const result = await retryOrderInventoryAction(orderId);
+      setRetryFeedback(result.message);
+      if (result.ok) window.location.reload();
+    } catch {
+      setRetryFeedback("No pudimos reintentar el inventario. Probá nuevamente.");
+    } finally {
+      setRetryingOrderId(null);
+    }
+  };
+
   return (
     <>
       {hasUnsavedChanges ? (
@@ -1008,6 +1040,18 @@ export default function VentasTable({ orders }: VentasTableProps) {
                 Pago {paymentStatusLabel[draft.paymentStatus].toLowerCase()} · Envío{" "}
                 {shippingStatusLabel[draft.shippingStatus].toLowerCase()}
               </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span
+                  className={`rounded-full border px-2 py-1 text-[11px] font-bold ${
+                    inventoryBadgeClass[order.inventoryStatus ?? "legacy"]
+                  }`}
+                >
+                  Inventario: {getInventoryStatusLabel(order.inventoryStatus)}
+                </span>
+                {inventoryRequiresAttention(order.inventoryStatus) ? (
+                  <span className="text-[11px] font-black text-rose-800">⚠ Requiere atención</span>
+                ) : null}
+              </div>
 
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <button
@@ -1044,7 +1088,7 @@ export default function VentasTable({ orders }: VentasTableProps) {
       </div>
 
       <div className="relative z-0 hidden overflow-x-auto rounded-lg border border-[#e4d8ec] bg-white shadow-[0_16px_30px_rgba(12,6,24,0.22)] md:block">
-        <table className="min-w-[1180px] w-full table-fixed text-left">
+        <table className="min-w-[1300px] w-full table-fixed text-left">
           <thead className="bg-[#efe7f6] text-[#4f356c]">
             <tr className="text-center text-xs uppercase tracking-[0.1em]">
               <th className="w-[13%] px-3 py-3">Pedido</th>
@@ -1054,6 +1098,7 @@ export default function VentasTable({ orders }: VentasTableProps) {
               <th className="w-[9%] px-3 py-3">Total</th>
               <th className="w-[14%] px-3 py-3">Estado Pago</th>
               <th className="w-[14%] px-3 py-3">Estado Envío</th>
+              <th className="w-[12%] px-3 py-3">Inventario</th>
               <th className="w-[8%] px-3 py-3">Contacto</th>
               <th className="w-[13%] px-3 py-3">Gestión</th>
             </tr>
@@ -1062,7 +1107,7 @@ export default function VentasTable({ orders }: VentasTableProps) {
             {visibleOrders.length === 0 ? (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={10}
                   className="px-4 py-8 text-center text-sm font-medium text-[var(--brand-violet-900)]/75"
                 >
                   No hay ventas que cumplan con los filtros seleccionados.
@@ -1161,7 +1206,11 @@ export default function VentasTable({ orders }: VentasTableProps) {
                         <option value="in_process" className={shippingOptionClass.in_process}>
                           En proceso
                         </option>
-                        <option value="completed" className={shippingOptionClass.completed}>
+                        <option
+                          value="completed"
+                          disabled={!canCompleteShipping(order.inventoryStatus)}
+                          className={shippingOptionClass.completed}
+                        >
                           Finalizado
                         </option>
                       </select>
@@ -1214,6 +1263,16 @@ export default function VentasTable({ orders }: VentasTableProps) {
                         Detalle
                       </button>
                     </div>
+                  </td>
+                  <td className="px-3 py-3.5 text-center">
+                    <span
+                      className={`inline-flex max-w-full items-center justify-center rounded-full border px-2 py-1 text-[11px] font-bold ${
+                        inventoryBadgeClass[order.inventoryStatus ?? "legacy"]
+                      }`}
+                      title={getInventoryIssueLabel(order.inventoryStatus, order.inventoryIssueCode)}
+                    >
+                      {getInventoryStatusLabel(order.inventoryStatus)}
+                    </span>
                   </td>
                 </tr>
               );
@@ -1272,7 +1331,7 @@ export default function VentasTable({ orders }: VentasTableProps) {
                             paymentStatus: option.value,
                           })
                         }
-                        className={`rounded-lg border px-2 py-2 text-xs font-semibold transition ${
+                        className={`rounded-lg border px-2 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 ${
                           isActive
                             ? paymentStatusButtonClass[option.value]
                             : "border-[var(--brand-gold-300)]/35 bg-white/8 text-[var(--brand-cream)] hover:bg-white/12"
@@ -1300,12 +1359,16 @@ export default function VentasTable({ orders }: VentasTableProps) {
                       <button
                         key={option.value}
                         type="button"
+                        disabled={
+                          option.value === "completed" &&
+                          !canCompleteShipping(editingOrder.inventoryStatus)
+                        }
                         onClick={() =>
                           updateDraft(editingOrder.orderId, {
                             shippingStatus: option.value,
                           })
                         }
-                        className={`rounded-lg border px-2 py-2 text-xs font-semibold transition ${
+                        className={`rounded-lg border px-2 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 ${
                           isActive
                             ? shippingStatusButtonClass[option.value]
                             : "border-[var(--brand-gold-300)]/35 bg-white/8 text-[var(--brand-cream)] hover:bg-white/12"
@@ -1528,6 +1591,56 @@ export default function VentasTable({ orders }: VentasTableProps) {
                     {deliveryMethodLabel(selectedOrder.deliveryMethod)}
                   </p>
                 </div>
+              </section>
+
+              <section
+                className={`rounded-2xl border p-3 md:p-4 ${
+                  inventoryRequiresAttention(selectedOrder.inventoryStatus)
+                    ? "border-rose-300/45 bg-rose-950/30"
+                    : "border-[var(--brand-gold-300)]/20 bg-white/8"
+                }`}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--brand-cream)]/65">
+                      Inventario
+                    </p>
+                    <p className="mt-1 text-base font-bold text-white">
+                      {getInventoryStatusLabel(selectedOrder.inventoryStatus)}
+                    </p>
+                  </div>
+                  {inventoryRequiresAttention(selectedOrder.inventoryStatus) ? (
+                    <span className="rounded-full border border-rose-200/55 bg-rose-100 px-3 py-1 text-xs font-black text-rose-950">
+                      ⚠ Requiere atención
+                    </span>
+                  ) : null}
+                </div>
+                {inventoryRequiresAttention(selectedOrder.inventoryStatus) ? (
+                  <p className="mt-3 text-sm text-[var(--brand-cream)]/90">
+                    <span className="font-bold">Motivo:</span>{" "}
+                    {getInventoryIssueLabel(
+                      selectedOrder.inventoryStatus,
+                      selectedOrder.inventoryIssueCode
+                    )}
+                  </p>
+                ) : null}
+                {canRetryInventory(selectedOrder.inventoryStatus) ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleRetryInventory(selectedOrder.orderId)}
+                    disabled={retryingOrderId === selectedOrder.orderId}
+                    className="mt-3 rounded-lg bg-[var(--brand-gold-300)] px-3 py-2 text-xs font-bold text-[var(--brand-violet-950)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {retryingOrderId === selectedOrder.orderId
+                      ? "Reintentando..."
+                      : "Reintentar descuento de stock"}
+                  </button>
+                ) : null}
+                {retryFeedback ? (
+                  <p className="mt-2 text-xs font-semibold text-[var(--brand-cream)]/85">
+                    {retryFeedback}
+                  </p>
+                ) : null}
               </section>
 
               <section className="grid gap-2 rounded-2xl border border-[var(--brand-gold-300)]/20 bg-white/8 p-3 text-sm md:grid-cols-2 md:p-4">

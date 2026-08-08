@@ -5,6 +5,7 @@ import { getSheetsToken, type SheetsTokenPurpose } from "@/src/server/sheets/tok
 import type {
   Order,
   OrderDeliveryMethod,
+  OrderInventoryStatus,
   OrderPaymentMethod,
   OrderPaymentStatus,
   OrderShippingStatus,
@@ -87,6 +88,10 @@ export type AdminOrderSheetRow = {
   currency: "ARS";
   paymentStatus: OrderPaymentStatus;
   shippingStatus: OrderShippingStatus;
+  inventoryStatus?: OrderInventoryStatus;
+  inventoryIssueCode: string;
+  inventoryIssueAt: string;
+  stockDeductedAt: string;
   paymentMethod?: OrderPaymentMethod;
   deliveryMethod?: OrderDeliveryMethod;
   items: AdminOrderItem[];
@@ -161,7 +166,7 @@ const toNumberValue = (value: unknown): number => {
   return Number.NaN;
 };
 
-const toIsoString = (timestamp: number | undefined): string => {
+const toIsoString = (timestamp: number | null | undefined): string => {
   if (!timestamp || !Number.isFinite(timestamp)) return "";
   return new Date(timestamp).toISOString();
 };
@@ -321,6 +326,14 @@ export const parseShippingStatus = (value: unknown): OrderShippingStatus => {
   const token = normalizeToken(value);
   if (token.includes("final") || token.includes("complet") || token.includes("entreg")) return "completed";
   return "in_process";
+};
+
+export const parseInventoryStatus = (value: unknown): OrderInventoryStatus | undefined => {
+  const token = normalizeToken(value);
+  if (token === "pending" || token === "deducted" || token === "conflict" || token === "error") {
+    return token;
+  }
+  return undefined;
 };
 
 export const paymentStatusToLabel = (status: OrderPaymentStatus) => {
@@ -516,6 +529,7 @@ const parseStockMutationResult = (
     throw new InventoryOperationError({
       code: "INVENTORY_VALIDATION_FAILED",
       message: "Apps Script devolvió un resultado de inventario incompleto.",
+      origin: "response",
     });
   }
 
@@ -528,6 +542,7 @@ const parseStockMutationResult = (
       throw new InventoryOperationError({
         code: "INVENTORY_VALIDATION_FAILED",
         message: "Apps Script devolvió una actualización de inventario inválida.",
+        origin: "response",
       });
     }
     const update = rawUpdate as Record<string, unknown>;
@@ -551,6 +566,7 @@ const parseStockMutationResult = (
       throw new InventoryOperationError({
         code: "INVENTORY_VALIDATION_FAILED",
         message: "Apps Script devolvió una actualización de inventario inválida.",
+        origin: "response",
         ...(isValidProductId(productId) ? { productId } : {}),
       });
     }
@@ -562,6 +578,7 @@ const parseStockMutationResult = (
     throw new InventoryOperationError({
       code: "INVENTORY_VALIDATION_FAILED",
       message: "Apps Script no confirmó todas las actualizaciones de inventario.",
+      origin: "response",
     });
   }
 
@@ -699,6 +716,9 @@ export const buildSalesSheetRow = (order: Order): Record<string, unknown> => {
     mp_status: order.mpStatus || "",
     approved_at: approvedAtIso,
     fecha_pago: approvedAtIso,
+    inventory_status: order.inventoryStatus || "",
+    inventory_issue_code: order.inventoryIssueCode || "",
+    inventory_issue_at: toIsoString(order.inventoryIssueAt),
     stock_deducted_at: toIsoString(order.stockDeductedAt),
     receipt_email_sent_at: toIsoString(order.receiptEmailSentAt),
   };
@@ -742,6 +762,9 @@ export async function updateOrderRowInSalesSheet(
     mpPreferenceId: string;
     receiptEmailSentAt: number;
     stockDeductedAt: number;
+    inventoryStatus: OrderInventoryStatus | null;
+    inventoryIssueCode: string | null;
+    inventoryIssueAt: number | null;
     updatedAt: number;
   }>
 ): Promise<void> {
@@ -776,6 +799,15 @@ export async function updateOrderRowInSalesSheet(
   }
   if (updates.stockDeductedAt) {
     payload.stock_deducted_at = toIsoString(updates.stockDeductedAt);
+  }
+  if ("inventoryStatus" in updates) {
+    payload.inventory_status = updates.inventoryStatus ?? "";
+  }
+  if ("inventoryIssueCode" in updates) {
+    payload.inventory_issue_code = updates.inventoryIssueCode ?? "";
+  }
+  if ("inventoryIssueAt" in updates) {
+    payload.inventory_issue_at = toIsoString(updates.inventoryIssueAt);
   }
 
   try {
@@ -922,7 +954,7 @@ const parseOrderItemsJson = (value: unknown): AdminOrderItem[] => {
         return {
           productId: toStringValue(item.productId ?? item.product_id),
           title,
-          qty: Number.isFinite(qty) && qty > 0 ? Math.trunc(qty) : 1,
+          qty,
           ...(Number.isFinite(unitPrice) ? { unitPrice } : {}),
         };
       })
@@ -958,6 +990,21 @@ const parseAdminOrderRow = (input: SheetRow): AdminOrderSheetRow | null => {
   const receiptEmailSentAt = toStringValue(
     pickValue(row, ["receipt_email_sent_at", "email_enviado_en", "email_sent_at"])
   );
+  const inventoryStatusValue = pickValue(row, ["inventory_status"]);
+  const inventoryStatusText = toStringValue(inventoryStatusValue);
+  const parsedInventoryStatus = parseInventoryStatus(inventoryStatusValue);
+  const stockDeductedAt = toStringValue(
+    pickValue(row, ["stock_deducted_at", "stock_descontado_en", "stock_discounted_at"])
+  );
+  const inventoryStatus = inventoryStatusText
+    ? parsedInventoryStatus === "deducted"
+      ? stockDeductedAt
+        ? "deducted"
+        : undefined
+      : parsedInventoryStatus
+    : stockDeductedAt
+      ? "deducted"
+      : undefined;
 
   return {
     orderId,
@@ -972,6 +1019,10 @@ const parseAdminOrderRow = (input: SheetRow): AdminOrderSheetRow | null => {
     currency: "ARS",
     paymentStatus: parsePaymentStatus(paymentStatusRaw),
     shippingStatus: parseShippingStatus(shippingStatusRaw),
+    inventoryStatus,
+    inventoryIssueCode: toStringValue(pickValue(row, ["inventory_issue_code"])),
+    inventoryIssueAt: toStringValue(pickValue(row, ["inventory_issue_at"])),
+    stockDeductedAt,
     paymentMethod: parsePaymentMethod(
       pickValue(row, ["forma_de_pago", "payment_method_code", "payment_method", "metodo_pago"])
     ),

@@ -3,8 +3,16 @@ import { env } from "@/src/config/env";
 import { scheduleAfterResponse } from "@/src/server/http/afterResponse";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
-import { getOrder, markApproved, markTerminalPaymentState, updateOrder } from "@/src/server/orders/store";
+import {
+  claimReceiptEmailDelivery,
+  getOrder,
+  markApproved,
+  markTerminalPaymentState,
+  releaseReceiptEmailDelivery,
+  updateOrder,
+} from "@/src/server/orders/store";
 import type { Order } from "@/src/server/orders/types";
+import { resolveOrderInventoryStatus } from "@/src/server/orders/inventory";
 import { formatDateTime24h, sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
 import { fetchPaymentByIdFromMp, searchPaymentsByExternalReference } from "@/src/server/payments/mpClient";
 import { amountMatches, terminalOrderStatusFromMpStatus } from "@/src/server/payments/shared";
@@ -27,12 +35,16 @@ const buildPendingResponse = () =>
 const buildApprovedResponse = (
   externalReference: string,
   paymentId: string | number | undefined,
-  timestamp: number
+  timestamp: number,
+  inventoryStatus?: Order["inventoryStatus"]
 ) =>
   NextResponse.json(
     {
       approved: true,
-      message: "Pago confirmado",
+      message:
+        inventoryStatus === "conflict" || inventoryStatus === "error"
+          ? "Pago confirmado. Recibimos correctamente tu pago y estamos procesando tu pedido. Si necesitamos coordinar algún detalle, nos comunicaremos con vos."
+          : "Pago confirmado",
       paymentId,
       externalReference,
       timestamp,
@@ -44,7 +56,12 @@ const buildApprovedResponse = (
 const buildCachedApprovedResponse = async (order: Order) => {
   await trackBusinessEvent("payment.verify.cached_approved", { externalReference: order.externalReference });
   const timestamp = order.approvedAt || order.updatedAt;
-  return buildApprovedResponse(order.externalReference, order.mpPaymentId, timestamp);
+  return buildApprovedResponse(
+    order.externalReference,
+    order.mpPaymentId,
+    timestamp,
+    resolveOrderInventoryStatus(order)
+  );
 };
 
 const terminalPaymentMessage = (status: string) => {
@@ -71,6 +88,11 @@ const trySendReceiptEmail = async (
   approvedAt: number
 ) => {
   if (order.receiptEmailSentAt) return;
+  const claimed = await claimReceiptEmailDelivery(order.externalReference);
+  if (!claimed) return;
+
+  const latestOrder = await getOrder(order.externalReference);
+  if (latestOrder?.receiptEmailSentAt) return;
 
   const result = await sendOrderReceiptEmail({
     order,
@@ -85,6 +107,7 @@ const trySendReceiptEmail = async (
   }
 
   if (result.reason === "missing_customer_email") {
+    await releaseReceiptEmailDelivery(order.externalReference);
     return;
   }
 
@@ -97,6 +120,7 @@ const trySendReceiptEmail = async (
     externalReference: order.externalReference,
     reason: result.reason,
   });
+  await releaseReceiptEmailDelivery(order.externalReference);
 };
 
 type MpPaymentLike = MpPaymentResponse | MpSearchPayment | undefined;
@@ -174,11 +198,14 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
       const paymentById = await fetchPaymentByIdFromMp(paymentId, accessToken);
       if (paymentById.response.ok && isApprovedPaymentMatch(paymentById.data || undefined, ref, order.total)) {
         const approvedAt = Date.now();
-        await markApproved(order.externalReference, {
+        const approvedOrder = await markApproved(order.externalReference, {
           paymentId,
           mpStatus: String(paymentById.data?.status || "approved"),
           approvedAt,
         });
+        if (!approvedOrder || approvedOrder.paymentStatus !== "confirmed") {
+          return NextResponse.json({ error: "No se pudo persistir el pago confirmado" }, { status: 503 });
+        }
         scheduleAfterResponse(() => trySendReceiptEmail(order, paymentId, approvedAt));
         logEvent("info", "payments.approved_from_verify_payment_id", {
           externalReference: order.externalReference,
@@ -188,7 +215,12 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
           externalReference: order.externalReference,
           paymentId,
         });
-        return buildApprovedResponse(order.externalReference, paymentId, approvedAt);
+        return buildApprovedResponse(
+          order.externalReference,
+          paymentId,
+          approvedAt,
+          resolveOrderInventoryStatus(approvedOrder)
+        );
       }
 
       const terminalOrderStatus = getTerminalPaymentOrderStatus(paymentById.data || undefined, ref, order.total);
@@ -249,11 +281,14 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
 
   if (approvedPayment) {
     const approvedAt = Date.now();
-    await markApproved(order.externalReference, {
+    const approvedOrder = await markApproved(order.externalReference, {
       paymentId: String(approvedPayment.id || ""),
       mpStatus: String(approvedPayment.status || "approved"),
       approvedAt,
     });
+    if (!approvedOrder || approvedOrder.paymentStatus !== "confirmed") {
+      return NextResponse.json({ error: "No se pudo persistir el pago confirmado" }, { status: 503 });
+    }
     scheduleAfterResponse(() => trySendReceiptEmail(order, approvedPayment.id, approvedAt));
 
     logEvent("info", "payments.approved_from_verify", {
@@ -266,7 +301,12 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
       paymentId: String(approvedPayment.id || ""),
     });
 
-    return buildApprovedResponse(order.externalReference, approvedPayment.id, approvedAt);
+    return buildApprovedResponse(
+      order.externalReference,
+      approvedPayment.id,
+      approvedAt,
+      resolveOrderInventoryStatus(approvedOrder)
+    );
   }
 
   if (terminalPayment) {

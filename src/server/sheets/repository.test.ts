@@ -3,6 +3,8 @@ import {
   buildSalesSheetRow,
   decrementProductsStockInSheet,
   getOrdersForAdmin,
+  parseInventoryStatus,
+  updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
 import { InventoryOperationError } from "@/src/server/inventory/errors";
 import type { Order } from "@/src/server/orders/types";
@@ -212,5 +214,101 @@ describe("inventory mutation contract", () => {
     await expect(
       decrementProductsStockInSheet("order-deduped", [{ productId: "a", qty: 1 }]),
     ).resolves.toEqual({ deduped: true, updated: [] });
+  });
+});
+
+describe("PR 2 ventas inventory persistence", () => {
+  it("PR2-SHEET-01 buildSalesSheetRow writes pending", () => {
+    expect(buildSalesSheetRow({ ...baseOrder, inventoryStatus: "pending" }).inventory_status).toBe("pending");
+  });
+
+  it("PR2-SHEET-02 buildSalesSheetRow writes deducted with evidence", () => {
+    const row = buildSalesSheetRow({ ...baseOrder, inventoryStatus: "deducted", stockDeductedAt: 123 });
+    expect(row.inventory_status).toBe("deducted");
+    expect(row.stock_deducted_at).toBe(new Date(123).toISOString());
+  });
+
+  it("PR2-SHEET-03 buildSalesSheetRow writes conflict code and date", () => {
+    const row = buildSalesSheetRow({
+      ...baseOrder,
+      inventoryStatus: "conflict",
+      inventoryIssueCode: "INSUFFICIENT_STOCK",
+      inventoryIssueAt: 456,
+    });
+    expect(row).toMatchObject({
+      inventory_status: "conflict",
+      inventory_issue_code: "INSUFFICIENT_STOCK",
+      inventory_issue_at: new Date(456).toISOString(),
+    });
+  });
+
+  it("PR2-SHEET-04 buildSalesSheetRow writes sanitized technical error metadata", () => {
+    const row = buildSalesSheetRow({
+      ...baseOrder,
+      inventoryStatus: "error",
+      inventoryIssueCode: "SHEETS_TIMEOUT",
+      inventoryIssueAt: 789,
+    });
+    expect(row).toMatchObject({
+      inventory_status: "error",
+      inventory_issue_code: "SHEETS_TIMEOUT",
+      inventory_issue_at: new Date(789).toISOString(),
+    });
+  });
+
+  it("PR2-SHEET-05 updateOrderRow can explicitly clear issue code", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    );
+    await updateOrderRowInSalesSheet("order-clear-code", { inventoryIssueCode: null });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.updates.inventory_issue_code).toBe("");
+  });
+
+  it("PR2-SHEET-06 updateOrderRow can explicitly clear issue date", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    );
+    await updateOrderRowInSalesSheet("order-clear-date", { inventoryIssueAt: null });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.updates.inventory_issue_at).toBe("");
+  });
+
+  it("PR2-SHEET-07 parser recognizes exactly the four supported states", () => {
+    expect(["pending", "deducted", "conflict", "error"].map(parseInventoryStatus)).toEqual([
+      "pending",
+      "deducted",
+      "conflict",
+      "error",
+    ]);
+  });
+
+  it("PR2-SHEET-08 unknown tokens are not silently converted", () => {
+    expect(parseInventoryStatus("descontado")).toBeUndefined();
+    expect(parseInventoryStatus("successful")).toBeUndefined();
+  });
+
+  it("PR2-SHEET-09 legacy stock_deducted_at is presented as deducted", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_ADMIN_TOKEN", "admin-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      items: [{ nro_de_compra: "legacy-deducted", stock_deducted_at: "2026-08-01T00:00:00.000Z" }],
+    }), { status: 200 }));
+    expect((await getOrdersForAdmin())[0]?.inventoryStatus).toBe("deducted");
+  });
+
+  it("PR2-SHEET-10 legacy row without inventory fields remains unregistered", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_ADMIN_TOKEN", "admin-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      items: [{ nro_de_compra: "legacy-unknown" }],
+    }), { status: 200 }));
+    expect((await getOrdersForAdmin())[0]?.inventoryStatus).toBeUndefined();
   });
 });
