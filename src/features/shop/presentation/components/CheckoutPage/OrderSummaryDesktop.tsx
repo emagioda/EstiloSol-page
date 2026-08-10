@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import type { CartItem } from "../../view-models/useCartStore";
+import { getCartProductDemand, type CartItem } from "../../view-models/useCartStore";
 import type { CheckoutInvalidProduct } from "./CheckoutSteps";
 import { deliveryMethodLabel, formatMoney, fulfillmentFeeLabel, type DeliveryMethod } from "./checkoutUtils";
 
@@ -43,22 +43,23 @@ export default function OrderSummaryDesktop({
       <div className="elegant-scrollbar mt-4 max-h-[45vh] space-y-3 overflow-y-auto pr-1">
         {items.map((item) => {
           const invalidProduct = invalidProductsById.get(item.productId);
+          const productDemand = getCartProductDemand(items, item.productId);
           const hasStockProblem =
             Boolean(invalidProduct) ||
             item.stockStatus === "out_of_stock" ||
-            (typeof item.stockQty === "number" && item.qty > item.stockQty);
+            (typeof item.stockQty === "number" && productDemand > item.stockQty);
           const stockMessage =
             invalidProduct?.reason === "price_changed" && typeof invalidProduct.currentPrice === "number"
               ? `El precio cambio a ${formatMoney(invalidProduct.currentPrice)}. Revisa el total antes de continuar.`
               : item.stockStatus === "out_of_stock" || item.stockQty === 0
               ? "Sin stock. Quitalo del carrito para continuar."
-              : typeof item.stockQty === "number" && item.qty > item.stockQty
+              : typeof item.stockQty === "number" && productDemand > item.stockQty
                 ? `Solo quedan ${item.stockQty}. Ajusta la cantidad.`
                 : "No disponible para esta compra.";
 
           return (
             <article
-              key={item.productId}
+              key={item.lineId}
               className={`flex gap-3 rounded-2xl border p-3 ${
                 hasStockProblem
                   ? "border-red-300 bg-red-50/80 shadow-[0_0_0_1px_rgba(248,113,113,0.18)]"

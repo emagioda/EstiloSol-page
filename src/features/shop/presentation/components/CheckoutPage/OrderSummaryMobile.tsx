@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import type { CartItem } from "../../view-models/useCartStore";
+import { getCartProductDemand, type CartItem } from "../../view-models/useCartStore";
 import type { CheckoutInvalidProduct } from "./CheckoutSteps";
 import { deliveryMethodLabel, formatMoney, fulfillmentFeeLabel, type DeliveryMethod } from "./checkoutUtils";
 
@@ -73,22 +73,23 @@ export default function OrderSummaryMobile({
               <div className="space-y-2">
                 {items.map((item) => {
                   const invalidProduct = invalidProductsById.get(item.productId);
+                  const productDemand = getCartProductDemand(items, item.productId);
                   const hasStockProblem =
                     Boolean(invalidProduct) ||
                     item.stockStatus === "out_of_stock" ||
-                    (typeof item.stockQty === "number" && item.qty > item.stockQty);
+                    (typeof item.stockQty === "number" && productDemand > item.stockQty);
                   const stockMessage =
                     invalidProduct?.reason === "price_changed" && typeof invalidProduct.currentPrice === "number"
                       ? `Precio actualizado: ${formatMoney(invalidProduct.currentPrice)}.`
                       : item.stockStatus === "out_of_stock" || item.stockQty === 0
                         ? "Sin stock. Quitalo del carrito."
-                        : typeof item.stockQty === "number" && item.qty > item.stockQty
+                        : typeof item.stockQty === "number" && productDemand > item.stockQty
                           ? `Solo quedan ${item.stockQty}.`
                           : "No disponible.";
 
                   return (
                     <article
-                      key={item.productId}
+                      key={item.lineId}
                       className={`rounded-2xl border px-3 py-2 ${
                         hasStockProblem
                           ? "border-red-300 bg-red-50/80"

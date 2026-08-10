@@ -3,7 +3,10 @@ import { notFound } from "next/navigation";
 
 import ProductDetail from "@/src/features/shop/presentation/pages/ProductDetail";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
-import { attachProductVariants } from "@/src/features/shop/domain/productVariants";
+import {
+  attachProductVariants,
+  resolveProductBySlugOrId,
+} from "@/src/features/shop/domain/productVariants";
 import {
   getProductCategories,
   productBelongsToCategory,
@@ -17,16 +20,9 @@ type Props = { params: Promise<{ slug: string }> };
 
 const baseUrl = () => process.env.APP_BASE_URL?.trim() || "https://estilosol.ar";
 
-const findProductBySlugOrId = (products: Product[], slugParam: string) => {
-  const decodedSlug = decodeURIComponent(slugParam);
-  return products.find(
-    (product) => product.slug === decodedSlug || String(product.id) === decodedSlug,
-  );
-};
-
 const loadProduct = async (slug: string): Promise<Product | undefined> => {
   const products = await fetchProductsFromCatalogSource();
-  return findProductBySlugOrId(products, slug);
+  return resolveProductBySlugOrId(products, slug);
 };
 
 const findSimilarProducts = (products: Product[], product: Product): Product[] => {
@@ -47,7 +43,7 @@ const loadProductContext = async (
   slug: string,
 ): Promise<{ product?: Product; similarProducts: Product[] }> => {
   const products = await fetchProductsFromCatalogSource();
-  const product = findProductBySlugOrId(products, slug);
+  const product = resolveProductBySlugOrId(products, slug);
 
   return {
     product: product ? attachProductVariants(product, products) : undefined,
@@ -71,10 +67,14 @@ const escapeJsonForHtml = (value: unknown) => JSON.stringify(value).replace(/</g
 export async function generateStaticParams() {
   try {
     const products = await fetchProductsFromCatalogSource();
-    return products
-      .map((product) => String(product.slug || product.id).trim())
-      .filter(Boolean)
-      .map((slug) => ({ slug }));
+    return Array.from(
+      new Set(
+        products
+          .map((product) => String(product.slug || product.id).trim())
+          .filter(Boolean),
+      ),
+      (slug) => ({ slug }),
+    );
   } catch (error) {
     logEvent("warn", "catalog.static_params_failed", { error });
     return [];

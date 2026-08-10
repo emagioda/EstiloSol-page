@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 import {
-  canIncreaseCartItem,
+  canIncreaseCartLine,
   getCartItemMaxQty,
   useCart,
 } from "../../view-models/useCartStore";
@@ -48,6 +48,7 @@ export default function CartDrawer({
   }, [isClosing, onClose]);
 
   const subtotal = useMemo(() => items.reduce((s, it) => s + it.unitPrice * it.qty, 0), [items]);
+  const totalUnits = useMemo(() => items.reduce((sum, item) => sum + item.qty, 0), [items]);
 
   useEffect(() => {
     if (!open) {
@@ -178,7 +179,7 @@ export default function CartDrawer({
 
           {items.map((it) => {
             const maxQty = getCartItemMaxQty(it);
-            const canIncrease = canIncreaseCartItem(it);
+            const canIncrease = canIncreaseCartLine(items, it.lineId);
             const stockText =
               maxQty === 0
                 ? "Sin stock"
@@ -189,7 +190,7 @@ export default function CartDrawer({
                 : null;
 
             return (
-              <div key={it.productId} className="flex items-center gap-3 border-b border-[var(--brand-violet-900)] pb-3">
+              <div key={it.lineId} className="flex items-center gap-3 border-b border-[var(--brand-violet-900)] pb-3">
                 <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded bg-black">
                   {it.image ? (
                     <img
@@ -209,7 +210,7 @@ export default function CartDrawer({
                   )}
                   <div className="mt-2 flex items-center gap-2">
                     <button
-                      onClick={() => updateQty(it.productId, Math.max(1, it.qty - 1))}
+                      onClick={() => updateQty(it.lineId, it.qty - 1)}
                       className="px-2 transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
                       aria-label={`Reducir cantidad de ${it.name}`}
                     >
@@ -217,7 +218,7 @@ export default function CartDrawer({
                     </button>
                     <div className="w-6 text-center" aria-live="polite">{it.qty}</div>
                     <button
-                      onClick={() => updateQty(it.productId, it.qty + 1)}
+                      onClick={() => updateQty(it.lineId, it.qty + 1)}
                       disabled={!canIncrease}
                       className="px-2 transition-transform hover:scale-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
                       aria-label={
@@ -229,7 +230,7 @@ export default function CartDrawer({
                       +
                     </button>
                     <button
-                      onClick={() => removeItem(it.productId)}
+                      onClick={() => removeItem(it.lineId)}
                       className="ml-3 text-xs underline transition-colors hover:text-[var(--brand-gold-300)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
                     >
                       Eliminar
@@ -248,7 +249,7 @@ export default function CartDrawer({
               <p className="text-2xl font-bold leading-none text-[var(--brand-gold-300)]">{formatMoney(subtotal)}</p>
             </div>
             <span className="rounded-full border border-[var(--brand-gold-300)]/30 px-2 py-1 text-[11px] text-[var(--brand-cream)]/75">
-              {items.length} producto{items.length !== 1 ? "s" : ""}
+              {totalUnits} unidad{totalUnits !== 1 ? "es" : ""}
             </span>
           </div>
 

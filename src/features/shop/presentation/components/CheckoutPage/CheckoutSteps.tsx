@@ -14,6 +14,7 @@ import type { PaymentMethod } from "../../view-models/useCartStore";
 import { useCart } from "../../view-models/useCartStore";
 import { refreshProductsMemoryCacheFromSource } from "../../view-models/useProductsStore";
 import {
+  buildCheckoutDemandItems,
   deliveryMethodLabel,
   formatMoney,
   isDiscountPaymentMethod,
@@ -623,13 +624,7 @@ export default function CheckoutSteps({
     return checkoutAttemptIdRef.current;
   };
 
-  const checkoutItemsPayload = () =>
-    items.map((item) => ({
-      productId: item.productId,
-      qty: item.qty,
-      name: item.name,
-      unitPrice: item.unitPrice,
-    }));
+  const checkoutItemsPayload = () => buildCheckoutDemandItems(items);
 
   const checkoutFulfillmentPayload = () => ({
     deliveryAddress:
@@ -897,8 +892,9 @@ export default function CheckoutSteps({
     const invalidProducts = (error?.invalidProducts ?? []).filter(isUnavailableProduct);
     if (invalidProducts.length === 0) return;
 
-    invalidProducts.forEach((item) => {
-      removeItem(item.productId);
+    const invalidProductIds = new Set(invalidProducts.map((item) => item.productId));
+    items.forEach((item) => {
+      if (invalidProductIds.has(item.productId)) removeItem(item.lineId);
     });
 
     setError({ message: "Quitamos los productos no disponibles. Ya podes continuar con el pago." });

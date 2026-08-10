@@ -4,7 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import ProductVariantSelector from "@/src/features/shop/presentation/components/ProductVariantSelector/ProductVariantSelector";
-import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
+import {
+  getCartProductRemainingQty,
+  useCart,
+} from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import {
   getProductVariantLabel,
@@ -95,14 +98,14 @@ export default function QuickViewModal({
   const stockLabel = activeProduct ? getStockLabel(activeProduct) : "";
   const canBuy = activeProduct ? isProductPurchasable(activeProduct) : false;
   const isLastUnit = canBuy && activeProduct?.stock_qty === 1;
-  const cartQty = activeProduct
-    ? items.find((item) => item.productId === activeProduct.id)?.qty ?? 0
+  const remainingQty = activeProduct
+    ? getCartProductRemainingQty(items, activeProduct.id, {
+        stockStatus: activeProduct.stock_status,
+        stockQty: activeProduct.stock_qty,
+      })
     : 0;
-  const maxQty = typeof activeProduct?.stock_qty === "number" ? activeProduct.stock_qty : null;
-  const remainingQty = maxQty === null ? null : Math.max(0, maxQty - cartQty);
-  const canAddToCart = canBuy && (remainingQty === null || remainingQty > 0);
-  const effectiveQty =
-    remainingQty === null ? qty : Math.max(1, Math.min(qty, Math.max(remainingQty, 1)));
+  const canAddToCart = canBuy && remainingQty > 0;
+  const effectiveQty = Math.max(1, Math.min(qty, Math.max(remainingQty, 1)));
   const formattedPrice =
     typeof activeProduct?.price === "number" && Number.isFinite(activeProduct.price)
       ? new Intl.NumberFormat("es-AR", {
@@ -168,7 +171,7 @@ export default function QuickViewModal({
         className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4 pb-[calc(1rem+var(--safe-area-bottom))] pt-[calc(1rem+var(--safe-area-top))] backdrop-blur-sm transition-opacity duration-300"
         role="dialog"
         aria-modal="true"
-        aria-label={`Vista rápida de ${product.name}`}
+        aria-label={`Vista rápida de ${activeProduct.name}`}
         onClick={onClose}
       >
         <div
@@ -210,7 +213,7 @@ export default function QuickViewModal({
           <div className="flex flex-col gap-4 p-5 pr-14 sm:p-7 sm:pr-16 text-[var(--brand-violet-950)]">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--brand-violet-700)]">
-                {formatProductCategories(product)}
+                {formatProductCategories(activeProduct)}
               </p>
               <div
                 className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold leading-none shadow-sm ${
@@ -232,7 +235,7 @@ export default function QuickViewModal({
 
             <div className="space-y-2">
               <h3 className="text-3xl font-bold uppercase leading-tight tracking-[0.02em] text-[var(--brand-violet-950)] sm:text-[2.2rem]">
-                {product.name}
+                {activeProduct.name}
               </h3>
               <div className="space-y-2 border-b border-[var(--brand-violet-700)]/25 pb-4">
                 <p className="text-3xl font-extrabold leading-none text-[var(--brand-violet-950)] sm:text-[3rem]">
@@ -269,11 +272,9 @@ export default function QuickViewModal({
                   <button
                     type="button"
                     onClick={() =>
-                      setQty((prev) =>
-                        remainingQty === null ? prev + 1 : Math.min(remainingQty, prev + 1)
-                      )
+                      setQty((prev) => Math.min(remainingQty, prev + 1))
                     }
-                    disabled={!canAddToCart || (remainingQty !== null && effectiveQty >= remainingQty)}
+                    disabled={!canAddToCart || effectiveQty >= remainingQty}
                     className="h-11 w-11 grid place-items-center rounded-xl bg-[var(--brand-violet-950)] text-white shadow-sm border border-[var(--brand-violet-800)] hover:bg-[var(--brand-violet-800)] active:scale-[0.98] transition disabled:cursor-not-allowed disabled:opacity-50"
                     aria-label="Aumentar cantidad"
                   >
@@ -288,7 +289,7 @@ export default function QuickViewModal({
                       const result = addItem({
                         productId: activeProduct.id,
                         name: hasVariants
-                          ? `${product.name} - ${getProductVariantLabel(activeProduct)}`
+                          ? `${activeProduct.name} - ${getProductVariantLabel(activeProduct)}`
                           : activeProduct.name,
                         unitPrice: activeProduct.price,
                         qty: effectiveQty,
@@ -303,7 +304,7 @@ export default function QuickViewModal({
                       onAddFeedback?.({
                         ok: true,
                         name: hasVariants
-                          ? `${product.name} - ${getProductVariantLabel(activeProduct)}`
+                          ? `${activeProduct.name} - ${getProductVariantLabel(activeProduct)}`
                           : activeProduct.name,
                         image: currentImage,
                       });
