@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { getCheckoutTotals } from "./checkoutUtils";
+import type { CartItem } from "../../view-models/useCartStore";
+import { buildCheckoutDemandItems, getCheckoutTotals } from "./checkoutUtils";
 
 describe("getCheckoutTotals", () => {
   it("does not add delivery shipping when the cart is empty", () => {
@@ -62,5 +63,47 @@ describe("getCheckoutTotals", () => {
       shippingFee: 3000,
       finalTotal: 14100,
     });
+  });
+});
+
+describe("checkout demand payload", () => {
+  const lines: CartItem[] = [
+    {
+      lineId: "visual-line-a",
+      productId: "P1",
+      name: "Producto 1",
+      unitPrice: 1000,
+      qty: 1,
+      stockStatus: "in_stock",
+      stockQty: 3,
+    },
+    {
+      lineId: "visual-line-b",
+      productId: "P1",
+      name: "Producto 1",
+      unitPrice: 1000,
+      qty: 2,
+      stockStatus: "in_stock",
+      stockQty: 3,
+    },
+  ];
+
+  it("PR3-CHECKOUT-05 defensively aggregates manipulated or legacy lines by productId", () => {
+    expect(buildCheckoutDemandItems(lines)).toEqual([
+      { productId: "P1", qty: 3, name: "Producto 1", unitPrice: 1000 },
+    ]);
+  });
+
+  it("PR3-CHECKOUT-06 never substitutes lineId for productId", () => {
+    expect(buildCheckoutDemandItems(lines)[0].productId).toBe("P1");
+    expect(buildCheckoutDemandItems(lines)[0].productId).not.toBe("visual-line-a");
+  });
+
+  it("PR3-CHECKOUT-07 omits lineId from authoritative stock data", () => {
+    expect(buildCheckoutDemandItems(lines)[0]).not.toHaveProperty("lineId");
+  });
+
+  it("PR3-CHECKOUT-09 validates qty1 plus qty2 as demand qty3", () => {
+    expect(buildCheckoutDemandItems(lines)).toMatchObject([{ productId: "P1", qty: 3 }]);
   });
 });

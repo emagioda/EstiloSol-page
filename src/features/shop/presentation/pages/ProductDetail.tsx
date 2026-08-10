@@ -14,7 +14,10 @@ import {
   requestShopScrollRestoreForNextVisit,
 } from "@/src/features/shop/presentation/lib/shopScrollRestoration";
 import { useCartDrawer } from "@/src/features/shop/presentation/view-models/useCartDrawer";
-import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
+import {
+  getCartProductRemainingQty,
+  useCart,
+} from "@/src/features/shop/presentation/view-models/useCartStore";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import { formatProductCategories } from "@/src/features/shop/domain/productCategories";
 import {
@@ -299,12 +302,12 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
   const stockLabel = getStockLabel(currentProduct);
   const canBuy = isProductPurchasable(currentProduct);
   const isLastUnit = canBuy && currentProduct.stock_qty === 1;
-  const cartQty = items.find((item) => item.productId === currentProduct.id)?.qty ?? 0;
-  const maxQty = typeof currentProduct.stock_qty === "number" ? currentProduct.stock_qty : null;
-  const remainingQty = maxQty === null ? null : Math.max(0, maxQty - cartQty);
-  const canAddToCart = canBuy && (remainingQty === null || remainingQty > 0);
-  const effectiveQty =
-    remainingQty === null ? qty : Math.max(1, Math.min(qty, Math.max(remainingQty, 1)));
+  const remainingQty = getCartProductRemainingQty(items, currentProduct.id, {
+    stockStatus: currentProduct.stock_status,
+    stockQty: currentProduct.stock_qty,
+  });
+  const canAddToCart = canBuy && remainingQty > 0;
+  const effectiveQty = Math.max(1, Math.min(qty, Math.max(remainingQty, 1)));
   const discountedPrice = isValidPrice(currentProduct.price)
     ? formatMoney(getCashTransferDiscountedTotal(currentProduct.price))
     : null;
@@ -343,7 +346,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
     if (!canAddToCart) return;
 
     const cartItemName = hasVariants
-      ? `${product.name} - ${getProductVariantLabel(currentProduct)}`
+      ? `${currentProduct.name} - ${getProductVariantLabel(currentProduct)}`
       : currentProduct.name;
 
     try {
@@ -426,7 +429,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
               {stockLabel}
             </div>
           </div>
-          <h1 className="text-3xl font-semibold leading-tight text-[var(--brand-cream)]">{product.name}</h1>
+          <h1 className="text-3xl font-semibold leading-tight text-[var(--brand-cream)]">{currentProduct.name}</h1>
           <div className="space-y-2">
             <p className="text-3xl font-extrabold text-yellow-100">
               {displayPrice}
@@ -462,11 +465,9 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
               <button
                 type="button"
                 onClick={() =>
-                  setQty((prev) =>
-                    remainingQty === null ? prev + 1 : Math.min(remainingQty, prev + 1)
-                  )
+                  setQty((prev) => Math.min(remainingQty, prev + 1))
                 }
-                disabled={!canAddToCart || (remainingQty !== null && effectiveQty >= remainingQty)}
+                disabled={!canAddToCart || effectiveQty >= remainingQty}
                 className="h-11 w-11 grid place-items-center rounded-xl bg-white/85 text-violet-900 shadow-sm border border-white/60 hover:bg-white active:scale-[0.98] transition disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--brand-violet-900)]"
                 aria-label="Aumentar cantidad"
               >

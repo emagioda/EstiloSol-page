@@ -115,6 +115,39 @@ export const fulfillmentFeeLabel = (_deliveryMethod: DeliveryMethod, shippingFee
   return "Gratis";
 };
 
+export type CheckoutDemandItem = {
+  productId: string;
+  qty: number;
+  name: string;
+  unitPrice: number;
+};
+
+export const buildCheckoutDemandItems = (items: CartItem[]): CheckoutDemandItem[] => {
+  const demandByProduct = new Map<string, CheckoutDemandItem>();
+
+  items.forEach((item) => {
+    const productId = item.productId.trim();
+    const qty = Math.max(0, Math.trunc(Number(item.qty) || 0));
+    if (!productId || qty <= 0) return;
+
+    const productKey = productId.toLocaleLowerCase("en");
+    const existing = demandByProduct.get(productKey);
+    if (existing) {
+      existing.qty += qty;
+      return;
+    }
+
+    demandByProduct.set(productKey, {
+      productId,
+      qty,
+      name: item.name,
+      unitPrice: item.unitPrice,
+    });
+  });
+
+  return Array.from(demandByProduct.values());
+};
+
 export const buildWhatsappMessage = ({
   items,
   paymentMethod,

@@ -60,7 +60,7 @@ describe("authoritative catalog inventory validation", () => {
     });
   });
 
-  it("rejects repeated lines whose aggregate exceeds stock", () => {
+  it("PR3-CHECKOUT-10 rejects stock two when aggregate demand is three", () => {
     const items = aggregated({ productId: "a", qty: 2 }, { productId: "a", qty: 1 });
     expectCode([product({ stock_qty: 2 })], items, "INSUFFICIENT_STOCK");
   });

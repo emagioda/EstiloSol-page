@@ -1,13 +1,52 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import OrderSummaryDesktop from "./OrderSummaryDesktop";
 
 describe("OrderSummaryDesktop", () => {
+  it("PR3-CHECKOUT-01 shows one normal product line with its consolidated qty", () => {
+    render(
+      <OrderSummaryDesktop
+        items={[
+          { lineId: "line-a", productId: "p1", name: "Linea consolidada", unitPrice: 100, qty: 3 },
+        ]}
+        subtotal={300}
+        discountAmount={0}
+        shippingFee={0}
+        finalTotal={300}
+        hasDiscount={false}
+        deliveryMethod="pickup"
+      />,
+    );
+    expect(screen.getAllByText("Linea consolidada")).toHaveLength(1);
+    expect(screen.getByText("Cantidad: 3")).toBeInTheDocument();
+  });
+
+  it("PR3-CHECKOUT-02 uses distinct variant lineIds without React key collisions", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    render(
+      <OrderSummaryDesktop
+        items={[
+          { lineId: "line-a", productId: "p1", name: "Variante dorada", unitPrice: 100, qty: 1 },
+          { lineId: "line-b", productId: "p2", name: "Variante plateada", unitPrice: 100, qty: 1 },
+        ]}
+        subtotal={200}
+        discountAmount={0}
+        shippingFee={0}
+        finalTotal={200}
+        hasDiscount={false}
+        deliveryMethod="pickup"
+      />,
+    );
+    expect(consoleError.mock.calls.flat().join(" ")).not.toMatch(/same key|unique.*key/i);
+    consoleError.mockRestore();
+  });
+
   it("marks invalid stock products without hiding them", () => {
     render(
       <OrderSummaryDesktop
         items={[
           {
+            lineId: "line-p1-out",
             productId: "p1",
             name: "Serum Reparador",
             unitPrice: 12000,
@@ -36,6 +75,7 @@ describe("OrderSummaryDesktop", () => {
       <OrderSummaryDesktop
         items={[
           {
+            lineId: "line-p1-price",
             productId: "p1",
             name: "Serum Reparador",
             unitPrice: 15000,

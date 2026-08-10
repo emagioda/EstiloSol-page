@@ -64,7 +64,7 @@ export const getProductVariants = (product: Product): Product[] => {
   return product.variants;
 };
 
-const isVariantPurchasable = (product: Pick<Product, "stock_status" | "stock_qty">): boolean => {
+export const isProductVariantPurchasable = (product: Pick<Product, "stock_status" | "stock_qty">): boolean => {
   if (product.stock_status === "out_of_stock") return false;
   if (typeof product.stock_qty === "number") return product.stock_qty > 0;
   return true;
@@ -79,18 +79,60 @@ const aggregateStockQty = (variants: Product[]): number | null => {
 
 const aggregateStockStatus = (variants: Product[], stockQty: number | null): StockStatus => {
   if (typeof stockQty === "number" && stockQty <= 0) return "out_of_stock";
-  if (variants.some((variant) => isVariantPurchasable(variant))) return "in_stock";
+  if (variants.some((variant) => isProductVariantPurchasable(variant))) return "in_stock";
   if (variants.some((variant) => variant.stock_status === "preorder")) return "preorder";
   return "out_of_stock";
 };
 
-const variantSortValue = (variant: Product) => {
-  const label = getProductVariantLabel(variant);
-  return label.localeCompare(variant.id, "es", { sensitivity: "base" }) === 0 ? variant.id : label;
+const compareStableText = (left: string, right: string) =>
+  left.localeCompare(right, "es", { sensitivity: "base", numeric: true });
+
+export const compareProductVariants = (left: Product, right: Product): number => {
+  const labelComparison = compareStableText(
+    normalizeVariantText(getProductVariantLabel(left)),
+    normalizeVariantText(getProductVariantLabel(right)),
+  );
+  if (labelComparison !== 0) return labelComparison;
+  return left.id.localeCompare(right.id, "en", { sensitivity: "variant", numeric: true });
 };
 
 export const sortProductVariants = (variants: Product[]): Product[] =>
-  [...variants].sort((a, b) => variantSortValue(a).localeCompare(variantSortValue(b), "es", { sensitivity: "base" }));
+  [...variants].sort(compareProductVariants);
+
+export const selectCanonicalProductVariant = (variants: Product[]): Product | undefined => {
+  const sortedVariants = sortProductVariants(variants);
+  return sortedVariants.find(isProductVariantPurchasable) ?? sortedVariants[0];
+};
+
+const decodeProductLookup = (value: string): string => {
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return value.trim();
+  }
+};
+
+export const resolveProductBySlugOrId = (
+  products: Product[],
+  slugOrId: string,
+): Product | undefined => {
+  const lookup = decodeProductLookup(slugOrId);
+  const exactIdMatch = products.find((product) => product.id === lookup);
+  if (exactIdMatch) return exactIdMatch;
+
+  const slugMatches = products.filter((product) => product.slug === lookup);
+  if (slugMatches.length <= 1) return slugMatches[0];
+
+  const sharedGroupId = getProductGroupId(slugMatches[0]);
+  const isSharedVariantGroup =
+    Boolean(sharedGroupId) &&
+    slugMatches.every((product) => getProductGroupId(product) === sharedGroupId);
+
+  if (isSharedVariantGroup) return selectCanonicalProductVariant(slugMatches);
+  return [...slugMatches].sort((left, right) =>
+    left.id.localeCompare(right.id, "en", { sensitivity: "variant", numeric: true }),
+  )[0];
+};
 
 export const attachProductVariants = (product: Product, allProducts: Product[]): Product => {
   const groupId = getProductGroupId(product);
@@ -127,8 +169,8 @@ export const groupProductsForDisplay = (products: Product[]): Product[] => {
   const displayGroups = new Map<string, Product>();
   grouped.forEach((variants, groupId) => {
     const sortedVariants = sortProductVariants(variants);
-    const firstAvailableVariant = sortedVariants.find(isVariantPurchasable);
-    const baseVariant = firstAvailableVariant ?? sortedVariants[0];
+    const baseVariant = selectCanonicalProductVariant(sortedVariants);
+    if (!baseVariant) return;
     const prices = sortedVariants
       .map((variant) => variant.price)
       .filter((price): price is number => typeof price === "number" && Number.isFinite(price));
