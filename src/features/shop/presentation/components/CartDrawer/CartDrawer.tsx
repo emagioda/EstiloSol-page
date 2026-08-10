@@ -210,7 +210,7 @@ export default function CartDrawer({
                   )}
                   <div className="mt-2 flex items-center gap-2">
                     <button
-                      onClick={() => updateQty(it.lineId, it.qty - 1)}
+                      onClick={() => updateQty(it.lineId, Math.max(1, it.qty - 1))}
                       className="px-2 transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
                       aria-label={`Reducir cantidad de ${it.name}`}
                     >

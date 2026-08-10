@@ -100,4 +100,16 @@ describe("CartDrawer line identity", () => {
     fireEvent.click(screen.getAllByRole("button", { name: /Reducir cantidad/ })[0]);
     expect(screen.getAllByRole("button", { name: /Aumentar cantidad/ })[1]).toBeEnabled();
   });
+
+  it("PR3-DRAWER-07 reducing qty1 keeps the line while Eliminar still removes it", async () => {
+    await renderDrawer(productLine({ qty: 1 }));
+    fireEvent.click(screen.getByText("Add test line"));
+
+    fireEvent.click(screen.getByRole("button", { name: /Reducir cantidad/ }));
+    expect(screen.getByText("Producto repetido")).toBeInTheDocument();
+    expect(screen.getByText("1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Eliminar"));
+    expect(screen.queryByText("Producto repetido")).not.toBeInTheDocument();
+  });
 });
