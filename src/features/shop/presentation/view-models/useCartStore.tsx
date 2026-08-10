@@ -236,6 +236,31 @@ export const CartProvider = ({ children }: { children: React.ReactNode }) => {
       }
 
       const addedQty = Math.min(safeQty, availableQty);
+      const existingLine = currentItems.find((candidate) => candidate.productId === productId);
+      if (existingLine) {
+        const finalQty = currentQty + addedQty;
+        commitItems(
+          currentItems
+            .filter(
+              (candidate) =>
+                candidate.productId !== productId || candidate.lineId === existingLine.lineId,
+            )
+            .map((candidate) =>
+              candidate.lineId === existingLine.lineId
+                ? { ...candidate, ...normalizedItem, lineId: existingLine.lineId, qty: finalQty }
+                : candidate,
+            ),
+        );
+
+        return {
+          ok: true,
+          addedQty,
+          finalQty,
+          maxQty,
+          reason: addedQty < safeQty ? "max_stock_reached" : undefined,
+        };
+      }
+
       const lineId = createUniqueCartLineId(
         new Set(currentItems.map((candidate) => candidate.lineId)),
       );

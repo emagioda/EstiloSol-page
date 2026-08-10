@@ -88,7 +88,7 @@ describe("checkout demand payload", () => {
     },
   ];
 
-  it("PR3-CHECKOUT-05 preserves total demand per productId", () => {
+  it("PR3-CHECKOUT-05 defensively aggregates manipulated or legacy lines by productId", () => {
     expect(buildCheckoutDemandItems(lines)).toEqual([
       { productId: "P1", qty: 3, name: "Producto 1", unitPrice: 1000 },
     ]);

@@ -20,7 +20,7 @@ const AddLine = ({ item }: { item: CartItemInput }) => {
   const { addItem } = useCart();
   return (
     <button type="button" onClick={() => addItem(item)}>
-      Add test line
+      {`Add ${item.productId}`}
     </button>
   );
 };
@@ -35,10 +35,12 @@ const productLine = (overrides: Partial<CartItemInput> = {}): CartItemInput => (
   ...overrides,
 });
 
-const renderDrawer = async (item = productLine()) => {
+const renderDrawer = async (items: CartItemInput[] = [productLine()]) => {
   const rendered = render(
     <CartProvider>
-      <AddLine item={item} />
+      {items.map((item) => (
+        <AddLine key={item.productId} item={item} />
+      ))}
       <CartDrawer open onClose={vi.fn()} />
     </CartProvider>,
   );
@@ -51,59 +53,63 @@ const renderDrawer = async (item = productLine()) => {
 describe("CartDrawer line identity", () => {
   beforeEach(() => localStorage.clear());
 
-  it("PR3-DRAWER-01 renders both lines with the same productId", async () => {
+  it("PR3-DRAWER-01 renders one row after repeated adds of the same product", async () => {
     await renderDrawer();
-    fireEvent.click(screen.getByText("Add test line"));
-    fireEvent.click(screen.getByText("Add test line"));
-    expect(screen.getAllByText("Producto repetido")).toHaveLength(2);
+    fireEvent.click(screen.getByText("Add P1"));
+    fireEvent.click(screen.getByText("Add P1"));
+    expect(screen.getAllByText("Producto repetido")).toHaveLength(1);
   });
 
-  it("PR3-DRAWER-02 does not emit a React key collision for duplicate products", async () => {
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  it("PR3-DRAWER-02 shows the total qty added to the unique product row", async () => {
     await renderDrawer();
-    fireEvent.click(screen.getByText("Add test line"));
-    fireEvent.click(screen.getByText("Add test line"));
+    fireEvent.click(screen.getByText("Add P1"));
+    fireEvent.click(screen.getByText("Add P1"));
+    expect(screen.getByText("2")).toBeInTheDocument();
+  });
+
+  it("PR3-DRAWER-03 renders distinct variants as distinct rows without key collisions", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await renderDrawer([productLine(), productLine({ productId: "P2" })]);
+    fireEvent.click(screen.getByText("Add P1"));
+    fireEvent.click(screen.getByText("Add P2"));
+    expect(screen.getAllByText("Producto repetido")).toHaveLength(2);
     expect(consoleError.mock.calls.flat().join(" ")).not.toMatch(/same key|unique.*key/i);
     consoleError.mockRestore();
   });
 
-  it("PR3-DRAWER-03 deleting the first line leaves the second one", async () => {
-    await renderDrawer();
-    fireEvent.click(screen.getByText("Add test line"));
-    fireEvent.click(screen.getByText("Add test line"));
+  it("PR3-DRAWER-04 deleting one variant leaves the other one", async () => {
+    await renderDrawer([
+      productLine({ name: "Variante P1" }),
+      productLine({ productId: "P2", name: "Variante P2" }),
+    ]);
+    fireEvent.click(screen.getByText("Add P1"));
+    fireEvent.click(screen.getByText("Add P2"));
     fireEvent.click(screen.getAllByText("Eliminar")[0]);
-    expect(screen.getAllByText("Producto repetido")).toHaveLength(1);
+    expect(screen.queryByText("Variante P1")).not.toBeInTheDocument();
+    expect(screen.getByText("Variante P2")).toBeInTheDocument();
   });
 
-  it("PR3-DRAWER-04 incrementing the first line changes only that line", async () => {
-    await renderDrawer();
-    fireEvent.click(screen.getByText("Add test line"));
-    fireEvent.click(screen.getByText("Add test line"));
+  it("PR3-DRAWER-05 incrementing one variant changes only that line", async () => {
+    await renderDrawer([productLine(), productLine({ productId: "P2" })]);
+    fireEvent.click(screen.getByText("Add P1"));
+    fireEvent.click(screen.getByText("Add P2"));
     fireEvent.click(screen.getAllByRole("button", { name: /Aumentar cantidad/ })[0]);
     expect(screen.getAllByText("2")).toHaveLength(1);
     expect(screen.getAllByText("1")).toHaveLength(1);
   });
 
-  it("PR3-DRAWER-05 disables increment when aggregate stock is full", async () => {
-    await renderDrawer(productLine({ qty: 2, stockQty: 4 }));
-    fireEvent.click(screen.getByText("Add test line"));
-    fireEvent.click(screen.getByText("Add test line"));
-    screen.getAllByRole("button", { name: /No hay m.s stock disponible/ }).forEach((button) => {
-      expect(button).toBeDisabled();
-    });
-  });
-
-  it("PR3-DRAWER-06 reducing one line releases capacity for the other", async () => {
-    await renderDrawer(productLine({ qty: 2, stockQty: 4 }));
-    fireEvent.click(screen.getByText("Add test line"));
-    fireEvent.click(screen.getByText("Add test line"));
-    fireEvent.click(screen.getAllByRole("button", { name: /Reducir cantidad/ })[0]);
-    expect(screen.getAllByRole("button", { name: /Aumentar cantidad/ })[1]).toBeEnabled();
+  it("PR3-DRAWER-06 reducing from full stock releases capacity on the same line", async () => {
+    await renderDrawer([productLine({ qty: 2, stockQty: 4 })]);
+    fireEvent.click(screen.getByText("Add P1"));
+    fireEvent.click(screen.getByText("Add P1"));
+    expect(screen.getByRole("button", { name: /No hay m.s stock disponible/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /Reducir cantidad/ }));
+    expect(screen.getByRole("button", { name: /Aumentar cantidad/ })).toBeEnabled();
   });
 
   it("PR3-DRAWER-07 reducing qty1 keeps the line while Eliminar still removes it", async () => {
-    await renderDrawer(productLine({ qty: 1 }));
-    fireEvent.click(screen.getByText("Add test line"));
+    await renderDrawer([productLine({ qty: 1 })]);
+    fireEvent.click(screen.getByText("Add P1"));
 
     fireEvent.click(screen.getByRole("button", { name: /Reducir cantidad/ }));
     expect(screen.getByText("Producto repetido")).toBeInTheDocument();

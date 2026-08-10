@@ -147,31 +147,57 @@ export const canIncreaseCartLine = (items: ReadonlyArray<CartItem>, lineId: stri
 
 export const sanitizeStoredCartItems = (value: unknown): CartItem[] => {
   if (!Array.isArray(value)) return [];
-  const usedLineIds = new Set<string>();
+  const itemsByProductId = new Map<
+    string,
+    {
+      item: Omit<CartItem, "lineId" | "qty">;
+      qty: number;
+      storedLineIds: string[];
+    }
+  >();
 
-  return value
-    .filter(
-      (candidate): candidate is Record<string, unknown> =>
-        Boolean(candidate) && typeof candidate === "object" && typeof candidate.productId === "string",
-    )
-    .map((item) => {
-      const storedLineId = typeof item.lineId === "string" ? item.lineId.trim() : "";
-      const lineId =
-        storedLineId && !usedLineIds.has(storedLineId)
-          ? storedLineId
-          : createUniqueCartLineId(usedLineIds);
-      usedLineIds.add(lineId);
+  value.forEach((candidate) => {
+    if (!candidate || typeof candidate !== "object") return;
 
-      return {
-        lineId,
-        productId: String(item.productId),
+    const item = candidate as Record<string, unknown>;
+    const productId = typeof item.productId === "string" ? item.productId.trim() : "";
+    const qty = normalizeCartQty(item.qty);
+    if (!productId || qty <= 0) return;
+
+    const storedLineId = typeof item.lineId === "string" ? item.lineId.trim() : "";
+    const existing = itemsByProductId.get(productId);
+    if (existing) {
+      existing.qty = Math.min(MAX_CART_QUANTITY_PER_PRODUCT, existing.qty + qty);
+      if (storedLineId) existing.storedLineIds.push(storedLineId);
+      return;
+    }
+
+    itemsByProductId.set(productId, {
+      item: {
+        productId,
         name: item.name ? String(item.name) : "",
         unitPrice: normalizeStoredUnitPrice(item),
-        qty: normalizeCartQty(item.qty),
         image: item.image ? String(item.image) : undefined,
         stockStatus: normalizeCartStockStatus(item.stockStatus ?? item.stock_status),
         stockQty: normalizeCartStockQty(item.stockQty ?? item.stock_qty) ?? null,
-      } satisfies CartItem;
-    })
-    .filter((item) => item.qty > 0);
+      },
+      qty,
+      storedLineIds: storedLineId ? [storedLineId] : [],
+    });
+  });
+
+  const usedLineIds = new Set<string>();
+
+  return Array.from(itemsByProductId.values()).map(({ item, qty, storedLineIds }) => {
+    const lineId =
+      storedLineIds.find((storedLineId) => !usedLineIds.has(storedLineId)) ??
+      createUniqueCartLineId(usedLineIds);
+    usedLineIds.add(lineId);
+
+    return {
+      ...item,
+      lineId,
+      qty,
+    } satisfies CartItem;
+  });
 };

@@ -3,12 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import OrderSummaryDesktop from "./OrderSummaryDesktop";
 
 describe("OrderSummaryDesktop", () => {
-  it("PR3-CHECKOUT-01 shows duplicate product lines separately", () => {
+  it("PR3-CHECKOUT-01 shows one normal product line with its consolidated qty", () => {
     render(
       <OrderSummaryDesktop
         items={[
-          { lineId: "line-a", productId: "p1", name: "Linea repetida", unitPrice: 100, qty: 1 },
-          { lineId: "line-b", productId: "p1", name: "Linea repetida", unitPrice: 100, qty: 2 },
+          { lineId: "line-a", productId: "p1", name: "Linea consolidada", unitPrice: 100, qty: 3 },
         ]}
         subtotal={300}
         discountAmount={0}
@@ -18,18 +17,17 @@ describe("OrderSummaryDesktop", () => {
         deliveryMethod="pickup"
       />,
     );
-    expect(screen.getAllByText("Linea repetida")).toHaveLength(2);
-    expect(screen.getByText("Cantidad: 1")).toBeInTheDocument();
-    expect(screen.getByText("Cantidad: 2")).toBeInTheDocument();
+    expect(screen.getAllByText("Linea consolidada")).toHaveLength(1);
+    expect(screen.getByText("Cantidad: 3")).toBeInTheDocument();
   });
 
-  it("PR3-CHECKOUT-02 uses line identity without React key collisions", () => {
+  it("PR3-CHECKOUT-02 uses distinct variant lineIds without React key collisions", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     render(
       <OrderSummaryDesktop
         items={[
-          { lineId: "line-a", productId: "p1", name: "Linea repetida", unitPrice: 100, qty: 1 },
-          { lineId: "line-b", productId: "p1", name: "Linea repetida", unitPrice: 100, qty: 1 },
+          { lineId: "line-a", productId: "p1", name: "Variante dorada", unitPrice: 100, qty: 1 },
+          { lineId: "line-b", productId: "p2", name: "Variante plateada", unitPrice: 100, qty: 1 },
         ]}
         subtotal={200}
         discountAmount={0}

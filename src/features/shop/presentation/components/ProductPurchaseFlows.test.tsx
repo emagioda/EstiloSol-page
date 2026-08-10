@@ -149,18 +149,18 @@ describe("ProductDetail aggregate cart demand", () => {
     expect(screen.getByRole("button", { name: /máximo disponible/i })).toBeDisabled();
   });
 
-  it("PR3-PDP-03 add creates a new independent line", async () => {
+  it("PR3-PDP-03 adding the active product increments its existing line", async () => {
     await renderProductFlow(<ProductDetail product={product()} />, [storedLine("a", 1)]);
     fireEvent.click(screen.getByRole("button", { name: /Comprar ahora/ }));
-    expect(readCart()).toHaveLength(2);
-    expect(new Set(readCart().map((item) => item.lineId)).size).toBe(2);
+    expect(readCart()).toEqual([expect.objectContaining({ lineId: "a", productId: "P1", qty: 2 })]);
   });
 
-  it("PR3-PDP-04 selected variant adds its real productId", async () => {
-    await renderProductFlow(<ProductDetail product={groupedProduct} />);
+  it("PR3-PDP-04 selected variant adds its real productId in a distinct line", async () => {
+    await renderProductFlow(<ProductDetail product={groupedProduct} />, [storedLine("a", 1)]);
     fireEvent.click(screen.getByText("select-P2"));
     fireEvent.click(screen.getByRole("button", { name: /Comprar ahora/ }));
-    expect(readCart()[0].productId).toBe("P2");
+    expect(readCart().map((item) => item.productId)).toEqual(["P1", "P2"]);
+    expect(readCart()[0].lineId).not.toBe(readCart()[1].lineId);
   });
 
   it("PR3-PDP-05 selected variant changes price, stock, image and purchase identity", async () => {
@@ -199,17 +199,17 @@ describe("QuickView aggregate cart demand", () => {
     expect(screen.getByRole("button", { name: /carrito/i })).toBeDisabled();
   });
 
-  it("PR3-QV-03 add creates a new independent line", async () => {
+  it("PR3-QV-03 adding the active product increments its existing line", async () => {
     await renderProductFlow(quickView(product()), [storedLine("a", 1)]);
     fireEvent.click(screen.getByRole("button", { name: "Comprar" }));
-    expect(readCart()).toHaveLength(2);
-    expect(new Set(readCart().map((item) => item.lineId)).size).toBe(2);
+    expect(readCart()).toEqual([expect.objectContaining({ lineId: "a", productId: "P1", qty: 2 })]);
   });
 
-  it("PR3-QV-04 selected variant adds the correct productId", async () => {
-    await renderProductFlow(quickView(groupedProduct));
+  it("PR3-QV-04 selected variant adds the correct productId in its own line", async () => {
+    await renderProductFlow(quickView(groupedProduct), [storedLine("a", 1)]);
     fireEvent.click(screen.getByText("select-P2"));
     fireEvent.click(screen.getByRole("button", { name: "Comprar" }));
-    expect(readCart()[0].productId).toBe("P2");
+    expect(readCart().map((item) => item.productId)).toEqual(["P1", "P2"]);
+    expect(readCart()[0].lineId).not.toBe(readCart()[1].lineId);
   });
 });
