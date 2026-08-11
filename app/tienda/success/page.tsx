@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { brandConfig } from "@/src/config/brand";
 import { useCart } from "@/src/features/shop/presentation/view-models/useCartStore";
+import { clearBrowserCheckoutAttemptForOrder } from "@/src/features/shop/presentation/lib/checkoutAttempt";
 
 type PaymentData = {
   approved?: boolean;
@@ -222,6 +223,7 @@ export default function SuccessPage() {
 
           if (data?.approved) {
             clearRef.current();
+            clearBrowserCheckoutAttemptForOrder(ref);
             if (typeof window !== "undefined") {
               localStorage.removeItem("es_sol_checkout_draft");
             }
@@ -263,6 +265,7 @@ export default function SuccessPage() {
 
       if (isManualCheckout) {
         clearRef.current();
+        clearBrowserCheckoutAttemptForOrder(ref);
         if (typeof window !== "undefined") {
           localStorage.removeItem("es_sol_checkout_draft");
         }

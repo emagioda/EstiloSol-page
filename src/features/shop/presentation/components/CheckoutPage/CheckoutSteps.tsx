@@ -14,6 +14,11 @@ import type { PaymentMethod } from "../../view-models/useCartStore";
 import { useCart } from "../../view-models/useCartStore";
 import { refreshProductsMemoryCacheFromSource } from "../../view-models/useProductsStore";
 import {
+  bindCheckoutAttemptExternalReference,
+  clearBrowserCheckoutAttempt,
+  submitCheckoutAttempt,
+} from "../../lib/checkoutAttempt";
+import {
   buildCheckoutDemandItems,
   deliveryMethodLabel,
   formatMoney,
@@ -135,16 +140,6 @@ const isDeliveryAddressValid = (address: DeliveryAddress) =>
   address.number.trim().length > 0 &&
   address.betweenStreets.trim().length > 0 &&
   address.insideZoneConfirmed;
-
-const createCheckoutAttemptId = () => {
-  const cryptoRef = typeof window !== "undefined" ? window.crypto : undefined;
-  const randomValue =
-    cryptoRef && typeof cryptoRef.randomUUID === "function"
-      ? cryptoRef.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-  return `ca_${randomValue}`.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 120);
-};
 
 const parseInvalidProducts = (items: CheckoutApiError["invalidProducts"]) =>
   Array.isArray(items) && items.length > 0
@@ -380,7 +375,6 @@ export default function CheckoutSteps({
   const [isDraftHydrated, setIsDraftHydrated] = useState(false);
   const prevItemsCountRef = useRef(items.length);
   const checkoutPhaseTimerRef = useRef<number | null>(null);
-  const checkoutAttemptIdRef = useRef<string | null>(null);
   const isTestPublicKey = (process.env.NEXT_PUBLIC_MP_PUBLIC_KEY || "").toUpperCase().startsWith("TEST-");
 
   const fullName = useMemo(() => `${firstName} ${lastName}`.replace(/\s+/g, " ").trim(), [firstName, lastName]);
@@ -617,13 +611,6 @@ export default function CheckoutSteps({
     setCheckoutPhase("redirecting");
   };
 
-  const getCheckoutAttemptId = () => {
-    if (!checkoutAttemptIdRef.current) {
-      checkoutAttemptIdRef.current = createCheckoutAttemptId();
-    }
-    return checkoutAttemptIdRef.current;
-  };
-
   const checkoutItemsPayload = () => buildCheckoutDemandItems(items);
 
   const checkoutFulfillmentPayload = () => ({
@@ -747,34 +734,28 @@ export default function CheckoutSteps({
     try {
       setCheckoutPhase("creating");
 
-      const response = await fetch("/api/mp/create-preference", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const requestPayload = {
+        items: checkoutItemsPayload(),
+        paymentMethod,
+        deliveryMethod,
+        fulfillment: checkoutFulfillmentPayload(),
+        payer: {
+          name: fullName,
+          phone: normalizePhoneDigits(whatsapp),
+          email: email.trim(),
         },
-        body: JSON.stringify({
-          items: checkoutItemsPayload(),
-          paymentMethod,
-          deliveryMethod,
-          fulfillment: checkoutFulfillmentPayload(),
-          checkoutAttemptId: getCheckoutAttemptId(),
-          payer: {
-            name: fullName,
-            phone: normalizePhoneDigits(whatsapp),
-            email: email.trim(),
-          },
-          notes: buildApiNotes(notes.trim()),
-        }),
-      });
-
-      const data = (await response.json().catch(() => null)) as
+        notes: buildApiNotes(notes.trim()),
+      };
+      const { response, data, attempt } = await submitCheckoutAttempt<
         | {
             initPoint?: string;
             sandboxInitPoint?: string;
+            externalReference?: string;
             error?: string;
+            code?: string;
             invalidProducts?: CheckoutApiError["invalidProducts"];
           }
-        | null;
+        >("/api/mp/create-preference", requestPayload);
 
       const checkoutUrl = isTestPublicKey
         ? data?.sandboxInitPoint || data?.initPoint
@@ -791,6 +772,10 @@ export default function CheckoutSteps({
           invalidProducts,
         });
         return;
+      }
+
+      if (typeof data?.externalReference === "string") {
+        bindCheckoutAttemptExternalReference(attempt.attemptId, data.externalReference);
       }
 
       finishCheckoutProgress();
@@ -823,33 +808,27 @@ export default function CheckoutSteps({
       }
       setCheckoutPhase("creating");
 
-      const response = await fetch("/api/orders/create", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const requestPayload = {
+        items: checkoutItemsPayload(),
+        paymentMethod,
+        deliveryMethod,
+        fulfillment: checkoutFulfillmentPayload(),
+        payer: {
+          name: fullName,
+          phone: normalizePhoneDigits(whatsapp),
+          email: email.trim(),
         },
-        body: JSON.stringify({
-          items: checkoutItemsPayload(),
-          paymentMethod,
-          deliveryMethod,
-          fulfillment: checkoutFulfillmentPayload(),
-          payer: {
-            name: fullName,
-            phone: normalizePhoneDigits(whatsapp),
-            email: email.trim(),
-          },
-          notes: buildApiNotes(notes.trim()),
-        }),
-      });
-
-      const data = (await response.json().catch(() => null)) as
+        notes: buildApiNotes(notes.trim()),
+      };
+      const { response, data, attempt } = await submitCheckoutAttempt<
         | {
             externalReference?: string;
             summaryToken?: string;
             error?: string;
+            code?: string;
             invalidProducts?: Array<{ productId?: string; name?: string }>;
           }
-        | null;
+        >("/api/orders/create", requestPayload);
 
       if (!response.ok) {
         const invalidProducts = parseInvalidProducts(data?.invalidProducts);
@@ -880,6 +859,7 @@ export default function CheckoutSteps({
         successParams.set("summaryToken", summaryToken);
       }
 
+      clearBrowserCheckoutAttempt(attempt.attemptId);
       finishCheckoutProgress();
       window.location.assign(`/tienda/success?${successParams.toString()}`);
     } catch {

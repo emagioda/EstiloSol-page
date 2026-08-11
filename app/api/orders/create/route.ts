@@ -1,14 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAuthoritativeProductsCatalog } from "@/src/server/catalog/getProducts";
 import { getActivePickupPointById } from "@/src/config/fulfillment";
+import { getAuthoritativeProductsCatalog } from "@/src/server/catalog/getProducts";
+import { invalidProductsMessage, validateAuthoritativeInventory } from "@/src/server/catalog/stock";
+import {
+  CHECKOUT_ATTEMPT_CONFLICT,
+  CHECKOUT_ATTEMPT_IN_PROGRESS,
+  CHECKOUT_ATTEMPT_REQUIRED,
+  CheckoutAttemptConflictError,
+  assertCheckoutAttemptLeaseOwner,
+  beginCheckoutAttempt,
+  buildCheckoutAttemptFingerprint,
+  completeCheckoutAttempt,
+  prepareCheckoutAttempt,
+  releaseCheckoutAttemptLease,
+  restoreCheckoutOrder,
+  type CheckoutAttemptRecord,
+  type ManualCheckoutResult,
+} from "@/src/server/checkout/attempts";
 import { getFulfillmentConfig } from "@/src/server/fulfillment/source";
 import { scheduleAfterResponse } from "@/src/server/http/afterResponse";
 import { logEvent } from "@/src/server/observability/log";
-import { trackBusinessEvent } from "@/src/server/observability/metrics";
+import {
+  trackBusinessEvent,
+  type BusinessMetricName,
+} from "@/src/server/observability/metrics";
 import { sendOrderReceivedEmail } from "@/src/server/notifications/orderReceived";
 import { buildOrderFromCheckout } from "@/src/server/orders/createFromCheckout";
-import { createOrder } from "@/src/server/orders/store";
-import { invalidProductsMessage, validateAuthoritativeInventory } from "@/src/server/catalog/stock";
+import { createOrder, getOrder } from "@/src/server/orders/store";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { parseCheckoutBody } from "@/src/server/validation/payments";
 
@@ -16,23 +34,62 @@ export const runtime = "nodejs";
 
 const RATE_LIMIT_MAX = 30;
 
-export async function POST(request: NextRequest) {
-  await trackBusinessEvent("checkout.order_create.requested", { route: "orders-create" });
+const safeMetric = async (event: BusinessMetricName, properties: Record<string, unknown>) => {
+  try {
+    await trackBusinessEvent(event, properties);
+  } catch (error) {
+    logEvent("warn", "checkout.order_create.metric_failed", {
+      metricName: event,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+  }
+};
 
+const attemptErrorResponse = (error: unknown) => {
+  if (error instanceof CheckoutAttemptConflictError) {
+    return NextResponse.json(
+      {
+        error: "Este intento de checkout corresponde a otra compra. Volve a intentarlo.",
+        code: CHECKOUT_ATTEMPT_CONFLICT,
+      },
+      { status: 409 }
+    );
+  }
+  logEvent("error", "checkout.attempt.unavailable", {
+    route: "orders-create",
+    errorName: error instanceof Error ? error.name : "unknown",
+  });
+  return NextResponse.json(
+    { error: "No pudimos iniciar la operacion de forma segura. Intenta nuevamente." },
+    { status: 503 }
+  );
+};
+
+const replayManualResult = (attempt: CheckoutAttemptRecord) => {
+  if (attempt.result?.kind !== "manual") {
+    return NextResponse.json({ error: "El intento de checkout no es compatible." }, { status: 409 });
+  }
+  return NextResponse.json(attempt.result.response, { status: 200 });
+};
+
+export async function POST(request: NextRequest) {
   const allowed = await checkRateLimit(request, {
     keyPrefix: "es:rl:orderscreate",
     max: RATE_LIMIT_MAX,
     windowSeconds: 60,
   });
   if (!allowed) {
-    await trackBusinessEvent("checkout.order_create.rate_limited", { route: "orders-create" });
-    return NextResponse.json({ error: "Demasiadas solicitudes. Intenta nuevamente en un minuto." }, { status: 429 });
+    await safeMetric("checkout.order_create.rate_limited", { route: "orders-create" });
+    return NextResponse.json(
+      { error: "Demasiadas solicitudes. Intenta nuevamente en un minuto." },
+      { status: 429 }
+    );
   }
 
   const rawBody = await request.json().catch(() => null);
   const parsedBody = parseCheckoutBody(rawBody, { requirePayer: true, requireFulfillment: true });
   if (!parsedBody.ok) {
-    await trackBusinessEvent("checkout.order_create.invalid_input", { route: "orders-create" });
+    await safeMetric("checkout.order_create.invalid_input", { route: "orders-create" });
     return NextResponse.json(
       {
         error: parsedBody.message,
@@ -40,138 +97,179 @@ export async function POST(request: NextRequest) {
         ...(parsedBody.itemIndex !== undefined ? { itemIndex: parsedBody.itemIndex } : {}),
         ...(parsedBody.productId ? { productId: parsedBody.productId } : {}),
       },
-      { status: 400 },
+      { status: 400 }
     );
   }
 
-  const {
-    items,
-    paymentMethod,
-    deliveryMethod,
-    fulfillment,
-    payerName: customerName,
-    payerPhone: customerPhone,
-    payerEmail: customerEmail,
-    notes,
-  } = parsedBody.value;
-
-  if (paymentMethod !== "cash" && paymentMethod !== "transfer") {
+  const body = parsedBody.value;
+  if (!body.checkoutAttemptId) {
+    return NextResponse.json(
+      {
+        error: "Actualiza la pagina para iniciar el checkout de forma segura.",
+        code: CHECKOUT_ATTEMPT_REQUIRED,
+      },
+      { status: 400 }
+    );
+  }
+  if (body.paymentMethod !== "cash" && body.paymentMethod !== "transfer") {
     return NextResponse.json(
       { error: "Este endpoint solo permite pedidos con pago en efectivo o transferencia." },
       { status: 400 }
     );
   }
-
-  if (!deliveryMethod) {
+  if (!body.deliveryMethod) {
     return NextResponse.json({ error: "Metodo de entrega invalido" }, { status: 400 });
   }
 
-  const fulfillmentConfig = await getFulfillmentConfig();
-  if (
-    deliveryMethod === "pickup" &&
-    !getActivePickupPointById(fulfillmentConfig, fulfillment.pickupPointId || "")
-  ) {
-    return NextResponse.json({ error: "Punto de encuentro inválido." }, { status: 400 });
+  const fingerprint = buildCheckoutAttemptFingerprint(body);
+  let beginning;
+  try {
+    beginning = await beginCheckoutAttempt(body.checkoutAttemptId, fingerprint);
+  } catch (error) {
+    return attemptErrorResponse(error);
   }
 
-  const catalog = await getAuthoritativeProductsCatalog().catch((error) => {
-    logEvent("error", "orders.catalog_fetch_error", {
-      route: "orders-create",
-      message: error instanceof Error ? error.message : "unknown",
-    });
-    return null;
-  });
-
-  if (!catalog) {
-    await trackBusinessEvent("checkout.order_create.catalog_unavailable", { route: "orders-create" });
-    return NextResponse.json({ error: "No se pudo validar el catalogo de productos" }, { status: 503 });
-  }
-
-  const inventory = validateAuthoritativeInventory(catalog, items);
-  if (!inventory.ok) {
-    const primaryError = inventory.errors[0];
-    await trackBusinessEvent("checkout.order_create.invalid_product", {
-      route: "orders-create",
-      invalidCount: inventory.errors.length,
-      errorCodes: inventory.errors.map((item) => item.code),
-      productIds: inventory.errors.map((item) => item.productId),
-    });
-
+  if (beginning.outcome === "replay") return replayManualResult(beginning.attempt);
+  if (beginning.outcome === "in_progress") {
     return NextResponse.json(
       {
-        error: invalidProductsMessage(inventory.errors),
-        code: primaryError.code,
-        invalidProducts: inventory.errors,
+        error: "Tu pedido todavia se esta registrando.",
+        code: CHECKOUT_ATTEMPT_IN_PROGRESS,
       },
-      { status: 400 },
+      { status: 409 }
     );
   }
 
-  const { order } = buildOrderFromCheckout({
-    items: inventory.items,
-    customerName,
-    customerPhone,
-    customerEmail,
-    notes,
-    paymentMethod,
-    deliveryMethod,
-    fulfillment,
-    fulfillmentConfig,
-    status: "pending",
-  });
-
-  if (!order) {
-    return NextResponse.json({ error: "No se pudo construir la orden con los datos de entrega." }, { status: 400 });
-  }
+  const { ownerToken } = beginning;
+  let attempt = beginning.attempt;
+  let sideEffectsStarted = false;
 
   try {
-    await createOrder(order);
-  } catch (error) {
-    logEvent("error", "orders.create_persist_failed", {
-      externalReference: order.externalReference,
-      route: "orders-create",
-      error,
-    });
-    return NextResponse.json({ error: "No pudimos registrar tu pedido. Intenta nuevamente." }, { status: 502 });
-  }
+    let order = restoreCheckoutOrder(attempt, body);
 
-  await trackBusinessEvent("checkout.order_create.created", {
-    externalReference: order.externalReference,
-    paymentMethod: order.paymentMethod,
-    total: order.total,
-  });
+    if (!order) {
+      const fulfillmentConfig = await getFulfillmentConfig();
+      if (
+        body.deliveryMethod === "pickup" &&
+        !getActivePickupPointById(fulfillmentConfig, body.fulfillment.pickupPointId || "")
+      ) {
+        return NextResponse.json({ error: "Punto de encuentro inválido." }, { status: 400 });
+      }
 
-  scheduleAfterResponse(async () => {
-    const emailResult = await sendOrderReceivedEmail({ order });
-    if (emailResult.sent) {
-      await trackBusinessEvent("checkout.order_received_email.sent", {
-        externalReference: order.externalReference,
-        paymentMethod: order.paymentMethod,
+      const catalog = await getAuthoritativeProductsCatalog().catch((error) => {
+        logEvent("error", "orders.catalog_fetch_error", {
+          route: "orders-create",
+          message: error instanceof Error ? error.message : "unknown",
+        });
+        return null;
       });
-    } else if (emailResult.reason !== "missing_customer_email") {
-      logEvent("warn", "orders.received_email_failed", {
-        externalReference: order.externalReference,
-        paymentMethod: order.paymentMethod,
-        reason: emailResult.reason,
-        detail: emailResult.detail,
+      if (!catalog) {
+        return NextResponse.json(
+          { error: "No se pudo validar el catalogo de productos" },
+          { status: 503 }
+        );
+      }
+
+      const inventory = validateAuthoritativeInventory(catalog, body.items);
+      if (!inventory.ok) {
+        const primaryError = inventory.errors[0];
+        return NextResponse.json(
+          {
+            error: invalidProductsMessage(inventory.errors),
+            code: primaryError.code,
+            invalidProducts: inventory.errors,
+          },
+          { status: 400 }
+        );
+      }
+
+      const built = buildOrderFromCheckout({
+        items: inventory.items,
+        customerName: body.payerName,
+        customerPhone: body.payerPhone,
+        customerEmail: body.payerEmail,
+        notes: body.notes,
+        paymentMethod: body.paymentMethod,
+        deliveryMethod: body.deliveryMethod,
+        fulfillment: body.fulfillment,
+        fulfillmentConfig,
+        status: "pending",
+        identity: {
+          externalReference: attempt.externalReference,
+          summaryToken: attempt.summaryToken,
+        },
       });
-      await trackBusinessEvent("checkout.order_received_email.failed", {
-        externalReference: order.externalReference,
-        paymentMethod: order.paymentMethod,
-        reason: emailResult.reason,
-      });
+      if (!built.order) {
+        return NextResponse.json(
+          { error: "No se pudo construir la orden con los datos de entrega." },
+          { status: 400 }
+        );
+      }
+      order = built.order;
+      attempt = await prepareCheckoutAttempt(attempt, order, ownerToken);
     }
-  });
 
-  return NextResponse.json(
-    {
+    await assertCheckoutAttemptLeaseOwner(attempt.checkoutAttemptId, ownerToken);
+    const persistedOrder = await getOrder(attempt.externalReference);
+    if (persistedOrder) {
+      order = persistedOrder;
+    } else {
+      sideEffectsStarted = true;
+      await createOrder(order);
+    }
+
+    const result: ManualCheckoutResult = {
+      kind: "manual",
+      response: {
+        externalReference: order.externalReference,
+        summaryToken: order.summaryToken,
+        total: order.total,
+        currency: order.currency,
+        paymentMethod: body.paymentMethod,
+        deliveryMethod: body.deliveryMethod,
+      },
+    };
+
+    attempt = await completeCheckoutAttempt(attempt, result, ownerToken);
+    await safeMetric("checkout.order_create.created", {
       externalReference: order.externalReference,
-      summaryToken: order.summaryToken,
-      total: order.total,
-      currency: order.currency,
       paymentMethod: order.paymentMethod,
-      deliveryMethod: order.deliveryMethod,
-    },
-    { status: 200 }
-  );
+      total: order.total,
+    });
+
+    scheduleAfterResponse(async () => {
+      const emailResult = await sendOrderReceivedEmail({ order });
+      if (!emailResult.sent && emailResult.reason !== "missing_customer_email") {
+        logEvent("warn", "orders.received_email_failed", {
+          externalReference: order.externalReference,
+          paymentMethod: order.paymentMethod,
+          reason: emailResult.reason,
+        });
+      }
+    });
+
+    return NextResponse.json(result.response, { status: 200 });
+  } catch (error) {
+    logEvent("error", "checkout.order_create.processing_failed", {
+      checkoutAttemptId: attempt.checkoutAttemptId,
+      externalReference: attempt.externalReference,
+      sideEffectsStarted,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    return NextResponse.json(
+      {
+        error: sideEffectsStarted
+          ? "No pudimos confirmar el resultado. Reintentaremos el mismo pedido."
+          : "No pudimos iniciar la operacion de forma segura. Intenta nuevamente.",
+      },
+      { status: sideEffectsStarted ? 502 : 503 }
+    );
+  } finally {
+    await releaseCheckoutAttemptLease(attempt.checkoutAttemptId, ownerToken).catch((error) => {
+      logEvent("warn", "checkout.attempt.lease_release_failed", {
+        checkoutAttemptId: attempt.checkoutAttemptId,
+        errorName: error instanceof Error ? error.name : "unknown",
+      });
+    });
+  }
 }
