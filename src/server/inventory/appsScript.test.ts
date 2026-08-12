@@ -43,9 +43,7 @@ const scriptSource = readFileSync(
 const scriptManifest = JSON.parse(readFileSync(
   resolve(process.cwd(), "scripts/apps-script/appsscript.json"),
   "utf8",
-)) as {
-  dependencies?: { enabledAdvancedServices?: Array<Record<string, unknown>> };
-};
+)) as Record<string, unknown>;
 
 const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => {
   const productHeaders = [
@@ -745,11 +743,24 @@ describe("Apps Script authoritative inventory planning", () => {
 });
 
 describe("AUD3 crash-safe inventory matrix", () => {
-  it("versions the Advanced Sheets Service required by the atomic primitive", () => {
-    expect(scriptManifest.dependencies?.enabledAdvancedServices).toContainEqual({
-      userSymbol: "Sheets",
-      serviceId: "sheets",
-      version: "v4",
+  it("preserves the production web app config while enabling the Advanced Sheets Service", () => {
+    expect(scriptManifest).toEqual({
+      timeZone: "America/Argentina/Buenos_Aires",
+      dependencies: {
+        enabledAdvancedServices: [
+          {
+            userSymbol: "Sheets",
+            serviceId: "sheets",
+            version: "v4",
+          },
+        ],
+      },
+      exceptionLogging: "STACKDRIVER",
+      runtimeVersion: "V8",
+      webapp: {
+        executeAs: "USER_DEPLOYING",
+        access: "ANYONE_ANONYMOUS",
+      },
     });
   });
 
