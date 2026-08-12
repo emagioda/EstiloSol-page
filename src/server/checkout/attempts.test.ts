@@ -4,12 +4,15 @@ import type { Order } from "@/src/server/orders/types";
 import type { ParsedCheckoutBody } from "@/src/server/validation/payments";
 import {
   CheckoutAttemptConflictError,
+  CHECKOUT_ATTEMPT_ALIAS_TTL_SECONDS,
   CHECKOUT_ATTEMPT_COORDINATION_TTL_SECONDS,
+  CHECKOUT_ATTEMPT_TTL_SECONDS,
   acquireCheckoutAttemptLease,
   beginCheckoutAttempt,
   buildCheckoutAttemptFingerprint,
   completeCheckoutAttempt,
   getCheckoutAttempt,
+  getCheckoutAttemptAlias,
   getOrCreateCheckoutAttempt,
   prepareCheckoutAttempt,
   releaseCheckoutAttemptLease,
@@ -248,6 +251,98 @@ describe("AUD3 checkout attempt claims", () => {
     if (second.outcome === "claimed") {
       await releaseCheckoutAttemptLease(second.attempt.checkoutAttemptId, second.ownerToken);
     }
+  });
+
+  it("P1 keeps a durable B-to-A alias after completion and a lost response", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-11T12:00:00Z"));
+    const fingerprint = buildCheckoutAttemptFingerprint(checkoutBody({ notes: "alias-replay" }));
+    const attemptA = attemptId("alias-a");
+    const attemptB = attemptId("alias-b");
+    const first = await beginCheckoutAttempt(attemptA, fingerprint);
+    expect(first).toMatchObject({ outcome: "claimed" });
+    if (first.outcome !== "claimed") throw new Error("Expected canonical attempt claim");
+
+    const secondPromise = beginCheckoutAttempt(attemptB, fingerprint);
+    await vi.advanceTimersByTimeAsync(1_501);
+    const second = await secondPromise;
+    expect(second).toMatchObject({
+      outcome: "in_progress",
+      attempt: { checkoutAttemptId: attemptA },
+    });
+    await expect(getCheckoutAttemptAlias(attemptB)).resolves.toEqual({
+      canonicalCheckoutAttemptId: attemptA,
+      fingerprint,
+    });
+    expect(CHECKOUT_ATTEMPT_ALIAS_TTL_SECONDS).toBe(CHECKOUT_ATTEMPT_TTL_SECONDS);
+
+    const prepared = await prepareCheckoutAttempt(
+      first.attempt,
+      orderForAttempt(first.attempt),
+      first.ownerToken
+    );
+    const completed = await completeCheckoutAttempt(
+      prepared,
+      {
+        kind: "mercadopago",
+        response: {
+          checkoutAttemptId: attemptA,
+          id: "pref-alias-replay",
+          initPoint: "https://mp.example/alias-replay",
+          externalReference: prepared.externalReference,
+          summaryToken: prepared.summaryToken,
+        },
+      },
+      first.ownerToken
+    );
+    await releaseCheckoutAttemptLease(attemptA, first.ownerToken);
+
+    const retryWithoutClientRebind = await beginCheckoutAttempt(attemptB, fingerprint);
+    expect(retryWithoutClientRebind).toMatchObject({
+      outcome: "replay",
+      attempt: {
+        checkoutAttemptId: attemptA,
+        externalReference: completed.externalReference,
+        summaryToken: completed.summaryToken,
+      },
+    });
+    await expect(getCheckoutAttempt(attemptB)).resolves.toBeNull();
+
+    const attemptC = attemptId("alias-c");
+    const intentionalNextPurchase = await beginCheckoutAttempt(attemptC, fingerprint);
+    expect(intentionalNextPurchase).toMatchObject({
+      outcome: "claimed",
+      attempt: { checkoutAttemptId: attemptC },
+    });
+    expect(intentionalNextPurchase.attempt.externalReference).not.toBe(completed.externalReference);
+    await expect(getCheckoutAttemptAlias(attemptB)).resolves.toEqual({
+      canonicalCheckoutAttemptId: attemptA,
+      fingerprint,
+    });
+    if (intentionalNextPurchase.outcome === "claimed") {
+      await releaseCheckoutAttemptLease(attemptC, intentionalNextPurchase.ownerToken);
+    }
+  });
+
+  it("fails closed when an aliased requested attempt retries with another fingerprint", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-11T13:00:00Z"));
+    const fingerprint = buildCheckoutAttemptFingerprint(checkoutBody({ notes: "alias-conflict" }));
+    const mismatch = buildCheckoutAttemptFingerprint(checkoutBody({ notes: "alias-mismatch" }));
+    const attemptA = attemptId("alias-conflict-a");
+    const attemptB = attemptId("alias-conflict-b");
+    const first = await beginCheckoutAttempt(attemptA, fingerprint);
+    expect(first).toMatchObject({ outcome: "claimed" });
+    if (first.outcome !== "claimed") throw new Error("Expected canonical attempt claim");
+
+    const secondPromise = beginCheckoutAttempt(attemptB, fingerprint);
+    await vi.advanceTimersByTimeAsync(1_501);
+    await expect(secondPromise).resolves.toMatchObject({ outcome: "in_progress" });
+    await expect(beginCheckoutAttempt(attemptB, mismatch)).rejects.toBeInstanceOf(
+      CheckoutAttemptConflictError
+    );
+    await expect(getCheckoutAttempt(attemptB)).resolves.toBeNull();
+    await releaseCheckoutAttemptLease(attemptA, first.ownerToken);
   });
 
   it("bounds abandoned cross-tab coordination to its short TTL", async () => {

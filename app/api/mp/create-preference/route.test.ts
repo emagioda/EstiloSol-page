@@ -529,18 +529,29 @@ describe("create-preference local development flow", () => {
     releasePreference();
 
     const [left, right] = await Promise.all([leftPromise, rightPromise]);
-    const [leftBody, rightBody] = (await Promise.all([left.json(), right.json()])) as Array<{
+    const leftBody = (await left.json()) as {
       checkoutAttemptId?: string;
       externalReference?: string;
       summaryToken?: string;
-    }>;
+      id?: string;
+    };
+    // Simulate the tab-B HTTP response being lost before client-side rebind.
+    expect(right.status).toBe(200);
+    const retry = await POST(createRequest({ ...sharedPayload, checkoutAttemptId: attemptB }));
+    const retryBody = (await retry.json()) as {
+      checkoutAttemptId?: string;
+      externalReference?: string;
+      summaryToken?: string;
+      id?: string;
+    };
 
     expect(left.status).toBe(200);
-    expect(right.status).toBe(200);
+    expect(retry.status).toBe(200);
     expect(leftBody.checkoutAttemptId).toBe(attemptA);
-    expect(rightBody.checkoutAttemptId).toBe(attemptA);
-    expect(rightBody.externalReference).toBe(leftBody.externalReference);
-    expect(rightBody.summaryToken).toBe(leftBody.summaryToken);
+    expect(retryBody.checkoutAttemptId).toBe(attemptA);
+    expect(retryBody.externalReference).toBe(leftBody.externalReference);
+    expect(retryBody.summaryToken).toBe(leftBody.summaryToken);
+    expect(retryBody.id).toBe(leftBody.id);
     expect(mpBodies).toHaveLength(1);
     expect(mpIdempotencyKeys).toHaveLength(1);
     expect(mpIdempotencyKeys[0]).toMatch(/^[a-f0-9]{64}$/);

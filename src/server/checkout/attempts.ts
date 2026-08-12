@@ -13,6 +13,7 @@ const DAY_SECONDS = 24 * 60 * 60;
 // Pending orders are retained for seven days. The attempt must live for the
 // same recovery horizon so a lost response does not become a new purchase.
 export const CHECKOUT_ATTEMPT_TTL_SECONDS = 7 * DAY_SECONDS;
+export const CHECKOUT_ATTEMPT_ALIAS_TTL_SECONDS = CHECKOUT_ATTEMPT_TTL_SECONDS;
 export const CHECKOUT_ATTEMPT_LEASE_TTL_SECONDS = 90;
 // Equivalent attempts only share an identity while creation is active. The
 // fallback TTL bounds coordination after a crash without turning the
@@ -84,6 +85,11 @@ export type CheckoutAttemptRecord = CheckoutOrderIdentity & {
   result?: CheckoutAttemptResult;
 };
 
+export type CheckoutAttemptAlias = {
+  canonicalCheckoutAttemptId: string;
+  fingerprint: string;
+};
+
 export class CheckoutAttemptConflictError extends Error {
   readonly code = CHECKOUT_ATTEMPT_CONFLICT;
 
@@ -102,8 +108,13 @@ export class CheckoutAttemptLeaseLostError extends Error {
 
 const attemptKey = (checkoutAttemptId: string) => `es:checkout-attempt:v1:${checkoutAttemptId}`;
 const leaseKey = (checkoutAttemptId: string) => `es:checkout-attempt:v1:${checkoutAttemptId}:lease`;
+const aliasKey = (checkoutAttemptId: string) =>
+  `es:checkout-attempt:v1:alias:${checkoutAttemptId}`;
 const coordinationKey = (fingerprint: string) =>
   `es:checkout-attempt-canonical:v1:${fingerprint}`;
+
+const CHECKOUT_ATTEMPT_ID_PATTERN = /^[a-zA-Z0-9_-]{8,120}$/;
+const CHECKOUT_FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/;
 
 const stableStringify = (value: unknown): string => {
   if (Array.isArray(value)) {
@@ -160,10 +171,115 @@ const assertMatchingFingerprint = (attempt: CheckoutAttemptRecord, fingerprint: 
 export const getCheckoutAttempt = (checkoutAttemptId: string) =>
   getJson<CheckoutAttemptRecord>(attemptKey(checkoutAttemptId));
 
+export const getCheckoutAttemptAlias = (checkoutAttemptId: string) =>
+  getJson<CheckoutAttemptAlias>(aliasKey(checkoutAttemptId));
+
+const assertValidAlias = (
+  requestedCheckoutAttemptId: string,
+  alias: CheckoutAttemptAlias,
+  fingerprint: string
+) => {
+  if (
+    !alias ||
+    typeof alias !== "object" ||
+    !CHECKOUT_ATTEMPT_ID_PATTERN.test(alias.canonicalCheckoutAttemptId) ||
+    !CHECKOUT_FINGERPRINT_PATTERN.test(alias.fingerprint) ||
+    alias.canonicalCheckoutAttemptId === requestedCheckoutAttemptId
+  ) {
+    throw new Error("Checkout attempt alias is malformed");
+  }
+  if (alias.fingerprint !== fingerprint) {
+    logEvent("warn", "checkout.attempt.alias_conflict", {
+      requestedCheckoutAttemptId,
+      checkoutAttemptId: alias.canonicalCheckoutAttemptId,
+    });
+    throw new CheckoutAttemptConflictError();
+  }
+};
+
+async function readCheckoutAttemptAlias(
+  requestedCheckoutAttemptId: string,
+  fingerprint: string
+): Promise<CheckoutAttemptAlias | null> {
+  const alias = await getCheckoutAttemptAlias(requestedCheckoutAttemptId);
+  if (!alias) return null;
+  assertValidAlias(requestedCheckoutAttemptId, alias, fingerprint);
+
+  const chainedAlias = await getCheckoutAttemptAlias(alias.canonicalCheckoutAttemptId);
+  if (chainedAlias) {
+    throw new Error("Checkout attempt alias chains are not allowed");
+  }
+  return alias;
+}
+
+async function persistCheckoutAttemptAlias(
+  requestedCheckoutAttemptId: string,
+  canonicalCheckoutAttemptId: string,
+  fingerprint: string
+) {
+  if (requestedCheckoutAttemptId === canonicalCheckoutAttemptId) return;
+
+  // A durable canonical attempt is the authority that prevents this target
+  // from later becoming an alias source. Wait for the coordination winner to
+  // publish it before making the requested-ID mapping durable.
+  const canonicalAttempt = await waitForCheckoutAttemptRecord(
+    canonicalCheckoutAttemptId,
+    fingerprint
+  );
+  if (!canonicalAttempt) {
+    throw new Error("Canonical checkout attempt is unavailable for alias creation");
+  }
+
+  const canonicalAlias = await getCheckoutAttemptAlias(canonicalCheckoutAttemptId);
+  if (canonicalAlias) {
+    throw new Error("Checkout attempt alias chains are not allowed");
+  }
+
+  const candidate: CheckoutAttemptAlias = { canonicalCheckoutAttemptId, fingerprint };
+  const created = await setJsonIfNotExists(
+    aliasKey(requestedCheckoutAttemptId),
+    candidate,
+    CHECKOUT_ATTEMPT_ALIAS_TTL_SECONDS
+  );
+  if (created) {
+    logEvent("info", "checkout.attempt.alias_created", {
+      requestedCheckoutAttemptId,
+      checkoutAttemptId: canonicalCheckoutAttemptId,
+    });
+    return;
+  }
+
+  const existing = await readCheckoutAttemptAlias(requestedCheckoutAttemptId, fingerprint);
+  if (!existing) throw new Error("Checkout attempt alias claim could not be recovered");
+  if (existing.canonicalCheckoutAttemptId !== canonicalCheckoutAttemptId) {
+    throw new CheckoutAttemptConflictError();
+  }
+}
+
+type CheckoutAttemptResolution = {
+  checkoutAttemptId: string;
+  source: "alias" | "coordination" | "existing";
+};
+
 async function resolveCanonicalCheckoutAttemptId(
   requestedCheckoutAttemptId: string,
   fingerprint: string
-): Promise<string> {
+): Promise<CheckoutAttemptResolution> {
+  const alias = await readCheckoutAttemptAlias(requestedCheckoutAttemptId, fingerprint);
+  if (alias) {
+    logEvent("info", "checkout.attempt.alias_resolved", {
+      requestedCheckoutAttemptId,
+      checkoutAttemptId: alias.canonicalCheckoutAttemptId,
+    });
+    return { checkoutAttemptId: alias.canonicalCheckoutAttemptId, source: "alias" };
+  }
+
+  const requestedAttempt = await getCheckoutAttempt(requestedCheckoutAttemptId);
+  if (requestedAttempt) {
+    assertMatchingFingerprint(requestedAttempt, fingerprint);
+    return { checkoutAttemptId: requestedCheckoutAttemptId, source: "existing" };
+  }
+
   const key = coordinationKey(fingerprint);
   const claimed = await setJsonIfNotExists(
     key,
@@ -174,7 +290,7 @@ async function resolveCanonicalCheckoutAttemptId(
     logEvent("info", "checkout.attempt.coordination_claimed", {
       checkoutAttemptId: requestedCheckoutAttemptId,
     });
-    return requestedCheckoutAttemptId;
+    return { checkoutAttemptId: requestedCheckoutAttemptId, source: "coordination" };
   }
 
   const canonicalCheckoutAttemptId = await getJson<string>(key);
@@ -183,12 +299,17 @@ async function resolveCanonicalCheckoutAttemptId(
   }
 
   if (canonicalCheckoutAttemptId !== requestedCheckoutAttemptId) {
+    await persistCheckoutAttemptAlias(
+      requestedCheckoutAttemptId,
+      canonicalCheckoutAttemptId,
+      fingerprint
+    );
     logEvent("info", "checkout.attempt.canonicalized", {
       requestedCheckoutAttemptId,
       checkoutAttemptId: canonicalCheckoutAttemptId,
     });
   }
-  return canonicalCheckoutAttemptId;
+  return { checkoutAttemptId: canonicalCheckoutAttemptId, source: "coordination" };
 }
 
 async function releaseCheckoutAttemptCoordination(attempt: CheckoutAttemptRecord) {
@@ -416,6 +537,26 @@ export async function completeCheckoutAttempt(
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+async function waitForCheckoutAttemptRecord(
+  checkoutAttemptId: string,
+  fingerprint: string,
+  options: { timeoutMs?: number; pollMs?: number } = {}
+): Promise<CheckoutAttemptRecord | null> {
+  const timeoutMs = options.timeoutMs ?? 1_500;
+  const pollMs = options.pollMs ?? 50;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const attempt = await getCheckoutAttempt(checkoutAttemptId);
+    if (attempt) {
+      assertMatchingFingerprint(attempt, fingerprint);
+      return attempt;
+    }
+    await sleep(pollMs);
+  }
+  return null;
+}
+
 export async function waitForCompletedCheckoutAttempt(
   checkoutAttemptId: string,
   fingerprint: string,
@@ -451,15 +592,27 @@ export async function beginCheckoutAttempt(
   requestedCheckoutAttemptId: string,
   fingerprint: string
 ): Promise<BeginCheckoutAttemptResult> {
-  const checkoutAttemptId = await resolveCanonicalCheckoutAttemptId(
+  const resolution = await resolveCanonicalCheckoutAttemptId(
     requestedCheckoutAttemptId,
     fingerprint
   );
+  const { checkoutAttemptId } = resolution;
   let initial: Awaited<ReturnType<typeof getOrCreateCheckoutAttempt>>;
   try {
-    initial = await getOrCreateCheckoutAttempt(checkoutAttemptId, fingerprint);
+    if (resolution.source === "alias") {
+      const aliasedAttempt = await waitForCheckoutAttemptRecord(checkoutAttemptId, fingerprint);
+      if (!aliasedAttempt) {
+        throw new Error("Canonical checkout attempt for alias is unavailable");
+      }
+      initial = { attempt: aliasedAttempt, created: false };
+    } else {
+      initial = await getOrCreateCheckoutAttempt(checkoutAttemptId, fingerprint);
+    }
   } catch (error) {
-    if (error instanceof CheckoutAttemptConflictError) {
+    if (
+      error instanceof CheckoutAttemptConflictError &&
+      resolution.source === "coordination"
+    ) {
       await delIfValue(coordinationKey(fingerprint), checkoutAttemptId).catch(() => false);
     }
     throw error;
