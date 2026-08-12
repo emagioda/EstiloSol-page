@@ -49,6 +49,29 @@ export async function createPreferenceOnMp(
   }
 }
 
+const isUsableCheckoutUrl = (value: unknown): value is string => {
+  if (typeof value !== "string" || !value.trim()) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+};
+
+export const isValidMpPreferenceResponse = (
+  data: MpPreferenceResponse | null
+): data is MpPreferenceResponse & { id: string | number } => {
+  if (!data) return false;
+  const validId =
+    (typeof data.id === "string" && data.id.trim().length > 0) ||
+    (typeof data.id === "number" && Number.isFinite(data.id));
+  return Boolean(
+    validId &&
+      (isUsableCheckoutUrl(data.init_point) || isUsableCheckoutUrl(data.sandbox_init_point))
+  );
+};
+
 export async function searchPaymentsByExternalReference(
   externalReference: string,
   accessToken: string

@@ -29,6 +29,7 @@ type BuildOrderInput = {
   fulfillment: ParsedCheckoutFulfillment;
   fulfillmentConfig?: FulfillmentConfig;
   status?: OrderStatus;
+  identity?: CheckoutOrderIdentity;
 };
 
 type BuildOrderResult = {
@@ -48,6 +49,16 @@ const buildExternalReference = () => {
 };
 
 const buildSummaryToken = () => randomBytes(16).toString("hex");
+
+export type CheckoutOrderIdentity = {
+  externalReference: string;
+  summaryToken: string;
+};
+
+export const createCheckoutOrderIdentity = (): CheckoutOrderIdentity => ({
+  externalReference: buildExternalReference(),
+  summaryToken: buildSummaryToken(),
+});
 
 export const getPaymentDiscountAmount = (subtotalProducts: number, paymentMethod: OrderPaymentMethod) => {
   if (paymentMethod === "cash" || paymentMethod === "transfer") {
@@ -153,9 +164,10 @@ export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult
     };
   }
 
+  const identity = input.identity ?? createCheckoutOrderIdentity();
   const order: Order = {
-    externalReference: buildExternalReference(),
-    summaryToken: buildSummaryToken(),
+    externalReference: identity.externalReference,
+    summaryToken: identity.summaryToken,
     status: input.status ?? "created",
     paymentStatus: "pending",
     shippingStatus: "in_process",

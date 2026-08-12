@@ -1,10 +1,17 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/mp/create-preference/route";
+import { kv } from "@/src/server/kv";
 import * as orderStore from "@/src/server/orders/store";
+import * as metrics from "@/src/server/observability/metrics";
+
+vi.mock("@/src/server/security/rateLimit", () => ({
+  checkRateLimit: vi.fn(async () => true),
+}));
 
 type FetchMockOptions = {
   catalog?: Array<Record<string, unknown>>;
+  mpHandler?: (callNumber: number, init?: RequestInit) => Promise<Response>;
 };
 
 const baseCatalogProduct = {
@@ -17,12 +24,18 @@ const baseCatalogProduct = {
   stock_qty: 5,
 };
 
+let attemptSequence = 0;
+let fingerprintNonce = "";
+const newAttemptId = (label = "mp") => `attempt-${label}-${Date.now()}-${++attemptSequence}`;
+
 const buildCheckoutBody = (overrides: Record<string, unknown> = {}) => ({
   items: [{ productId: "p-1", qty: 1, name: "Producto 1", unitPrice: 1000 }],
   paymentMethod: "mercadopago",
   deliveryMethod: "pickup",
   fulfillment: { pickupPointId: "mercado-del-patio" },
   payer: { name: "Ana", phone: "+5491112345678" },
+  notes: fingerprintNonce,
+  checkoutAttemptId: newAttemptId(),
   ...overrides,
 });
 
@@ -35,6 +48,7 @@ const createRequest = (body: Record<string, unknown>) =>
 
 const installPreferenceFetchMock = (options: FetchMockOptions = {}) => {
   const mpBodies: Array<Record<string, unknown>> = [];
+  const mpIdempotencyKeys: string[] = [];
   const sheetPostBodies: Array<Record<string, unknown>> = [];
   const rawCatalog: Array<Record<string, unknown>> = options.catalog || [baseCatalogProduct];
   const catalog = rawCatalog.map((item) => ({
@@ -69,6 +83,11 @@ const installPreferenceFetchMock = (options: FetchMockOptions = {}) => {
       const rawBody = typeof init?.body === "string" ? init.body : "{}";
       const parsedBody = JSON.parse(rawBody) as Record<string, unknown>;
       mpBodies.push(parsedBody);
+      mpIdempotencyKeys.push(new Headers(init?.headers).get("X-Idempotency-Key") || "");
+
+      if (options.mpHandler) {
+        return options.mpHandler(mpBodies.length, init);
+      }
 
       return new Response(
         JSON.stringify({
@@ -83,12 +102,13 @@ const installPreferenceFetchMock = (options: FetchMockOptions = {}) => {
     throw new Error(`Unexpected fetch url: ${url}`);
   });
 
-  return { fetchMock, mpBodies, sheetPostBodies };
+  return { fetchMock, mpBodies, mpIdempotencyKeys, sheetPostBodies };
 };
 
 describe("create-preference local development flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    fingerprintNonce = newAttemptId("fingerprint");
     process.env.MP_ACCESS_TOKEN = "test-token";
     process.env.SHEETS_ENDPOINT = "https://sheets.example.test/catalog";
     process.env.SHEETS_API_TOKEN = "test-sheets-token";
@@ -189,7 +209,7 @@ describe("create-preference local development flow", () => {
     fetchMock.mockRestore();
   });
 
-  it("creates a new preference for a different checkout attempt", async () => {
+  it("AUD3-IDM-006 allows an intentional identical purchase after completion", async () => {
     const { fetchMock, mpBodies, sheetPostBodies } = installPreferenceFetchMock();
 
     const firstResponse = await POST(createRequest(buildCheckoutBody({
@@ -198,11 +218,18 @@ describe("create-preference local development flow", () => {
     const secondResponse = await POST(createRequest(buildCheckoutBody({
       checkoutAttemptId: `attempt-${Date.now()}-second`,
     })));
-    const firstBody = (await firstResponse.json()) as { externalReference?: string };
-    const secondBody = (await secondResponse.json()) as { externalReference?: string };
+    const firstBody = (await firstResponse.json()) as {
+      checkoutAttemptId?: string;
+      externalReference?: string;
+    };
+    const secondBody = (await secondResponse.json()) as {
+      checkoutAttemptId?: string;
+      externalReference?: string;
+    };
 
     expect(firstResponse.status).toBe(200);
     expect(secondResponse.status).toBe(200);
+    expect(firstBody.checkoutAttemptId).not.toBe(secondBody.checkoutAttemptId);
     expect(firstBody.externalReference).not.toBe(secondBody.externalReference);
     expect(mpBodies).toHaveLength(2);
     expect(sheetPostBodies.filter((entry) => entry.action === "appendRow")).toHaveLength(0);
@@ -272,6 +299,7 @@ describe("create-preference local development flow", () => {
         deliveryMethod: "pickup",
         fulfillment: { pickupPointId: "mercado-del-patio" },
         payer: { name: "Ana", phone: "+5491112345678" },
+        checkoutAttemptId: newAttemptId("non-https"),
       }),
     });
 
@@ -382,6 +410,7 @@ describe("create-preference local development flow", () => {
           shippingFee: 0,
         },
         payer: { name: "Ana", phone: "+5491112345678" },
+        checkoutAttemptId: newAttemptId("delivery"),
       }),
     });
 
@@ -442,6 +471,197 @@ describe("create-preference local development flow", () => {
     expect(body).toMatchObject({ code: "INVALID_QUANTITY", itemIndex: 1, productId: "bad" });
     expect(mpBodies).toHaveLength(0);
     expect(sheetPostBodies).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockRestore();
+  });
+
+  it("AUD3-MP-IDEM-01/02 serializes simultaneous requests and replays one preference", async () => {
+    const { fetchMock, mpBodies } = installPreferenceFetchMock();
+    const body = buildCheckoutBody({ checkoutAttemptId: newAttemptId("concurrent") });
+
+    const [left, right] = await Promise.all([
+      POST(createRequest(body)),
+      POST(createRequest(body)),
+    ]);
+    const [leftBody, rightBody] = await Promise.all([left.json(), right.json()]);
+
+    expect(left.status).toBe(200);
+    expect(right.status).toBe(200);
+    expect(rightBody).toMatchObject(leftBody);
+    expect(mpBodies).toHaveLength(1);
+    fetchMock.mockRestore();
+  });
+
+  it("AUD3-IDM-006 canonicalizes concurrent cross-tab MP attempts with different IDs", async () => {
+    let releasePreference!: () => void;
+    let signalPreferenceEntered!: () => void;
+    const preferenceEntered = new Promise<void>((resolve) => {
+      signalPreferenceEntered = resolve;
+    });
+    const preferenceGate = new Promise<void>((resolve) => {
+      releasePreference = resolve;
+    });
+    const { fetchMock, mpBodies, mpIdempotencyKeys } = installPreferenceFetchMock({
+      mpHandler: async () => {
+        signalPreferenceEntered();
+        await preferenceGate;
+        return new Response(
+          JSON.stringify({
+            id: "pref-cross-tab",
+            init_point: "https://mp.test/cross-tab",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      },
+    });
+    const kvSetSpy = vi.spyOn(kv, "set");
+    const sharedPayload = buildCheckoutBody();
+    const attemptA = newAttemptId("tab-a");
+    const attemptB = newAttemptId("tab-b");
+
+    const leftPromise = POST(createRequest({ ...sharedPayload, checkoutAttemptId: attemptA }));
+    await preferenceEntered;
+    const rightPromise = POST(createRequest({ ...sharedPayload, checkoutAttemptId: attemptB }));
+    await vi.waitFor(() => {
+      const leaseClaims = kvSetSpy.mock.calls.filter(([key]) => String(key).endsWith(":lease"));
+      expect(leaseClaims).toHaveLength(2);
+    });
+    releasePreference();
+
+    const [left, right] = await Promise.all([leftPromise, rightPromise]);
+    const leftBody = (await left.json()) as {
+      checkoutAttemptId?: string;
+      externalReference?: string;
+      summaryToken?: string;
+      id?: string;
+    };
+    // Simulate the tab-B HTTP response being lost before client-side rebind.
+    expect(right.status).toBe(200);
+    const retry = await POST(createRequest({ ...sharedPayload, checkoutAttemptId: attemptB }));
+    const retryBody = (await retry.json()) as {
+      checkoutAttemptId?: string;
+      externalReference?: string;
+      summaryToken?: string;
+      id?: string;
+    };
+
+    expect(left.status).toBe(200);
+    expect(retry.status).toBe(200);
+    expect(leftBody.checkoutAttemptId).toBe(attemptA);
+    expect(retryBody.checkoutAttemptId).toBe(attemptA);
+    expect(retryBody.externalReference).toBe(leftBody.externalReference);
+    expect(retryBody.summaryToken).toBe(leftBody.summaryToken);
+    expect(retryBody.id).toBe(leftBody.id);
+    expect(mpBodies).toHaveLength(1);
+    expect(mpIdempotencyKeys).toHaveLength(1);
+    expect(mpIdempotencyKeys[0]).toMatch(/^[a-f0-9]{64}$/);
+    fetchMock.mockRestore();
+  });
+
+  it("AUD3-MP-IDEM-03/04 recovers network uncertainty with the same ref and idempotency key", async () => {
+    const { fetchMock, mpBodies, mpIdempotencyKeys } = installPreferenceFetchMock({
+      mpHandler: async (callNumber) => {
+        if (callNumber <= 2) throw new TypeError("response lost");
+        return new Response(
+          JSON.stringify({
+            id: "pref-recovered",
+            init_point: "https://mp.test/recovered",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      },
+    });
+    const body = buildCheckoutBody({ checkoutAttemptId: newAttemptId("response-lost") });
+
+    const first = await POST(createRequest(body));
+    const second = await POST(createRequest(body));
+    const secondBody = (await second.json()) as { externalReference?: string };
+
+    expect(first.status).toBe(502);
+    expect(second.status).toBe(200);
+    expect(new Set(mpBodies.map((entry) => entry.external_reference))).toEqual(
+      new Set([secondBody.externalReference])
+    );
+    expect(new Set(mpIdempotencyKeys)).toHaveLength(1);
+    fetchMock.mockRestore();
+  });
+
+  it("AUD3-MP-IDEM-06 completed replay skips catalog and Mercado Pago", async () => {
+    const { fetchMock } = installPreferenceFetchMock();
+    const body = buildCheckoutBody({ checkoutAttemptId: newAttemptId("replay-no-io") });
+    const first = await POST(createRequest(body));
+    expect(first.status).toBe(200);
+    fetchMock.mockClear();
+
+    const second = await POST(createRequest(body));
+
+    expect(second.status).toBe(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockRestore();
+  });
+
+  it("AUD3-MP-IDEM-05 keeps a valid preference successful when metrics fail", async () => {
+    const metricSpy = vi
+      .spyOn(metrics, "trackBusinessEvent")
+      .mockRejectedValue(new Error("metrics unavailable"));
+    const { fetchMock, mpBodies } = installPreferenceFetchMock();
+
+    const response = await POST(createRequest(buildCheckoutBody({
+      checkoutAttemptId: newAttemptId("metric-failure"),
+    })));
+
+    expect(response.status).toBe(200);
+    expect(mpBodies).toHaveLength(1);
+    expect(metricSpy).toHaveBeenCalledWith(
+      "checkout.preference.created",
+      expect.objectContaining({ externalReference: expect.any(String) })
+    );
+    fetchMock.mockRestore();
+  });
+
+  it("AUD3-MP-IDEM-07 rejects fingerprint mismatch without another MP call", async () => {
+    const { fetchMock, mpBodies } = installPreferenceFetchMock();
+    const checkoutAttemptId = newAttemptId("conflict");
+    const first = await POST(createRequest(buildCheckoutBody({ checkoutAttemptId })));
+    const second = await POST(createRequest(buildCheckoutBody({
+      checkoutAttemptId,
+      items: [{ productId: "p-1", qty: 2, unitPrice: 1000 }],
+    })));
+    const secondBody = (await second.json()) as { code?: string };
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(409);
+    expect(secondBody.code).toBe("CHECKOUT_ATTEMPT_CONFLICT");
+    expect(mpBodies).toHaveLength(1);
+    fetchMock.mockRestore();
+  });
+
+  it("AUD3-MP-IDEM-08 rejects HTTP 200 with a malformed preference", async () => {
+    const { fetchMock } = installPreferenceFetchMock({
+      mpHandler: async () => new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    });
+
+    const response = await POST(createRequest(buildCheckoutBody({
+      checkoutAttemptId: newAttemptId("malformed"),
+    })));
+
+    expect(response.status).toBe(502);
+    fetchMock.mockRestore();
+  });
+
+  it("fails closed without checkoutAttemptId and never calls MP", async () => {
+    const { fetchMock, mpBodies } = installPreferenceFetchMock();
+    const body: Record<string, unknown> = buildCheckoutBody();
+    delete body.checkoutAttemptId;
+    const response = await POST(createRequest(body));
+    const responseBody = (await response.json()) as { code?: string };
+
+    expect(response.status).toBe(400);
+    expect(responseBody.code).toBe("CHECKOUT_ATTEMPT_REQUIRED");
+    expect(mpBodies).toHaveLength(0);
     expect(fetchMock).not.toHaveBeenCalled();
     fetchMock.mockRestore();
   });
