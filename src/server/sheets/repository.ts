@@ -531,6 +531,28 @@ const parseStockMutationResult = (
   response: SheetsMutationResponse,
   expectedItems: readonly { productId: string; qty: number }[],
 ): StockMutationResult => {
+  const outcome = response.outcome;
+  if (outcome !== undefined && outcome !== "APPLIED" && outcome !== "ALREADY_APPLIED") {
+    throw new InventoryOperationError({
+      code: "INVENTORY_VALIDATION_FAILED",
+      message: "Apps Script devolvió un resultado de inventario desconocido.",
+      origin: "response",
+    });
+  }
+  if (outcome === "ALREADY_APPLIED" && response.deduped !== true) {
+    throw new InventoryOperationError({
+      code: "INVENTORY_VALIDATION_FAILED",
+      message: "Apps Script devolvió un resultado idempotente inconsistente.",
+      origin: "response",
+    });
+  }
+  if (outcome === "APPLIED" && response.deduped !== false) {
+    throw new InventoryOperationError({
+      code: "INVENTORY_VALIDATION_FAILED",
+      message: "Apps Script devolvió un resultado aplicado inconsistente.",
+      origin: "response",
+    });
+  }
   if (response.deduped === true) return { deduped: true, updated: [] };
   if (!Array.isArray(response.updated)) {
     throw new InventoryOperationError({
