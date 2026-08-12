@@ -139,6 +139,33 @@ export const bindCheckoutAttemptExternalReference = (attemptId: string, external
   });
 };
 
+export const rebindBrowserCheckoutAttempt = (
+  attempt: StoredCheckoutAttempt,
+  canonicalAttemptId: string
+): StoredCheckoutAttempt => {
+  if (!ATTEMPT_ID_PATTERN.test(canonicalAttemptId)) return attempt;
+
+  const current = readStoredCheckoutAttempt();
+  const source = current?.fingerprint === attempt.fingerprint ? current : attempt;
+  const { externalReference: sourceExternalReference, ...sourceWithoutReference } = source;
+  const canonicalChanged = source.attemptId !== canonicalAttemptId;
+  const rebound: StoredCheckoutAttempt = {
+    ...sourceWithoutReference,
+    attemptId: canonicalAttemptId,
+    updatedAt: Date.now(),
+    ...(!canonicalChanged && sourceExternalReference
+      ? { externalReference: sourceExternalReference }
+      : {}),
+  };
+
+  // Do not replace a newer checkout with a different material payload while
+  // an older request is finishing in the background.
+  if (!current || current.fingerprint === attempt.fingerprint) {
+    writeStoredCheckoutAttempt(rebound);
+  }
+  return rebound;
+};
+
 export const clearBrowserCheckoutAttempt = (attemptId?: string) => {
   if (typeof window === "undefined") return;
   const current = readStoredCheckoutAttempt();
@@ -161,7 +188,7 @@ export async function submitCheckoutAttempt<T extends Record<string, unknown>>(
   payload: Record<string, unknown>,
   options: { retryDelaysMs?: number[] } = {}
 ): Promise<{ response: Response; data: T | null; attempt: StoredCheckoutAttempt }> {
-  const attempt = await getOrCreateBrowserCheckoutAttempt(payload);
+  let attempt = await getOrCreateBrowserCheckoutAttempt(payload);
   const retryDelaysMs = options.retryDelaysMs ?? [150, 300, 600, 1_200];
 
   for (let index = 0; ; index += 1) {
@@ -171,6 +198,14 @@ export async function submitCheckoutAttempt<T extends Record<string, unknown>>(
       body: JSON.stringify({ ...payload, checkoutAttemptId: attempt.attemptId }),
     });
     const data = (await response.json().catch(() => null)) as T | null;
+    const canonicalAttemptId =
+      data &&
+      typeof (data as Record<string, unknown>).checkoutAttemptId === "string"
+        ? String((data as Record<string, unknown>).checkoutAttemptId)
+        : undefined;
+    if (canonicalAttemptId) {
+      attempt = rebindBrowserCheckoutAttempt(attempt, canonicalAttemptId);
+    }
     const code = data && typeof data.code === "string" ? data.code : undefined;
     const retryDelay = retryDelaysMs[index];
 

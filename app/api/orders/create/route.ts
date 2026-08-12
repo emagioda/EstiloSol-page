@@ -67,9 +67,18 @@ const attemptErrorResponse = (error: unknown) => {
 
 const replayManualResult = (attempt: CheckoutAttemptRecord) => {
   if (attempt.result?.kind !== "manual") {
-    return NextResponse.json({ error: "El intento de checkout no es compatible." }, { status: 409 });
+    return NextResponse.json(
+      {
+        error: "El intento de checkout no es compatible.",
+        checkoutAttemptId: attempt.checkoutAttemptId,
+      },
+      { status: 409 }
+    );
   }
-  return NextResponse.json(attempt.result.response, { status: 200 });
+  return NextResponse.json(
+    { ...attempt.result.response, checkoutAttemptId: attempt.checkoutAttemptId },
+    { status: 200 }
+  );
 };
 
 export async function POST(request: NextRequest) {
@@ -135,6 +144,7 @@ export async function POST(request: NextRequest) {
       {
         error: "Tu pedido todavia se esta registrando.",
         code: CHECKOUT_ATTEMPT_IN_PROGRESS,
+        checkoutAttemptId: beginning.attempt.checkoutAttemptId,
       },
       { status: 409 }
     );
@@ -153,7 +163,10 @@ export async function POST(request: NextRequest) {
         body.deliveryMethod === "pickup" &&
         !getActivePickupPointById(fulfillmentConfig, body.fulfillment.pickupPointId || "")
       ) {
-        return NextResponse.json({ error: "Punto de encuentro inválido." }, { status: 400 });
+        return NextResponse.json(
+          { error: "Punto de encuentro inválido.", checkoutAttemptId: attempt.checkoutAttemptId },
+          { status: 400 }
+        );
       }
 
       const catalog = await getAuthoritativeProductsCatalog().catch((error) => {
@@ -165,7 +178,10 @@ export async function POST(request: NextRequest) {
       });
       if (!catalog) {
         return NextResponse.json(
-          { error: "No se pudo validar el catalogo de productos" },
+          {
+            error: "No se pudo validar el catalogo de productos",
+            checkoutAttemptId: attempt.checkoutAttemptId,
+          },
           { status: 503 }
         );
       }
@@ -178,6 +194,7 @@ export async function POST(request: NextRequest) {
             error: invalidProductsMessage(inventory.errors),
             code: primaryError.code,
             invalidProducts: inventory.errors,
+            checkoutAttemptId: attempt.checkoutAttemptId,
           },
           { status: 400 }
         );
@@ -201,7 +218,10 @@ export async function POST(request: NextRequest) {
       });
       if (!built.order) {
         return NextResponse.json(
-          { error: "No se pudo construir la orden con los datos de entrega." },
+          {
+            error: "No se pudo construir la orden con los datos de entrega.",
+            checkoutAttemptId: attempt.checkoutAttemptId,
+          },
           { status: 400 }
         );
       }
@@ -227,6 +247,7 @@ export async function POST(request: NextRequest) {
         currency: order.currency,
         paymentMethod: body.paymentMethod,
         deliveryMethod: body.deliveryMethod,
+        checkoutAttemptId: attempt.checkoutAttemptId,
       },
     };
 
@@ -261,6 +282,7 @@ export async function POST(request: NextRequest) {
         error: sideEffectsStarted
           ? "No pudimos confirmar el resultado. Reintentaremos el mismo pedido."
           : "No pudimos iniciar la operacion de forma segura. Intenta nuevamente.",
+        checkoutAttemptId: attempt.checkoutAttemptId,
       },
       { status: sideEffectsStarted ? 502 : 503 }
     );

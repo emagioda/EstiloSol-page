@@ -7,9 +7,15 @@ vi.mock("@/src/server/sheets/repository", () => ({
   updateOrderRowInSalesSheet: vi.fn(async () => undefined),
 }));
 
+vi.mock("@/src/server/http/afterResponse", () => ({
+  scheduleAfterResponse: vi.fn(),
+}));
+
 import { POST } from "@/app/api/orders/create/route";
 import { getCheckoutAttempt } from "@/src/server/checkout/attempts";
+import { scheduleAfterResponse } from "@/src/server/http/afterResponse";
 import { kv } from "@/src/server/kv";
+import * as orderStore from "@/src/server/orders/store";
 import { getOrder } from "@/src/server/orders/store";
 import {
   appendOrderToSalesSheet,
@@ -21,6 +27,7 @@ vi.mock("@/src/server/security/rateLimit", () => ({
 }));
 
 let attemptSequence = 0;
+let fingerprintNonce = "";
 const newAttemptId = (label = "manual") => `attempt-${label}-${Date.now()}-${++attemptSequence}`;
 
 const baseCatalogProduct = {
@@ -44,6 +51,7 @@ const buildManualBody = (overrides: Record<string, unknown> = {}) => ({
   deliveryMethod: "pickup",
   fulfillment: { pickupPointId: "santa-fe-mitre" },
   payer: { name: "Ana", phone: "+5491112345678" },
+  notes: fingerprintNonce,
   checkoutAttemptId: newAttemptId(),
   ...overrides,
 });
@@ -72,6 +80,7 @@ describe("orders create manual payment flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    fingerprintNonce = newAttemptId("fingerprint");
     process.env.SHEETS_ENDPOINT = "https://sheets.example.test/catalog";
     process.env.SHEETS_API_TOKEN = "test-sheets-token";
   });
@@ -256,6 +265,63 @@ describe("orders create manual payment flow", () => {
     expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
     fetchMock.mockRestore();
   });
+
+  it.each(["cash", "transfer"] as const)(
+    "AUD3-IDM-006 canonicalizes concurrent cross-tab %s attempts with different IDs",
+    async (paymentMethod) => {
+      const fetchMock = installCatalogFetchMock();
+      let releaseSheetAppend!: () => void;
+      let signalSheetAppendEntered!: () => void;
+      const sheetAppendEntered = new Promise<void>((resolve) => {
+        signalSheetAppendEntered = resolve;
+      });
+      const sheetAppendGate = new Promise<void>((resolve) => {
+        releaseSheetAppend = resolve;
+      });
+      vi.mocked(appendOrderToSalesSheet).mockImplementationOnce(async () => {
+        signalSheetAppendEntered();
+        await sheetAppendGate;
+      });
+      const createOrderSpy = vi.spyOn(orderStore, "createOrder");
+      const kvSetSpy = vi.spyOn(kv, "set");
+      const sharedPayload = buildManualBody({ paymentMethod });
+      const attemptA = newAttemptId(`${paymentMethod}-tab-a`);
+      const attemptB = newAttemptId(`${paymentMethod}-tab-b`);
+
+      const leftPromise = POST(createManualRequest({
+        ...sharedPayload,
+        checkoutAttemptId: attemptA,
+      }));
+      await sheetAppendEntered;
+      const rightPromise = POST(createManualRequest({
+        ...sharedPayload,
+        checkoutAttemptId: attemptB,
+      }));
+      await vi.waitFor(() => {
+        const leaseClaims = kvSetSpy.mock.calls.filter(([key]) => String(key).endsWith(":lease"));
+        expect(leaseClaims).toHaveLength(2);
+      });
+      releaseSheetAppend();
+
+      const [left, right] = await Promise.all([leftPromise, rightPromise]);
+      const [leftBody, rightBody] = (await Promise.all([left.json(), right.json()])) as Array<{
+        checkoutAttemptId?: string;
+        externalReference?: string;
+        summaryToken?: string;
+      }>;
+
+      expect(left.status).toBe(200);
+      expect(right.status).toBe(200);
+      expect(leftBody.checkoutAttemptId).toBe(attemptA);
+      expect(rightBody.checkoutAttemptId).toBe(attemptA);
+      expect(rightBody.externalReference).toBe(leftBody.externalReference);
+      expect(rightBody.summaryToken).toBe(leftBody.summaryToken);
+      expect(createOrderSpy).toHaveBeenCalledTimes(1);
+      expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
+      expect(scheduleAfterResponse).toHaveBeenCalledTimes(1);
+      fetchMock.mockRestore();
+    }
+  );
 
   it("AUD3-MANUAL-IDEM-06 recovers a sheet commit plus lost response with the same ref", async () => {
     const fetchMock = installCatalogFetchMock();

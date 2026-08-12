@@ -14,6 +14,10 @@ const DAY_SECONDS = 24 * 60 * 60;
 // same recovery horizon so a lost response does not become a new purchase.
 export const CHECKOUT_ATTEMPT_TTL_SECONDS = 7 * DAY_SECONDS;
 export const CHECKOUT_ATTEMPT_LEASE_TTL_SECONDS = 90;
+// Equivalent attempts only share an identity while creation is active. The
+// fallback TTL bounds coordination after a crash without turning the
+// fingerprint into a durable idempotency key.
+export const CHECKOUT_ATTEMPT_COORDINATION_TTL_SECONDS = 120;
 
 export const CHECKOUT_ATTEMPT_REQUIRED = "CHECKOUT_ATTEMPT_REQUIRED";
 export const CHECKOUT_ATTEMPT_CONFLICT = "CHECKOUT_ATTEMPT_CONFLICT";
@@ -45,6 +49,7 @@ export type CheckoutAttemptSnapshot = Pick<
 export type ManualCheckoutResult = {
   kind: "manual";
   response: {
+    checkoutAttemptId: string;
     externalReference: string;
     summaryToken?: string;
     total: number;
@@ -57,6 +62,7 @@ export type ManualCheckoutResult = {
 export type MpCheckoutResult = {
   kind: "mercadopago";
   response: {
+    checkoutAttemptId: string;
     id: string | number;
     initPoint?: string;
     sandboxInitPoint?: string;
@@ -96,6 +102,8 @@ export class CheckoutAttemptLeaseLostError extends Error {
 
 const attemptKey = (checkoutAttemptId: string) => `es:checkout-attempt:v1:${checkoutAttemptId}`;
 const leaseKey = (checkoutAttemptId: string) => `es:checkout-attempt:v1:${checkoutAttemptId}:lease`;
+const coordinationKey = (fingerprint: string) =>
+  `es:checkout-attempt-canonical:v1:${fingerprint}`;
 
 const stableStringify = (value: unknown): string => {
   if (Array.isArray(value)) {
@@ -151,6 +159,41 @@ const assertMatchingFingerprint = (attempt: CheckoutAttemptRecord, fingerprint: 
 
 export const getCheckoutAttempt = (checkoutAttemptId: string) =>
   getJson<CheckoutAttemptRecord>(attemptKey(checkoutAttemptId));
+
+async function resolveCanonicalCheckoutAttemptId(
+  requestedCheckoutAttemptId: string,
+  fingerprint: string
+): Promise<string> {
+  const key = coordinationKey(fingerprint);
+  const claimed = await setJsonIfNotExists(
+    key,
+    requestedCheckoutAttemptId,
+    CHECKOUT_ATTEMPT_COORDINATION_TTL_SECONDS
+  );
+  if (claimed) {
+    logEvent("info", "checkout.attempt.coordination_claimed", {
+      checkoutAttemptId: requestedCheckoutAttemptId,
+    });
+    return requestedCheckoutAttemptId;
+  }
+
+  const canonicalCheckoutAttemptId = await getJson<string>(key);
+  if (!canonicalCheckoutAttemptId) {
+    throw new Error("Checkout attempt coordination claim could not be recovered");
+  }
+
+  if (canonicalCheckoutAttemptId !== requestedCheckoutAttemptId) {
+    logEvent("info", "checkout.attempt.canonicalized", {
+      requestedCheckoutAttemptId,
+      checkoutAttemptId: canonicalCheckoutAttemptId,
+    });
+  }
+  return canonicalCheckoutAttemptId;
+}
+
+async function releaseCheckoutAttemptCoordination(attempt: CheckoutAttemptRecord) {
+  return delIfValue(coordinationKey(attempt.fingerprint), attempt.checkoutAttemptId);
+}
 
 export async function getOrCreateCheckoutAttempt(
   checkoutAttemptId: string,
@@ -357,6 +400,12 @@ export async function completeCheckoutAttempt(
     updatedAt: Date.now(),
   };
   await setJson(attemptKey(attempt.checkoutAttemptId), completed, CHECKOUT_ATTEMPT_TTL_SECONDS);
+  await releaseCheckoutAttemptCoordination(completed).catch((error) => {
+    logEvent("warn", "checkout.attempt.coordination_release_failed", {
+      checkoutAttemptId: completed.checkoutAttemptId,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+  });
   logEvent("info", "checkout.attempt.completed", {
     checkoutAttemptId: attempt.checkoutAttemptId,
     externalReference: attempt.externalReference,
@@ -399,11 +448,24 @@ export type BeginCheckoutAttemptResult =
     };
 
 export async function beginCheckoutAttempt(
-  checkoutAttemptId: string,
+  requestedCheckoutAttemptId: string,
   fingerprint: string
 ): Promise<BeginCheckoutAttemptResult> {
-  const initial = await getOrCreateCheckoutAttempt(checkoutAttemptId, fingerprint);
+  const checkoutAttemptId = await resolveCanonicalCheckoutAttemptId(
+    requestedCheckoutAttemptId,
+    fingerprint
+  );
+  let initial: Awaited<ReturnType<typeof getOrCreateCheckoutAttempt>>;
+  try {
+    initial = await getOrCreateCheckoutAttempt(checkoutAttemptId, fingerprint);
+  } catch (error) {
+    if (error instanceof CheckoutAttemptConflictError) {
+      await delIfValue(coordinationKey(fingerprint), checkoutAttemptId).catch(() => false);
+    }
+    throw error;
+  }
   if (initial.attempt.state === "completed" && initial.attempt.result) {
+    await releaseCheckoutAttemptCoordination(initial.attempt).catch(() => false);
     logEvent("info", "checkout.attempt.replayed", {
       checkoutAttemptId,
       externalReference: initial.attempt.externalReference,
@@ -415,6 +477,7 @@ export async function beginCheckoutAttempt(
   if (!ownerToken) {
     const completed = await waitForCompletedCheckoutAttempt(checkoutAttemptId, fingerprint);
     if (completed) {
+      await releaseCheckoutAttemptCoordination(completed).catch(() => false);
       logEvent("info", "checkout.attempt.replayed", {
         checkoutAttemptId,
         externalReference: completed.externalReference,
@@ -434,6 +497,7 @@ export async function beginCheckoutAttempt(
     assertMatchingFingerprint(current, fingerprint);
     if (current.state === "completed" && current.result) {
       await releaseCheckoutAttemptLease(checkoutAttemptId, ownerToken);
+      await releaseCheckoutAttemptCoordination(current).catch(() => false);
       logEvent("info", "checkout.attempt.replayed", {
         checkoutAttemptId,
         externalReference: current.externalReference,

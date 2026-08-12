@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/mp/create-preference/route";
+import { kv } from "@/src/server/kv";
 import * as orderStore from "@/src/server/orders/store";
 import * as metrics from "@/src/server/observability/metrics";
 
@@ -24,6 +25,7 @@ const baseCatalogProduct = {
 };
 
 let attemptSequence = 0;
+let fingerprintNonce = "";
 const newAttemptId = (label = "mp") => `attempt-${label}-${Date.now()}-${++attemptSequence}`;
 
 const buildCheckoutBody = (overrides: Record<string, unknown> = {}) => ({
@@ -32,6 +34,7 @@ const buildCheckoutBody = (overrides: Record<string, unknown> = {}) => ({
   deliveryMethod: "pickup",
   fulfillment: { pickupPointId: "mercado-del-patio" },
   payer: { name: "Ana", phone: "+5491112345678" },
+  notes: fingerprintNonce,
   checkoutAttemptId: newAttemptId(),
   ...overrides,
 });
@@ -105,6 +108,7 @@ const installPreferenceFetchMock = (options: FetchMockOptions = {}) => {
 describe("create-preference local development flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    fingerprintNonce = newAttemptId("fingerprint");
     process.env.MP_ACCESS_TOKEN = "test-token";
     process.env.SHEETS_ENDPOINT = "https://sheets.example.test/catalog";
     process.env.SHEETS_API_TOKEN = "test-sheets-token";
@@ -205,7 +209,7 @@ describe("create-preference local development flow", () => {
     fetchMock.mockRestore();
   });
 
-  it("creates a new preference for a different checkout attempt", async () => {
+  it("AUD3-IDM-006 allows an intentional identical purchase after completion", async () => {
     const { fetchMock, mpBodies, sheetPostBodies } = installPreferenceFetchMock();
 
     const firstResponse = await POST(createRequest(buildCheckoutBody({
@@ -214,11 +218,18 @@ describe("create-preference local development flow", () => {
     const secondResponse = await POST(createRequest(buildCheckoutBody({
       checkoutAttemptId: `attempt-${Date.now()}-second`,
     })));
-    const firstBody = (await firstResponse.json()) as { externalReference?: string };
-    const secondBody = (await secondResponse.json()) as { externalReference?: string };
+    const firstBody = (await firstResponse.json()) as {
+      checkoutAttemptId?: string;
+      externalReference?: string;
+    };
+    const secondBody = (await secondResponse.json()) as {
+      checkoutAttemptId?: string;
+      externalReference?: string;
+    };
 
     expect(firstResponse.status).toBe(200);
     expect(secondResponse.status).toBe(200);
+    expect(firstBody.checkoutAttemptId).not.toBe(secondBody.checkoutAttemptId);
     expect(firstBody.externalReference).not.toBe(secondBody.externalReference);
     expect(mpBodies).toHaveLength(2);
     expect(sheetPostBodies.filter((entry) => entry.action === "appendRow")).toHaveLength(0);
@@ -478,6 +489,61 @@ describe("create-preference local development flow", () => {
     expect(right.status).toBe(200);
     expect(rightBody).toMatchObject(leftBody);
     expect(mpBodies).toHaveLength(1);
+    fetchMock.mockRestore();
+  });
+
+  it("AUD3-IDM-006 canonicalizes concurrent cross-tab MP attempts with different IDs", async () => {
+    let releasePreference!: () => void;
+    let signalPreferenceEntered!: () => void;
+    const preferenceEntered = new Promise<void>((resolve) => {
+      signalPreferenceEntered = resolve;
+    });
+    const preferenceGate = new Promise<void>((resolve) => {
+      releasePreference = resolve;
+    });
+    const { fetchMock, mpBodies, mpIdempotencyKeys } = installPreferenceFetchMock({
+      mpHandler: async () => {
+        signalPreferenceEntered();
+        await preferenceGate;
+        return new Response(
+          JSON.stringify({
+            id: "pref-cross-tab",
+            init_point: "https://mp.test/cross-tab",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      },
+    });
+    const kvSetSpy = vi.spyOn(kv, "set");
+    const sharedPayload = buildCheckoutBody();
+    const attemptA = newAttemptId("tab-a");
+    const attemptB = newAttemptId("tab-b");
+
+    const leftPromise = POST(createRequest({ ...sharedPayload, checkoutAttemptId: attemptA }));
+    await preferenceEntered;
+    const rightPromise = POST(createRequest({ ...sharedPayload, checkoutAttemptId: attemptB }));
+    await vi.waitFor(() => {
+      const leaseClaims = kvSetSpy.mock.calls.filter(([key]) => String(key).endsWith(":lease"));
+      expect(leaseClaims).toHaveLength(2);
+    });
+    releasePreference();
+
+    const [left, right] = await Promise.all([leftPromise, rightPromise]);
+    const [leftBody, rightBody] = (await Promise.all([left.json(), right.json()])) as Array<{
+      checkoutAttemptId?: string;
+      externalReference?: string;
+      summaryToken?: string;
+    }>;
+
+    expect(left.status).toBe(200);
+    expect(right.status).toBe(200);
+    expect(leftBody.checkoutAttemptId).toBe(attemptA);
+    expect(rightBody.checkoutAttemptId).toBe(attemptA);
+    expect(rightBody.externalReference).toBe(leftBody.externalReference);
+    expect(rightBody.summaryToken).toBe(leftBody.summaryToken);
+    expect(mpBodies).toHaveLength(1);
+    expect(mpIdempotencyKeys).toHaveLength(1);
+    expect(mpIdempotencyKeys[0]).toMatch(/^[a-f0-9]{64}$/);
     fetchMock.mockRestore();
   });
 

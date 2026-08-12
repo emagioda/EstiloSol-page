@@ -7,6 +7,7 @@ import {
   clearBrowserCheckoutAttemptForOrder,
   getOrCreateBrowserCheckoutAttempt,
   readStoredCheckoutAttempt,
+  rebindBrowserCheckoutAttempt,
   submitCheckoutAttempt,
 } from "./checkoutAttempt";
 
@@ -78,12 +79,23 @@ describe("AUD3 browser checkout attempts", () => {
     expect(readStoredCheckoutAttempt()).toBeNull();
   });
 
-  it("AUD3-CLIENT-IDEM-08 converges same-payload tab calls on one stored attempt", async () => {
+  it("AUD3-CLIENT-IDEM-08 coordinates overlapping calls in one storage realm", async () => {
     const [left, right] = await Promise.all([
       getOrCreateBrowserCheckoutAttempt(checkoutPayload()),
       getOrCreateBrowserCheckoutAttempt(checkoutPayload()),
     ]);
     expect(left.attemptId).toBe(right.attemptId);
+  });
+
+  it("AUD3-CLIENT-IDEM-11 persists a server-selected canonical attempt", async () => {
+    const requested = await getOrCreateBrowserCheckoutAttempt(checkoutPayload());
+    bindCheckoutAttemptExternalReference(requested.attemptId, "es-20260811-requested");
+    const rebound = rebindBrowserCheckoutAttempt(requested, "ca_server_canonical");
+
+    expect(rebound.attemptId).toBe("ca_server_canonical");
+    expect(readStoredCheckoutAttempt()).toEqual(rebound);
+    expect(rebound.fingerprint).toBe(requested.fingerprint);
+    expect(rebound.externalReference).toBeUndefined();
   });
 
   it("AUD3-CLIENT-IDEM-09 recovers from corrupt localStorage", async () => {
@@ -111,11 +123,17 @@ describe("AUD3 browser checkout attempts", () => {
       .fn()
       .mockImplementationOnce(async (_url: string, init: RequestInit) => {
         requestBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-        return new Response(JSON.stringify({ code: "CHECKOUT_ATTEMPT_IN_PROGRESS" }), { status: 409 });
+        return new Response(JSON.stringify({
+          code: "CHECKOUT_ATTEMPT_IN_PROGRESS",
+          checkoutAttemptId: "ca_server_canonical",
+        }), { status: 409 });
       })
       .mockImplementationOnce(async (_url: string, init: RequestInit) => {
         requestBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-        return new Response(JSON.stringify({ externalReference: "es-20260811-order-a" }), { status: 200 });
+        return new Response(JSON.stringify({
+          checkoutAttemptId: "ca_server_canonical",
+          externalReference: "es-20260811-order-a",
+        }), { status: 200 });
       });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -127,6 +145,9 @@ describe("AUD3 browser checkout attempts", () => {
 
     expect(result.response.status).toBe(200);
     expect(requestBodies).toHaveLength(2);
-    expect(requestBodies[0].checkoutAttemptId).toBe(requestBodies[1].checkoutAttemptId);
+    expect(requestBodies[0].checkoutAttemptId).not.toBe("ca_server_canonical");
+    expect(requestBodies[1].checkoutAttemptId).toBe("ca_server_canonical");
+    expect(result.attempt.attemptId).toBe("ca_server_canonical");
+    expect(readStoredCheckoutAttempt()?.attemptId).toBe("ca_server_canonical");
   });
 });

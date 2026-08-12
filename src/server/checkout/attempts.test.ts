@@ -4,6 +4,7 @@ import type { Order } from "@/src/server/orders/types";
 import type { ParsedCheckoutBody } from "@/src/server/validation/payments";
 import {
   CheckoutAttemptConflictError,
+  CHECKOUT_ATTEMPT_COORDINATION_TTL_SECONDS,
   acquireCheckoutAttemptLease,
   beginCheckoutAttempt,
   buildCheckoutAttemptFingerprint,
@@ -197,6 +198,7 @@ describe("AUD3 checkout attempt claims", () => {
       {
         kind: "mercadopago",
         response: {
+          checkoutAttemptId: prepared.checkoutAttemptId,
           id: "pref-1",
           initPoint: "https://mp.example/init",
           externalReference: prepared.externalReference,
@@ -208,5 +210,65 @@ describe("AUD3 checkout attempt claims", () => {
     await releaseCheckoutAttemptLease(id, owner!);
 
     await expect(beginCheckoutAttempt(id, fingerprint)).resolves.toMatchObject({ outcome: "replay" });
+  });
+
+  it("AUD3-IDM-006 allows a new identical purchase after the canonical attempt completes", async () => {
+    const fingerprint = buildCheckoutAttemptFingerprint(checkoutBody());
+    const firstId = attemptId("intentional-first");
+    const secondId = attemptId("intentional-second");
+    const first = await beginCheckoutAttempt(firstId, fingerprint);
+    expect(first).toMatchObject({ outcome: "claimed" });
+    if (first.outcome !== "claimed") throw new Error("Expected first attempt claim");
+
+    const prepared = await prepareCheckoutAttempt(
+      first.attempt,
+      orderForAttempt(first.attempt),
+      first.ownerToken
+    );
+    await completeCheckoutAttempt(
+      prepared,
+      {
+        kind: "mercadopago",
+        response: {
+          checkoutAttemptId: prepared.checkoutAttemptId,
+          id: "pref-intentional-first",
+          initPoint: "https://mp.example/intentional-first",
+          externalReference: prepared.externalReference,
+          summaryToken: prepared.summaryToken,
+        },
+      },
+      first.ownerToken
+    );
+    await releaseCheckoutAttemptLease(first.attempt.checkoutAttemptId, first.ownerToken);
+
+    const second = await beginCheckoutAttempt(secondId, fingerprint);
+    expect(second).toMatchObject({ outcome: "claimed" });
+    expect(second.attempt.checkoutAttemptId).toBe(secondId);
+    expect(second.attempt.externalReference).not.toBe(first.attempt.externalReference);
+    if (second.outcome === "claimed") {
+      await releaseCheckoutAttemptLease(second.attempt.checkoutAttemptId, second.ownerToken);
+    }
+  });
+
+  it("bounds abandoned cross-tab coordination to its short TTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-11T12:00:00Z"));
+    const fingerprint = buildCheckoutAttemptFingerprint(checkoutBody({ notes: "ttl-window" }));
+    const firstId = attemptId("coordination-ttl-first");
+    const secondId = attemptId("coordination-ttl-second");
+    const first = await beginCheckoutAttempt(firstId, fingerprint);
+    expect(first).toMatchObject({ outcome: "claimed" });
+    if (first.outcome !== "claimed") throw new Error("Expected first attempt claim");
+    await releaseCheckoutAttemptLease(first.attempt.checkoutAttemptId, first.ownerToken);
+
+    vi.advanceTimersByTime((CHECKOUT_ATTEMPT_COORDINATION_TTL_SECONDS + 1) * 1_000);
+    const second = await beginCheckoutAttempt(secondId, fingerprint);
+
+    expect(second).toMatchObject({ outcome: "claimed" });
+    expect(second.attempt.checkoutAttemptId).toBe(secondId);
+    expect(second.attempt.externalReference).not.toBe(first.attempt.externalReference);
+    if (second.outcome === "claimed") {
+      await releaseCheckoutAttemptLease(second.attempt.checkoutAttemptId, second.ownerToken);
+    }
   });
 });

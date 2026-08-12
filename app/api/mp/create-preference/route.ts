@@ -69,9 +69,18 @@ const attemptErrorResponse = (error: unknown) => {
 
 const replayMpResult = (attempt: CheckoutAttemptRecord) => {
   if (attempt.result?.kind !== "mercadopago") {
-    return NextResponse.json({ error: "El intento de checkout no es compatible." }, { status: 409 });
+    return NextResponse.json(
+      {
+        error: "El intento de checkout no es compatible.",
+        checkoutAttemptId: attempt.checkoutAttemptId,
+      },
+      { status: 409 }
+    );
   }
-  return NextResponse.json(attempt.result.response, { status: 200 });
+  return NextResponse.json(
+    { ...attempt.result.response, checkoutAttemptId: attempt.checkoutAttemptId },
+    { status: 200 }
+  );
 };
 
 export async function POST(request: NextRequest) {
@@ -134,6 +143,7 @@ export async function POST(request: NextRequest) {
       {
         error: "Tu pago todavia se esta preparando.",
         code: CHECKOUT_ATTEMPT_IN_PROGRESS,
+        checkoutAttemptId: beginning.attempt.checkoutAttemptId,
       },
       { status: 409 }
     );
@@ -150,7 +160,10 @@ export async function POST(request: NextRequest) {
         route: "create-preference",
         missing: envStatus.missing,
       });
-      return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+      return NextResponse.json(
+        { error: "Server misconfigured", checkoutAttemptId: attempt.checkoutAttemptId },
+        { status: 500 }
+      );
     }
 
     let order = restoreCheckoutOrder(attempt, body);
@@ -161,7 +174,10 @@ export async function POST(request: NextRequest) {
         body.deliveryMethod === "pickup" &&
         !getActivePickupPointById(fulfillmentConfig, body.fulfillment.pickupPointId || "")
       ) {
-        return NextResponse.json({ error: "Punto de encuentro inválido." }, { status: 400 });
+        return NextResponse.json(
+          { error: "Punto de encuentro inválido.", checkoutAttemptId: attempt.checkoutAttemptId },
+          { status: 400 }
+        );
       }
 
       const catalog = await getAuthoritativeProductsCatalog().catch((error) => {
@@ -174,7 +190,10 @@ export async function POST(request: NextRequest) {
       if (!catalog) {
         await safeMetric("checkout.preference.catalog_unavailable", { route: "create-preference" });
         return NextResponse.json(
-          { error: "No se pudo validar el catalogo de productos" },
+          {
+            error: "No se pudo validar el catalogo de productos",
+            checkoutAttemptId: attempt.checkoutAttemptId,
+          },
           { status: 503 }
         );
       }
@@ -187,6 +206,7 @@ export async function POST(request: NextRequest) {
             error: invalidProductsMessage(inventory.errors),
             code: primaryError.code,
             invalidProducts: inventory.errors,
+            checkoutAttemptId: attempt.checkoutAttemptId,
           },
           { status: 400 }
         );
@@ -209,7 +229,10 @@ export async function POST(request: NextRequest) {
       });
       if (!built.order) {
         return NextResponse.json(
-          { error: "No se pudo construir la orden con los datos de entrega." },
+          {
+            error: "No se pudo construir la orden con los datos de entrega.",
+            checkoutAttemptId: attempt.checkoutAttemptId,
+          },
           { status: 400 }
         );
       }
@@ -261,7 +284,13 @@ export async function POST(request: NextRequest) {
         status: mpAttempt.response.status,
         malformed: mpAttempt.response.ok,
       });
-      return NextResponse.json({ error: "No se pudo crear la preferencia de pago" }, { status: 502 });
+      return NextResponse.json(
+        {
+          error: "No se pudo crear la preferencia de pago",
+          checkoutAttemptId: attempt.checkoutAttemptId,
+        },
+        { status: 502 }
+      );
     }
 
     await assertCheckoutAttemptLeaseOwner(attempt.checkoutAttemptId, ownerToken);
@@ -281,6 +310,7 @@ export async function POST(request: NextRequest) {
           : {}),
         externalReference: order.externalReference,
         summaryToken: order.summaryToken,
+        checkoutAttemptId: attempt.checkoutAttemptId,
       },
     };
 
@@ -308,6 +338,7 @@ export async function POST(request: NextRequest) {
         error: sideEffectsStarted
           ? "No pudimos confirmar el resultado. Reintentaremos la misma operacion."
           : "No pudimos iniciar la operacion de forma segura. Intenta nuevamente.",
+        checkoutAttemptId: attempt.checkoutAttemptId,
       },
       { status: sideEffectsStarted ? 502 : 503 }
     );
