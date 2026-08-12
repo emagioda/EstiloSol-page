@@ -113,3 +113,58 @@ describe("PR 2 authoritative concurrency simulations", () => {
     expect(applied).toBe(1);
   });
 });
+
+describe("AUD3 Next inventory result contract", () => {
+  it("AUD3-NEXT-INV-01 APPLIED becomes deducted", async () => {
+    const result = await attemptInventoryForPaidOrder(order("aud3-next-01"), {
+      decrementStock: vi.fn(async () => ({
+        deduped: false,
+        updated: [{ productId: "p1", previousQty: 2, nextQty: 1 }],
+      })),
+      invalidateCatalog: noCache,
+      now: () => 101,
+    });
+    expect(result).toEqual({ status: "deducted", stockDeductedAt: 101, deduped: false });
+  });
+
+  it("AUD3-NEXT-INV-02 ALREADY_APPLIED becomes deducted", async () => {
+    const result = await attemptInventoryForPaidOrder(order("aud3-next-02"), {
+      decrementStock: vi.fn(async () => ({ deduped: true, updated: [] })),
+      invalidateCatalog: noCache,
+      now: () => 102,
+    });
+    expect(result).toEqual({ status: "deducted", stockDeductedAt: 102, deduped: true });
+  });
+
+  it("AUD3-NEXT-INV-03 INSUFFICIENT_STOCK remains a deterministic conflict", async () => {
+    const result = await attemptInventoryForPaidOrder(order("aud3-next-03"), {
+      decrementStock: vi.fn(async () => {
+        throw new InventoryOperationError({ code: "INSUFFICIENT_STOCK", message: "insufficient" });
+      }),
+      invalidateCatalog: noCache,
+      now: () => 103,
+    });
+    expect(result).toEqual({ status: "conflict", issueCode: "INSUFFICIENT_STOCK", issueAt: 103 });
+  });
+
+  it("AUD3-NEXT-INV-04 technical or uncertain failures remain error", async () => {
+    const timeout = new Error("timed out after atomic commit");
+    timeout.name = "AbortError";
+    const result = await attemptInventoryForPaidOrder(order("aud3-next-04"), {
+      decrementStock: vi.fn(async () => { throw timeout; }),
+      invalidateCatalog: noCache,
+      now: () => 104,
+    });
+    expect(result).toEqual({ status: "error", issueCode: "SHEETS_TIMEOUT", issueAt: 104 });
+  });
+
+  it("AUD3-NEXT-INV-05 deducted evidence never retries or regresses to error", async () => {
+    const decrementStock = vi.fn(async () => { throw new Error("must not run"); });
+    const result = await attemptInventoryForPaidOrder({
+      ...order("aud3-next-05"),
+      stockDeductedAt: 500,
+    }, { decrementStock, invalidateCatalog: noCache, now: () => 105 });
+    expect(result).toEqual({ status: "deducted", stockDeductedAt: 500, deduped: true });
+    expect(decrementStock).not.toHaveBeenCalled();
+  });
+});

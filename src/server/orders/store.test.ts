@@ -195,6 +195,28 @@ describe("PR 2 order store inventory state", () => {
     expect(updated?.inventoryIssueAt).toBeUndefined();
   });
 
+  it("AUD3-NEXT-INV-06 admin retry after a lost response reconciles ALREADY_APPLIED to deducted", async () => {
+    const timeout = timeoutAfterCommit();
+    vi.mocked(decrementProductsStockInSheet)
+      .mockRejectedValueOnce(timeout)
+      .mockResolvedValueOnce({ deduped: true, updated: [] });
+    const order = makeOrder();
+    await createOrder(order);
+    expect(await approve(order)).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "error",
+      inventoryIssueCode: "SHEETS_TIMEOUT",
+    });
+
+    const retried = await retryPaidOrderInventory(order.externalReference);
+    expect(retried).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: expect.any(Number),
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(2);
+  });
+
   it("PR2-STORE-10 deduped authoritative response is deducted", async () => {
     vi.mocked(decrementProductsStockInSheet).mockResolvedValueOnce({ deduped: true, updated: [] });
     const order = makeOrder();

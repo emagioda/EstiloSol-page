@@ -144,6 +144,7 @@ describe("inventory mutation contract", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({
         ok: true,
+        outcome: "APPLIED",
         deduped: false,
         updated: [{ productId: "a", previousQty: 3, nextQty: 0 }],
       }), { status: 200 }),
@@ -214,6 +215,50 @@ describe("inventory mutation contract", () => {
     await expect(
       decrementProductsStockInSheet("order-deduped", [{ productId: "a", qty: 1 }]),
     ).resolves.toEqual({ deduped: true, updated: [] });
+  });
+
+  it("accepts the explicit ALREADY_APPLIED outcome and preserves old response compatibility", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, outcome: "ALREADY_APPLIED", deduped: true }), { status: 200 }),
+    );
+
+    await expect(
+      decrementProductsStockInSheet("order-already-applied", [{ productId: "a", qty: 1 }]),
+    ).resolves.toEqual({ deduped: true, updated: [] });
+  });
+
+  it("preserves an idempotency fingerprint conflict as a deterministic inventory error", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        ok: false,
+        error: "Inventory idempotency conflict",
+        code: "INVENTORY_IDEMPOTENCY_CONFLICT",
+      }), { status: 200 }),
+    );
+
+    await expect(
+      decrementProductsStockInSheet("order-fingerprint-conflict", [{ productId: "a", qty: 1 }]),
+    ).rejects.toMatchObject({ code: "INVENTORY_IDEMPOTENCY_CONFLICT", origin: "domain" });
+  });
+
+  it("rejects inconsistent explicit inventory outcomes as uncertain response errors", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        ok: true,
+        outcome: "APPLIED",
+        updated: [{ productId: "a", previousQty: 2, nextQty: 1 }],
+      }), { status: 200 }),
+    );
+
+    await expect(
+      decrementProductsStockInSheet("order-inconsistent-outcome", [{ productId: "a", qty: 1 }]),
+    ).rejects.toMatchObject({ code: "INVENTORY_VALIDATION_FAILED", origin: "response" });
   });
 });
 

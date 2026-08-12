@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import vm from "node:vm";
@@ -16,15 +17,35 @@ type ProductRow = {
 
 type HarnessOptions = {
   activeHeader?: "active" | "activo" | "is_active";
+  batchFailure?: "before-commit" | "after-commit";
+  batchFailureAtRequest?: number;
   cachePut?: () => void;
+  journalHeaders?: string[];
+  journalRows?: unknown[][];
+  journalReadFailure?: boolean;
+  lockFailure?: boolean;
+  sheetsServiceEnabled?: boolean;
 };
 
 type WriteRecord = { sheet: string; row: number; column: number; value: unknown };
+type SheetState = {
+  id: number;
+  name: string;
+  headers: unknown[];
+  rows: unknown[][];
+  hidden?: boolean;
+};
 
 const scriptSource = readFileSync(
   resolve(process.cwd(), "scripts/apps-script/estilo-sol-api-v4.gs"),
   "utf8",
 );
+const scriptManifest = JSON.parse(readFileSync(
+  resolve(process.cwd(), "scripts/apps-script/appsscript.json"),
+  "utf8",
+)) as {
+  dependencies?: { enabledAdvancedServices?: Array<Record<string, unknown>> };
+};
 
 const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => {
   const productHeaders = [
@@ -52,6 +73,9 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
   const salesHeaders = ["nro_de_compra", "items_json"];
   const salesRows: unknown[][] = [];
   const writes: WriteRecord[] = [];
+  const batchCalls: Array<{ requests: Array<Record<string, unknown>> }> = [];
+  const logs: Array<Record<string, unknown>> = [];
+  let batchFailure = options.batchFailure;
   const properties = new Map<string, string>([
     ["SPREADSHEET_ID", "test-spreadsheet"],
     ["SHEETS_READ_TOKEN", "read-token"],
@@ -59,34 +83,151 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
     ["SHEETS_ADMIN_TOKEN", "admin-token"],
   ]);
   const locks = { waited: 0, released: 0 };
+  const states = new Map<string, SheetState>([
+    ["products", { id: 101, name: "products", headers: productHeaders, rows: productRows }],
+    ["ventas", { id: 102, name: "ventas", headers: salesHeaders, rows: salesRows }],
+  ]);
+  if (options.journalHeaders || options.journalRows) {
+    states.set("_inventory_transactions", {
+      id: 103,
+      name: "_inventory_transactions",
+      headers: options.journalHeaders ?? ["order_id", "demand_fingerprint", "applied_at", "state"],
+      rows: options.journalRows ?? [],
+      hidden: true,
+    });
+  }
 
-  const buildSheet = (name: string, headers: string[], rows: unknown[][]) => ({
-    getLastColumn: () => headers.length,
-    getLastRow: () => rows.length + 1,
-    getDataRange: () => ({ getValues: () => [headers.slice(), ...rows.map((row) => row.slice())] }),
+  const buildSheet = (state: SheetState) => ({
+    getSheetId: () => state.id,
+    getLastColumn: () => state.headers.length,
+    getLastRow: () => state.headers.length === 0 ? 0 : state.rows.length + 1,
+    getDataRange: () => ({
+      getValues: () => [state.headers.slice(), ...state.rows.map((row) => row.slice())],
+    }),
     getRange: (row: number, column: number, rowCount = 1, columnCount = 1) => ({
       getValues: () => {
-        if (row === 1) return [headers.slice(column - 1, column - 1 + columnCount)];
-        return rows
+        if (options.journalReadFailure && state.name === "_inventory_transactions") {
+          throw new Error("simulated journal read crash");
+        }
+        if (row === 1) return [state.headers.slice(column - 1, column - 1 + columnCount)];
+        return state.rows
           .slice(row - 2, row - 2 + rowCount)
           .map((sourceRow) => sourceRow.slice(column - 1, column - 1 + columnCount));
       },
       setValue: (value: unknown) => {
-        rows[row - 2][column - 1] = value;
-        writes.push({ sheet: name, row, column, value });
+        state.rows[row - 2][column - 1] = value;
+        writes.push({ sheet: state.name, row, column, value });
       },
     }),
     appendRow: (values: unknown[]) => {
-      rows.push(values.slice());
+      state.rows.push(values.slice());
     },
   });
 
-  const productSheet = buildSheet("products", productHeaders, productRows);
-  const salesSheet = buildSheet("ventas", salesHeaders, salesRows);
-  const sheets = new Map<string, ReturnType<typeof buildSheet>>([
-    ["products", productSheet],
-    ["ventas", salesSheet],
-  ]);
+  const spreadsheet = {
+    getSheetByName: (name: string) => {
+      const state = states.get(name);
+      return state ? buildSheet(state) : null;
+    },
+    getSheets: () => [...states.values()].map(buildSheet),
+  };
+
+  const decodeCell = (cell: { userEnteredValue?: Record<string, unknown> }) => {
+    const value = cell.userEnteredValue ?? {};
+    if (Object.hasOwn(value, "numberValue")) return value.numberValue;
+    if (Object.hasOwn(value, "boolValue")) return value.boolValue;
+    return value.stringValue ?? "";
+  };
+
+  const applyBatch = (body: { requests: Array<Record<string, unknown>> }) => {
+    batchCalls.push(structuredClone(body));
+    if (batchFailure === "before-commit") {
+      batchFailure = undefined;
+      throw new Error("simulated batch failure before commit");
+    }
+    if (typeof options.batchFailureAtRequest === "number") {
+      throw new Error(`simulated invalid subrequest ${options.batchFailureAtRequest}`);
+    }
+
+    const staged = new Map<string, SheetState>();
+    for (const [name, state] of states) {
+      staged.set(name, {
+        ...state,
+        headers: state.headers.slice(),
+        rows: state.rows.map((row) => row.slice()),
+      });
+    }
+    const findById = (sheetId: number) => [...staged.values()].find((state) => state.id === sheetId);
+    const stagedWrites: WriteRecord[] = [];
+
+    body.requests.forEach((request) => {
+      const addSheet = request.addSheet as { properties: { sheetId: number; title: string; hidden?: boolean } } | undefined;
+      if (addSheet) {
+        if (staged.has(addSheet.properties.title) || findById(addSheet.properties.sheetId)) throw new Error("duplicate sheet");
+        staged.set(addSheet.properties.title, {
+          id: addSheet.properties.sheetId,
+          name: addSheet.properties.title,
+          headers: [],
+          rows: [],
+          hidden: addSheet.properties.hidden,
+        });
+        return;
+      }
+
+      const appendCells = request.appendCells as {
+        sheetId: number;
+        rows: Array<{ values: Array<{ userEnteredValue?: Record<string, unknown> }> }>;
+      } | undefined;
+      if (appendCells) {
+        const state = findById(appendCells.sheetId);
+        if (!state) throw new Error("missing sheet for append");
+        appendCells.rows.forEach((row) => {
+          const values = row.values.map(decodeCell);
+          if (state.headers.length === 0) state.headers = values;
+          else state.rows.push(values);
+        });
+        return;
+      }
+
+      const updateCells = request.updateCells as {
+        start: { sheetId: number; rowIndex: number; columnIndex: number };
+        rows: Array<{ values: Array<{ userEnteredValue?: Record<string, unknown> }> }>;
+      } | undefined;
+      if (!updateCells) throw new Error("unsupported request");
+      const state = findById(updateCells.start.sheetId);
+      if (!state) throw new Error("missing sheet for update");
+      updateCells.rows.forEach((row, rowOffset) => {
+        row.values.forEach((cell, columnOffset) => {
+          const rowIndex = updateCells.start.rowIndex + rowOffset;
+          const columnIndex = updateCells.start.columnIndex + columnOffset;
+          const target = rowIndex === 0 ? state.headers : state.rows[rowIndex - 1];
+          if (!target) throw new Error("invalid update row");
+          const value = decodeCell(cell);
+          target[columnIndex] = value;
+          stagedWrites.push({ sheet: state.name, row: rowIndex + 1, column: columnIndex + 1, value });
+        });
+      });
+    });
+
+    for (const name of [...states.keys()]) {
+      if (!staged.has(name)) states.delete(name);
+    }
+    for (const [name, stagedState] of staged) {
+      const existing = states.get(name);
+      if (existing) {
+        existing.headers.splice(0, existing.headers.length, ...stagedState.headers);
+        existing.rows.splice(0, existing.rows.length, ...stagedState.rows.map((row) => row.slice()));
+        existing.hidden = stagedState.hidden;
+      } else {
+        states.set(name, stagedState);
+      }
+    }
+    writes.push(...stagedWrites);
+    if (batchFailure === "after-commit") {
+      batchFailure = undefined;
+      throw new Error("simulated response loss after commit");
+    }
+  };
   const scriptProperties = {
     getProperty: (key: string) => properties.get(key) ?? null,
     setProperty: (key: string, value: string) => properties.set(key, String(value)),
@@ -95,8 +236,16 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
   const context = vm.createContext({
     SpreadsheetApp: {
       flush: () => undefined,
-      openById: () => ({ getSheetByName: (name: string) => sheets.get(name) ?? null }),
-      getActiveSpreadsheet: () => ({ getSheetByName: (name: string) => sheets.get(name) ?? null }),
+      openById: () => spreadsheet,
+      getActiveSpreadsheet: () => spreadsheet,
+    },
+    Sheets: options.sheetsServiceEnabled === false ? undefined : {
+      Spreadsheets: { batchUpdate: applyBatch },
+    },
+    Utilities: {
+      DigestAlgorithm: { SHA_256: "SHA_256" },
+      Charset: { UTF_8: "UTF_8" },
+      computeDigest: (_algorithm: string, value: string) => [...createHash("sha256").update(value, "utf8").digest()],
     },
     PropertiesService: { getScriptProperties: () => scriptProperties },
     CacheService: {
@@ -108,7 +257,10 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
     },
     LockService: {
       getScriptLock: () => ({
-        waitLock: () => { locks.waited += 1; },
+        waitLock: () => {
+          locks.waited += 1;
+          if (options.lockFailure) throw new Error("simulated crash before lock acquisition");
+        },
         releaseLock: () => { locks.released += 1; },
       }),
     },
@@ -120,11 +272,14 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
         getContent() { return this.content; },
       }),
     },
-    console: { error: () => undefined },
+    console: {
+      error: () => undefined,
+      info: (content: string) => logs.push(JSON.parse(content) as Record<string, unknown>),
+    },
   });
 
   vm.runInContext(
-    `${scriptSource}\n;globalThis.__inventoryApi = { normalizeStockItems_, handleDecrementStock, handleAppendOrderAndDecrementStock, normalizeProduct, buildProductsPayloadObject, doGet, doPost };`,
+    `${scriptSource}\n;globalThis.__inventoryApi = { normalizeStockItems_, inventoryDemandFingerprint_, resolveInventoryJournal_, planStockDecrement_, buildAtomicInventoryRequests_, commitAtomicInventoryRequests_, handleDecrementStock, handleAppendOrderAndDecrementStock, normalizeProduct, buildProductsPayloadObject, doGet, doPost };`,
     context,
   );
 
@@ -140,6 +295,10 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
     writes,
     stockWrites,
     locks,
+    batchCalls,
+    logs,
+    states,
+    journalRows: () => states.get("_inventory_transactions")?.rows ?? [],
   };
 };
 
@@ -154,6 +313,19 @@ const availableProduct = (overrides: Partial<ProductRow> = {}): ProductRow => ({
 
 const decrement = (api: Record<string, (...args: unknown[]) => unknown>, orderId: string, items: unknown[]) =>
   api.handleDecrementStock({ sheet: "products", orderId, items }) as Record<string, unknown>;
+
+const postDecrement = (harness: ReturnType<typeof createHarness>, orderId: string, items: unknown[]) => {
+  const output = harness.api.doPost({
+    postData: { contents: JSON.stringify({
+      action: "decrementStock",
+      token: "write-token",
+      sheet: "products",
+      orderId,
+      items,
+    }) },
+  }) as { getContent: () => string };
+  return JSON.parse(output.getContent()) as Record<string, unknown>;
+};
 
 const expectInventoryError = (operation: () => unknown, code: string) => {
   try {
@@ -286,12 +458,15 @@ describe("Apps Script authoritative inventory planning", () => {
     expect(harness.properties.has("stock_deducted:order-15")).toBe(false);
   });
 
-  it("AS-16 success writes once per product and creates dedupe last", () => {
+  it("AS-16 success writes once per product and creates the durable journal marker atomically", () => {
     const harness = createHarness([availableProduct({ stockQty: 2 })]);
     const result = decrement(harness.api, "order-16", [{ productId: "a", qty: 1 }]);
-    expect(result).toMatchObject({ ok: true, deduped: false });
+    expect(result).toMatchObject({ ok: true, outcome: "APPLIED", deduped: false });
     expect(harness.stockWrites()).toHaveLength(1);
-    expect(harness.properties.has("stock_deducted:order-16")).toBe(true);
+    expect(harness.properties.has("stock_deducted:order-16")).toBe(false);
+    expect(harness.journalRows()).toEqual([
+      ["order-16", expect.stringMatching(/^[a-f0-9]{64}$/), expect.any(String), "APPLIED"],
+    ]);
   });
 
   it("AS-17 replays a successful order id without another write", () => {
@@ -567,4 +742,454 @@ describe("Apps Script authoritative inventory planning", () => {
       expect(payload.items[0].authoritative_active).toBe(expected);
     },
   );
+});
+
+describe("AUD3 crash-safe inventory matrix", () => {
+  it("versions the Advanced Sheets Service required by the atomic primitive", () => {
+    expect(scriptManifest.dependencies?.enabledAdvancedServices).toContainEqual({
+      userSymbol: "Sheets",
+      serviceId: "sheets",
+      version: "v4",
+    });
+  });
+
+  it("AUD3-INV-01 applies one valid item", () => {
+    const harness = createHarness([availableProduct({ stockQty: 2 })]);
+    expect(decrement(harness.api, "aud3-inv-01", [{ productId: "a", qty: 1 }])).toMatchObject({
+      outcome: "APPLIED",
+      deduped: false,
+      updated: [{ productId: "a", previousQty: 2, nextQty: 1 }],
+    });
+    expect(harness.productRows[0][4]).toBe(1);
+  });
+
+  it("AUD3-INV-02 applies every item in a valid multi-item demand", () => {
+    const harness = createHarness([
+      availableProduct({ id: "a", stockQty: 3 }),
+      availableProduct({ id: "b", stockQty: 2 }),
+      availableProduct({ id: "c", stockQty: 4 }),
+    ]);
+    const result = decrement(harness.api, "aud3-inv-02", [
+      { productId: "a", qty: 1 },
+      { productId: "b", qty: 2 },
+      { productId: "c", qty: 3 },
+    ]);
+    expect(result).toMatchObject({ outcome: "APPLIED", deduped: false });
+    expect(harness.productRows.map((row) => row[4])).toEqual([2, 0, 1]);
+  });
+
+  it("AUD3-INV-03 aggregates repeated product ids before validation and commit", () => {
+    const harness = createHarness([availableProduct({ stockQty: 5 })]);
+    const result = decrement(harness.api, "aud3-inv-03", [
+      { productId: "a", qty: 2 },
+      { productId: "A", qty: 3 },
+    ]);
+    expect(result.updated).toEqual([{ productId: "a", previousQty: 5, nextQty: 0 }]);
+    expect(harness.stockWrites()).toHaveLength(1);
+  });
+
+  it("AUD3-INV-04 insufficient stock on the first item produces zero writes", () => {
+    const harness = createHarness([
+      availableProduct({ id: "a", stockQty: 1 }),
+      availableProduct({ id: "b", stockQty: 2 }),
+      availableProduct({ id: "c", stockQty: 2 }),
+    ]);
+    expectInventoryError(() => decrement(harness.api, "aud3-inv-04", [
+      { productId: "a", qty: 2 },
+      { productId: "b", qty: 1 },
+      { productId: "c", qty: 1 },
+    ]), "INSUFFICIENT_STOCK");
+    expect(harness.batchCalls).toHaveLength(0);
+    expect(harness.productRows.map((row) => row[4])).toEqual([1, 2, 2]);
+  });
+
+  it("AUD3-INV-05 insufficient stock on the middle item produces zero writes", () => {
+    const harness = createHarness([
+      availableProduct({ id: "a", stockQty: 2 }),
+      availableProduct({ id: "b", stockQty: 1 }),
+      availableProduct({ id: "c", stockQty: 2 }),
+    ]);
+    expectInventoryError(() => decrement(harness.api, "aud3-inv-05", [
+      { productId: "a", qty: 1 },
+      { productId: "b", qty: 2 },
+      { productId: "c", qty: 1 },
+    ]), "INSUFFICIENT_STOCK");
+    expect(harness.batchCalls).toHaveLength(0);
+    expect(harness.productRows.map((row) => row[4])).toEqual([2, 1, 2]);
+  });
+
+  it("AUD3-INV-06 insufficient stock on the last item produces zero writes", () => {
+    const harness = createHarness([
+      availableProduct({ id: "a", stockQty: 2 }),
+      availableProduct({ id: "b", stockQty: 2 }),
+      availableProduct({ id: "c", stockQty: 1 }),
+    ]);
+    expectInventoryError(() => decrement(harness.api, "aud3-inv-06", [
+      { productId: "a", qty: 1 },
+      { productId: "b", qty: 1 },
+      { productId: "c", qty: 2 },
+    ]), "INSUFFICIENT_STOCK");
+    expect(harness.batchCalls).toHaveLength(0);
+    expect(harness.productRows.map((row) => row[4])).toEqual([2, 2, 1]);
+  });
+
+  it("AUD3-INV-07 inactive demand produces zero writes", () => {
+    const harness = createHarness([availableProduct({ active: false })]);
+    expectInventoryError(
+      () => decrement(harness.api, "aud3-inv-07", [{ productId: "a", qty: 1 }]),
+      "PRODUCT_INACTIVE",
+    );
+    expect(harness.batchCalls).toHaveLength(0);
+  });
+
+  it("AUD3-INV-08 missing product demand produces zero writes", () => {
+    const harness = createHarness([availableProduct()]);
+    expectInventoryError(
+      () => decrement(harness.api, "aud3-inv-08", [{ productId: "missing", qty: 1 }]),
+      "PRODUCT_NOT_FOUND",
+    );
+    expect(harness.batchCalls).toHaveLength(0);
+  });
+
+  it("AUD3-INV-09 duplicate catalog ids produce zero writes", () => {
+    const harness = createHarness([availableProduct(), availableProduct({ name: "duplicate" })]);
+    expectInventoryError(
+      () => decrement(harness.api, "aud3-inv-09", [{ productId: "a", qty: 1 }]),
+      "DUPLICATE_PRODUCT_ID",
+    );
+    expect(harness.batchCalls).toHaveLength(0);
+  });
+
+  it("AUD3-INV-10 invalid stock produces zero writes", () => {
+    const harness = createHarness([availableProduct({ stockQty: "NaN" })]);
+    expectInventoryError(
+      () => decrement(harness.api, "aud3-inv-10", [{ productId: "a", qty: 1 }]),
+      "INVALID_STOCK_QTY",
+    );
+    expect(harness.batchCalls).toHaveLength(0);
+  });
+
+  it("AUD3-INV-11 builds one atomic request containing every stock update", () => {
+    const harness = createHarness([
+      availableProduct({ id: "a", stockQty: 2 }),
+      availableProduct({ id: "b", stockQty: 3 }),
+    ]);
+    decrement(harness.api, "aud3-inv-11", [
+      { productId: "a", qty: 1 },
+      { productId: "b", qty: 2 },
+    ]);
+    const stockRequests = harness.batchCalls[0].requests.filter((request) => {
+      const update = request.updateCells as { start?: { sheetId?: number; columnIndex?: number } } | undefined;
+      return update?.start?.sheetId === 101 && update.start.columnIndex === 4;
+    });
+    expect(harness.batchCalls).toHaveLength(1);
+    expect(stockRequests).toHaveLength(2);
+    expect(harness.productRows.map((row) => row[4])).toEqual([1, 1]);
+  });
+
+  it("AUD3-INV-12 puts the durable order marker in the atomic request", () => {
+    const harness = createHarness([availableProduct()]);
+    decrement(harness.api, "aud3-inv-12", [{ productId: "a", qty: 1 }]);
+    expect(JSON.stringify(harness.batchCalls[0])).toContain("aud3-inv-12");
+    expect(harness.journalRows()).toEqual([
+      ["aud3-inv-12", expect.stringMatching(/^[a-f0-9]{64}$/), expect.any(String), "APPLIED"],
+    ]);
+  });
+
+  it("AUD3-INV-13 commits marker and all stock cells through one batchUpdate call", () => {
+    const harness = createHarness([
+      availableProduct({ id: "a" }),
+      availableProduct({ id: "b" }),
+    ]);
+    decrement(harness.api, "aud3-inv-13", [
+      { productId: "a", qty: 1 },
+      { productId: "b", qty: 1 },
+    ]);
+    expect(harness.batchCalls).toHaveLength(1);
+    expect(harness.stockWrites()).toHaveLength(2);
+    expect(harness.journalRows()).toHaveLength(1);
+  });
+
+  it("AUD3-INV-14 rejects an invalid atomic subrequest without partial application", () => {
+    const harness = createHarness([
+      availableProduct({ id: "a", stockQty: 2 }),
+      availableProduct({ id: "b", stockQty: 2 }),
+    ], { batchFailureAtRequest: 3 });
+    expect(() => decrement(harness.api, "aud3-inv-14", [
+      { productId: "a", qty: 1 },
+      { productId: "b", qty: 1 },
+    ])).toThrow("simulated invalid subrequest");
+    expect(harness.productRows.map((row) => row[4])).toEqual([2, 2]);
+    expect(harness.journalRows()).toHaveLength(0);
+  });
+
+  it("AUD3-INV-15 response loss after commit retries as ALREADY_APPLIED", () => {
+    const harness = createHarness([availableProduct({ stockQty: 2 })], { batchFailure: "after-commit" });
+    expect(() => decrement(harness.api, "aud3-inv-15", [{ productId: "a", qty: 1 }]))
+      .toThrow("simulated response loss");
+    const retry = decrement(harness.api, "aud3-inv-15", [{ productId: "a", qty: 1 }]);
+    expect(retry).toMatchObject({ outcome: "ALREADY_APPLIED", deduped: true });
+    expect(harness.productRows[0][4]).toBe(1);
+    expect(harness.stockWrites()).toHaveLength(1);
+  });
+
+  it("AUD3-INV-16 same-order retry leaves stock unchanged", () => {
+    const harness = createHarness([availableProduct({ stockQty: 3 })]);
+    decrement(harness.api, "aud3-inv-16", [{ productId: "a", qty: 2 }]);
+    const retry = decrement(harness.api, "aud3-inv-16", [{ productId: "a", qty: 2 }]);
+    expect(retry).toMatchObject({ outcome: "ALREADY_APPLIED", deduped: true });
+    expect(harness.productRows[0][4]).toBe(1);
+    expect(harness.batchCalls).toHaveLength(1);
+  });
+
+  it("AUD3-INV-17 same order with a different fingerprint conflicts without writes", () => {
+    const harness = createHarness([availableProduct({ stockQty: 5 })]);
+    decrement(harness.api, "aud3-inv-17", [{ productId: "a", qty: 1 }]);
+    expectInventoryError(
+      () => decrement(harness.api, "aud3-inv-17", [{ productId: "a", qty: 2 }]),
+      "INVENTORY_IDEMPOTENCY_CONFLICT",
+    );
+    expect(harness.productRows[0][4]).toBe(4);
+    expect(harness.batchCalls).toHaveLength(1);
+  });
+
+  it("AUD3-CRASH-01 crash before lock applies nothing", () => {
+    const harness = createHarness([availableProduct()], { lockFailure: true });
+    const output = harness.api.doPost({
+      postData: { contents: JSON.stringify({
+        action: "decrementStock",
+        token: "write-token",
+        orderId: "aud3-crash-01",
+        items: [{ productId: "a", qty: 1 }],
+      }) },
+    }) as { getContent: () => string };
+    expect(JSON.parse(output.getContent())).toMatchObject({ ok: false });
+    expect(harness.batchCalls).toHaveLength(0);
+    expect(harness.productRows[0][4]).toBe(3);
+  });
+
+  it("AUD3-CRASH-02 crash after lock and before validation applies nothing", () => {
+    const harness = createHarness([availableProduct()], {
+      journalHeaders: ["order_id", "demand_fingerprint", "applied_at", "state"],
+      journalReadFailure: true,
+    });
+    const output = harness.api.doPost({
+      postData: { contents: JSON.stringify({
+        action: "decrementStock",
+        token: "write-token",
+        orderId: "aud3-crash-02",
+        items: [{ productId: "a", qty: 1 }],
+      }) },
+    }) as { getContent: () => string };
+    expect(JSON.parse(output.getContent())).toMatchObject({ ok: false });
+    expect(harness.locks).toEqual({ waited: 1, released: 1 });
+    expect(harness.batchCalls).toHaveLength(0);
+  });
+
+  it("AUD3-CRASH-03 crash after validation but before commit applies nothing", () => {
+    const harness = createHarness([availableProduct()]);
+    const normalized = harness.api.normalizeStockItems_([{ productId: "a", qty: 1 }]);
+    const fingerprint = harness.api.inventoryDemandFingerprint_(normalized);
+    const plan = harness.api.planStockDecrement_(normalized);
+    const journal = harness.api.resolveInventoryJournal_(
+      { getSheetByName: () => null, getSheets: () => [{ getSheetId: () => 101 }] },
+      "aud3-crash-03",
+      fingerprint,
+    );
+    expect(harness.api.buildAtomicInventoryRequests_(
+      plan,
+      journal,
+      "aud3-crash-03",
+      fingerprint,
+      new Date().toISOString(),
+      null,
+    )).not.toHaveLength(0);
+    expect(() => { throw new Error("simulated crash before commit"); }).toThrow("before commit");
+    expect(harness.productRows[0][4]).toBe(3);
+    expect(harness.batchCalls).toHaveLength(0);
+  });
+
+  it("AUD3-CRASH-04 successful commit with lost response is resolved by its marker", () => {
+    const harness = createHarness([availableProduct({ stockQty: 2 })], { batchFailure: "after-commit" });
+    expect(() => decrement(harness.api, "aud3-crash-04", [{ productId: "a", qty: 1 }])).toThrow();
+    expect(decrement(harness.api, "aud3-crash-04", [{ productId: "a", qty: 1 }])).toMatchObject({
+      outcome: "ALREADY_APPLIED",
+    });
+    expect(harness.productRows[0][4]).toBe(1);
+  });
+
+  it("AUD3-CRASH-05 definite atomic commit failure applies nothing", () => {
+    const harness = createHarness([
+      availableProduct({ id: "a", stockQty: 2 }),
+      availableProduct({ id: "b", stockQty: 2 }),
+    ], { batchFailure: "before-commit" });
+    expect(() => decrement(harness.api, "aud3-crash-05", [
+      { productId: "a", qty: 1 },
+      { productId: "b", qty: 1 },
+    ])).toThrow("before commit");
+    expect(harness.productRows.map((row) => row[4])).toEqual([2, 2]);
+    expect(harness.journalRows()).toHaveLength(0);
+  });
+
+  it("AUD3-CONC-INV-01 serializes last-unit competitors to one applied and one insufficient", () => {
+    const harness = createHarness([availableProduct({ stockQty: 1 })]);
+    expect(postDecrement(harness, "aud3-conc-01-a", [{ productId: "a", qty: 1 }])).toMatchObject({
+      outcome: "APPLIED",
+    });
+    expect(postDecrement(harness, "aud3-conc-01-b", [{ productId: "a", qty: 1 }])).toMatchObject({
+      ok: false,
+      code: "INSUFFICIENT_STOCK",
+    });
+    expect(harness.productRows[0][4]).toBe(0);
+    expect(harness.journalRows()).toHaveLength(1);
+    expect(harness.locks).toEqual({ waited: 2, released: 2 });
+  });
+
+  it("AUD3-CONC-INV-02 preserves multi-item all-or-nothing for either winner", () => {
+    const aWins = createHarness([
+      availableProduct({ id: "p1", stockQty: 1 }),
+      availableProduct({ id: "p2", stockQty: 1 }),
+    ]);
+    expect(postDecrement(aWins, "aud3-conc-02-a", [
+      { productId: "p1", qty: 1 },
+      { productId: "p2", qty: 1 },
+    ])).toMatchObject({ outcome: "APPLIED" });
+    expect(postDecrement(aWins, "aud3-conc-02-b", [{ productId: "p2", qty: 1 }])).toMatchObject({
+      ok: false,
+      code: "INSUFFICIENT_STOCK",
+    });
+    expect(aWins.productRows.map((row) => row[4])).toEqual([0, 0]);
+    expect(aWins.locks).toEqual({ waited: 2, released: 2 });
+
+    const bWins = createHarness([
+      availableProduct({ id: "p1", stockQty: 1 }),
+      availableProduct({ id: "p2", stockQty: 1 }),
+    ]);
+    expect(postDecrement(bWins, "aud3-conc-02-b", [{ productId: "p2", qty: 1 }])).toMatchObject({
+      outcome: "APPLIED",
+    });
+    expect(postDecrement(bWins, "aud3-conc-02-a", [
+      { productId: "p1", qty: 1 },
+      { productId: "p2", qty: 1 },
+    ])).toMatchObject({ ok: false, code: "INSUFFICIENT_STOCK" });
+    expect(bWins.productRows.map((row) => row[4])).toEqual([1, 0]);
+    expect(bWins.locks).toEqual({ waited: 2, released: 2 });
+  });
+
+  it("AUD3-CONC-INV-03 same order reaches one mutation and one safe replay", () => {
+    const harness = createHarness([availableProduct({ stockQty: 2 })]);
+    const first = postDecrement(harness, "aud3-conc-03", [{ productId: "a", qty: 1 }]);
+    const second = postDecrement(harness, "aud3-conc-03", [{ productId: "a", qty: 1 }]);
+    expect(first).toMatchObject({ outcome: "APPLIED" });
+    expect(second).toMatchObject({ outcome: "ALREADY_APPLIED" });
+    expect(harness.batchCalls).toHaveLength(1);
+    expect(harness.productRows[0][4]).toBe(1);
+    expect(harness.locks).toEqual({ waited: 2, released: 2 });
+  });
+
+  it("AUD3-LEGACY-INV-01 legacy marker makes historical retries safe", () => {
+    const harness = createHarness([availableProduct({ stockQty: 2 })]);
+    harness.properties.set("stock_deducted:aud3-legacy-01", "2026-07-01T00:00:00.000Z");
+    expect(decrement(harness.api, "aud3-legacy-01", [{ productId: "a", qty: 2 }])).toMatchObject({
+      outcome: "ALREADY_APPLIED",
+      deduped: true,
+      legacyMarker: true,
+    });
+    expect(harness.productRows[0][4]).toBe(2);
+    expect(harness.batchCalls).toHaveLength(0);
+  });
+
+  it("AUD3-LEGACY-INV-02 new journal is authoritative without creating a second legacy marker", () => {
+    const harness = createHarness([availableProduct({ stockQty: 2 })]);
+    decrement(harness.api, "aud3-legacy-02", [{ productId: "a", qty: 1 }]);
+    expect(harness.properties.has("stock_deducted:aud3-legacy-02")).toBe(false);
+    expect(harness.journalRows()).toHaveLength(1);
+    expect(decrement(harness.api, "aud3-legacy-02", [{ productId: "a", qty: 1 }])).toMatchObject({
+      outcome: "ALREADY_APPLIED",
+      legacyMarker: false,
+    });
+  });
+
+  it("fails closed when the journal is corrupt or the Advanced Sheets service is missing", () => {
+    const corrupt = createHarness([availableProduct()], { journalHeaders: ["wrong"] });
+    expectInventoryError(
+      () => decrement(corrupt.api, "aud3-corrupt", [{ productId: "a", qty: 1 }]),
+      "INVENTORY_JOURNAL_INVALID",
+    );
+    expect(corrupt.productRows[0][4]).toBe(3);
+
+    const noService = createHarness([availableProduct()], { sheetsServiceEnabled: false });
+    expect(() => decrement(noService.api, "aud3-no-service", [{ productId: "a", qty: 1 }]))
+      .toThrow("Advanced Sheets service");
+    expect(noService.productRows[0][4]).toBe(3);
+  });
+
+  it("uses an order-independent SHA-256 demand fingerprint and structured non-PII events", () => {
+    const harness = createHarness([availableProduct({ id: "a" }), availableProduct({ id: "b" })]);
+    const first = harness.api.inventoryDemandFingerprint_([
+      { productId: "b", qty: 1 },
+      { productId: "a", qty: 2 },
+    ]);
+    const second = harness.api.inventoryDemandFingerprint_([
+      { productId: "A", qty: 2 },
+      { productId: "B", qty: 1 },
+    ]);
+    expect(first).toBe(second);
+    expect(first).toMatch(/^[a-f0-9]{64}$/);
+    decrement(harness.api, "aud3-logging", [{ productId: "a", qty: 1 }]);
+    expect(harness.logs.map((entry) => entry.event)).toEqual([
+      "inventory.apply.started",
+      "inventory.apply.applied",
+    ]);
+    expect(JSON.stringify(harness.logs)).not.toContain("token");
+  });
+
+  it("emits structured conflict and technical error outcomes", () => {
+    const conflict = createHarness([availableProduct({ stockQty: 1 })]);
+    expectInventoryError(
+      () => decrement(conflict.api, "aud3-log-conflict", [{ productId: "a", qty: 2 }]),
+      "INSUFFICIENT_STOCK",
+    );
+    expect(conflict.logs).toEqual([
+      { event: "inventory.apply.started", orderId: "aud3-log-conflict", productCount: 1 },
+      {
+        event: "inventory.apply.conflict",
+        orderId: "aud3-log-conflict",
+        productCount: 1,
+        code: "INSUFFICIENT_STOCK",
+      },
+    ]);
+
+    const uncertain = createHarness([availableProduct()], { batchFailure: "after-commit" });
+    expect(() => decrement(uncertain.api, "aud3-log-error", [{ productId: "a", qty: 1 }])).toThrow();
+    expect(uncertain.logs.at(-1)).toEqual({
+      event: "inventory.apply.error",
+      orderId: "aud3-log-error",
+      productCount: 1,
+      code: "INVENTORY_COMMIT_FAILED",
+    });
+    decrement(uncertain.api, "aud3-log-error", [{ productId: "a", qty: 1 }]);
+    expect(uncertain.logs.at(-1)).toEqual({
+      event: "inventory.apply.already_applied",
+      orderId: "aud3-log-error",
+    });
+  });
+
+  it("requires a valid orderId for every mutating inventory path", () => {
+    const harness = createHarness([availableProduct()]);
+    expectInventoryError(() => decrement(harness.api, "", [{ productId: "a", qty: 1 }]), "INVALID_ORDER_ID");
+    expectInventoryError(
+      () => decrement(harness.api, "invalid order id", [{ productId: "a", qty: 1 }]),
+      "INVALID_ORDER_ID",
+    );
+    expectInventoryError(
+      () => harness.api.handleAppendOrderAndDecrementStock({
+        orderId: "",
+        row: { nro_de_compra: "" },
+        items: [{ productId: "a", qty: 1 }],
+      }),
+      "INVALID_ORDER_ID",
+    );
+    expect(harness.batchCalls).toHaveLength(0);
+  });
 });

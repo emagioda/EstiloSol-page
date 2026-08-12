@@ -17,6 +17,9 @@
 const SHEET_PRODUCTS = "products";
 const SHEET_SALES = "ventas";
 const SHEET_FULFILLMENT = "envios";
+const SHEET_INVENTORY_TRANSACTIONS = "_inventory_transactions";
+const INVENTORY_TRANSACTION_HEADERS = ["order_id", "demand_fingerprint", "applied_at", "state"];
+const INVENTORY_TRANSACTION_STATE_APPLIED = "APPLIED";
 const CACHE_PRODUCTS_KEY = "catalog:products:active:v4";
 const CACHE_PRODUCTS_TTL_SECONDS = 180;
 const ALLOWED_SHEETS = [SHEET_PRODUCTS, SHEET_SALES, SHEET_FULFILLMENT];
@@ -24,6 +27,7 @@ const ORDER_ID_KEYS = ["nro_de_compra", "order_id", "id_pedido", "orderid", "ext
 const MAX_STOCK_ITEM_LINES = 30;
 const MAX_STOCK_QTY_PER_PRODUCT = 50;
 const MAX_PRODUCT_ID_LENGTH = 120;
+const MAX_INVENTORY_ORDER_ID_LENGTH = 160;
 
 const HEADER_ALIASES = {
   id_pedido: ["order_id", "orderid", "id", "nro_de_compra"],
@@ -701,6 +705,211 @@ function stockDeductionPropertyKey_(orderId) {
   return "stock_deducted:" + String(orderId || "").trim();
 }
 
+function normalizeInventoryOrderId_(payload) {
+  const orderId = String(payload.orderId || payload.order_id || payload.externalReference || "").trim();
+  if (!orderId || orderId.length > MAX_INVENTORY_ORDER_ID_LENGTH || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(orderId)) {
+    throw inventoryError_("INVALID_ORDER_ID", "Inventory order id is invalid");
+  }
+  return orderId;
+}
+
+function inventoryDemandFingerprint_(items) {
+  const canonical = items.map(function(item) {
+    return normalizeCompareValue(item.productId) + "\t" + String(item.qty);
+  }).sort().join("\n");
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    "inventory-demand-v1\n" + canonical,
+    Utilities.Charset.UTF_8
+  );
+  return digest.map(function(value) {
+    const unsigned = value < 0 ? value + 256 : value;
+    return ("0" + unsigned.toString(16)).slice(-2);
+  }).join("");
+}
+
+function logInventoryApply_(event, context) {
+  const entry = { event: event };
+  if (context && context.orderId) entry.orderId = context.orderId;
+  if (context && typeof context.productCount === "number") entry.productCount = context.productCount;
+  if (context && context.code) entry.code = context.code;
+  console.info(JSON.stringify(entry));
+}
+
+function legacyInventoryDeductionExists_(orderId) {
+  return Boolean(PropertiesService.getScriptProperties().getProperty(stockDeductionPropertyKey_(orderId)));
+}
+
+function allocateInventoryJournalSheetId_(spreadsheet) {
+  const used = {};
+  spreadsheet.getSheets().forEach(function(sheet) {
+    used[sheet.getSheetId()] = true;
+  });
+  let candidate = 1900000000;
+  while (used[candidate] && candidate < 2147483000) candidate += 1;
+  if (used[candidate]) throw new Error("Unable to allocate inventory journal sheet id");
+  return candidate;
+}
+
+function assertInventoryJournalHeaders_(sheet) {
+  const headers = getHeaders(sheet);
+  const valid = headers.length === INVENTORY_TRANSACTION_HEADERS.length && headers.every(function(header, index) {
+    return header === INVENTORY_TRANSACTION_HEADERS[index];
+  });
+  if (!valid) {
+    throw inventoryError_("INVENTORY_JOURNAL_INVALID", "Inventory transaction journal headers are invalid");
+  }
+}
+
+function resolveInventoryJournal_(spreadsheet, orderId, fingerprint) {
+  const sheet = spreadsheet.getSheetByName(SHEET_INVENTORY_TRANSACTIONS);
+  if (!sheet) {
+    return {
+      outcome: "PENDING",
+      createSheet: true,
+      sheetId: allocateInventoryJournalSheetId_(spreadsheet)
+    };
+  }
+
+  assertInventoryJournalHeaders_(sheet);
+  const lastRow = sheet.getLastRow();
+  const rows = lastRow < 2 ? [] : sheet.getRange(2, 1, lastRow - 1, INVENTORY_TRANSACTION_HEADERS.length).getValues();
+  const seenOrderIds = {};
+  let matchingRow = null;
+  rows.forEach(function(row) {
+    const recordedOrderId = String(row[0] === null || row[0] === undefined ? "" : row[0]).trim();
+    const recordedFingerprint = String(row[1] === null || row[1] === undefined ? "" : row[1]).trim();
+    const appliedAt = String(row[2] === null || row[2] === undefined ? "" : row[2]).trim();
+    const state = String(row[3] === null || row[3] === undefined ? "" : row[3]).trim();
+    if (!recordedOrderId && !recordedFingerprint && !appliedAt && !state) return;
+    if (
+      !recordedOrderId ||
+      recordedOrderId.length > MAX_INVENTORY_ORDER_ID_LENGTH ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(recordedOrderId) ||
+      !/^[a-f0-9]{64}$/.test(recordedFingerprint) ||
+      !appliedAt ||
+      isNaN(Date.parse(appliedAt)) ||
+      state !== INVENTORY_TRANSACTION_STATE_APPLIED
+    ) {
+      throw inventoryError_("INVENTORY_JOURNAL_INVALID", "Inventory transaction journal row is invalid");
+    }
+    if (seenOrderIds[recordedOrderId]) {
+      throw inventoryError_("INVENTORY_JOURNAL_INVALID", "Inventory transaction journal contains duplicate order ids");
+    }
+    seenOrderIds[recordedOrderId] = true;
+    if (recordedOrderId === orderId) matchingRow = {
+      fingerprint: recordedFingerprint
+    };
+  });
+  if (matchingRow) {
+    if (matchingRow.fingerprint !== fingerprint) {
+      throw inventoryError_("INVENTORY_IDEMPOTENCY_CONFLICT", "Order id was already applied with different inventory demand");
+    }
+    return {
+      outcome: "ALREADY_APPLIED",
+      createSheet: false,
+      sheetId: sheet.getSheetId()
+    };
+  }
+
+  return {
+    outcome: "PENDING",
+    createSheet: false,
+    sheetId: sheet.getSheetId()
+  };
+}
+
+function sheetsExtendedValue_(value) {
+  if (typeof value === "number") return { numberValue: value };
+  if (typeof value === "boolean") return { boolValue: value };
+  return { stringValue: String(value === null || value === undefined ? "" : value) };
+}
+
+function sheetsCell_(value) {
+  return { userEnteredValue: sheetsExtendedValue_(value) };
+}
+
+function sheetsUpdateCellRequest_(sheetId, rowIndex, columnIndex, value) {
+  return {
+    updateCells: {
+      start: { sheetId: sheetId, rowIndex: rowIndex, columnIndex: columnIndex },
+      rows: [{ values: [sheetsCell_(value)] }],
+      fields: "userEnteredValue"
+    }
+  };
+}
+
+function sheetsAppendRowRequest_(sheetId, values) {
+  return {
+    appendCells: {
+      sheetId: sheetId,
+      rows: [{ values: values.map(sheetsCell_) }],
+      fields: "userEnteredValue"
+    }
+  };
+}
+
+function buildAtomicInventoryRequests_(stockPlan, journal, orderId, fingerprint, now, salesAppend) {
+  const requests = [];
+  if (journal.createSheet) {
+    requests.push({
+      addSheet: {
+        properties: {
+          sheetId: journal.sheetId,
+          title: SHEET_INVENTORY_TRANSACTIONS,
+          hidden: true,
+          gridProperties: { rowCount: 1000, columnCount: INVENTORY_TRANSACTION_HEADERS.length, frozenRowCount: 1 }
+        }
+      }
+    });
+    requests.push(sheetsAppendRowRequest_(journal.sheetId, INVENTORY_TRANSACTION_HEADERS));
+  }
+  if (salesAppend) requests.push(sheetsAppendRowRequest_(salesAppend.sheetId, salesAppend.values));
+  stockPlan.updates.forEach(function(update) {
+    requests.push(sheetsUpdateCellRequest_(stockPlan.sheetId, update.rowNumber - 1, stockPlan.stockQtyCol, update.nextQty));
+    if (stockPlan.updatedAtCol !== -1) {
+      requests.push(sheetsUpdateCellRequest_(stockPlan.sheetId, update.rowNumber - 1, stockPlan.updatedAtCol, now));
+    }
+  });
+  requests.push(sheetsAppendRowRequest_(journal.sheetId, [
+    orderId,
+    fingerprint,
+    now,
+    INVENTORY_TRANSACTION_STATE_APPLIED
+  ]));
+  return requests;
+}
+
+function commitAtomicInventoryRequests_(requests) {
+  if (typeof Sheets === "undefined" || !Sheets.Spreadsheets || typeof Sheets.Spreadsheets.batchUpdate !== "function") {
+    throw new Error("Advanced Sheets service is required for atomic inventory updates");
+  }
+  const spreadsheetId = getScriptProperty_("SPREADSHEET_ID");
+  if (!spreadsheetId) throw new Error("Missing required Script Property: SPREADSHEET_ID");
+  Sheets.Spreadsheets.batchUpdate({ requests: requests }, spreadsheetId);
+}
+
+function clearCatalogCacheAfterInventory_() {
+  try {
+    clearCatalogCache_();
+  } catch (err) {
+    logInternalError_("inventory catalog cache invalidation", err);
+  }
+}
+
+function alreadyAppliedInventoryResult_(action, orderId, legacyMarker) {
+  clearCatalogCacheAfterInventory_();
+  logInventoryApply_("inventory.apply.already_applied", { orderId: orderId });
+  return {
+    ok: true,
+    action: action,
+    outcome: "ALREADY_APPLIED",
+    deduped: true,
+    legacyMarker: Boolean(legacyMarker),
+    orderId: orderId
+  };
+}
+
 function handleDecrementStock(payload) {
   const sheetName = payload.sheet || payload.sheetName || SHEET_PRODUCTS;
   assertAllowedSheet_(sheetName);
@@ -708,36 +917,52 @@ function handleDecrementStock(payload) {
     throw new Error("decrementStock only supports products sheet");
   }
 
-  const orderId = String(payload.orderId || payload.order_id || payload.externalReference || "").trim();
-  if (!orderId) throw new Error("decrementStock requires orderId");
+  const orderId = normalizeInventoryOrderId_(payload);
+  const productCount = Array.isArray(payload.items) ? payload.items.length : 0;
+  logInventoryApply_("inventory.apply.started", { orderId: orderId, productCount: productCount });
 
-  const items = normalizeStockItems_(payload.items);
+  try {
+    const items = normalizeStockItems_(payload.items);
+    const fingerprint = inventoryDemandFingerprint_(items);
+    if (legacyInventoryDeductionExists_(orderId)) {
+      return alreadyAppliedInventoryResult_("decrementStock", orderId, true);
+    }
 
-  const props = PropertiesService.getScriptProperties();
-  const deductionKey = stockDeductionPropertyKey_(orderId);
-  if (props.getProperty(deductionKey)) {
-    return { ok: true, action: "decrementStock", deduped: true, orderId: orderId };
+    const spreadsheet = getSpreadsheet_();
+    const journal = resolveInventoryJournal_(spreadsheet, orderId, fingerprint);
+    if (journal.outcome === "ALREADY_APPLIED") {
+      return alreadyAppliedInventoryResult_("decrementStock", orderId, false);
+    }
+
+    const stockPlan = planStockDecrement_(items);
+    const now = new Date().toISOString();
+    const requests = buildAtomicInventoryRequests_(stockPlan, journal, orderId, fingerprint, now, null);
+    commitAtomicInventoryRequests_(requests);
+    clearCatalogCacheAfterInventory_();
+    logInventoryApply_("inventory.apply.applied", { orderId: orderId, productCount: productCount });
+
+    return {
+      ok: true,
+      action: "decrementStock",
+      outcome: "APPLIED",
+      orderId: orderId,
+      deduped: false,
+      updated: stockPlan.updates.map(function(update) {
+        return {
+          productId: update.productId,
+          previousQty: update.previousQty,
+          nextQty: update.nextQty
+        };
+      })
+    };
+  } catch (err) {
+    logInventoryApply_(err && err.code ? "inventory.apply.conflict" : "inventory.apply.error", {
+      orderId: orderId,
+      productCount: productCount,
+      code: err && err.code ? err.code : "INVENTORY_COMMIT_FAILED"
+    });
+    throw err;
   }
-
-  const stockPlan = planStockDecrement_(items);
-  const now = new Date().toISOString();
-  applyStockPlan_(stockPlan, now);
-  props.setProperty(deductionKey, now);
-  clearCatalogCache_();
-
-  return {
-    ok: true,
-    action: "decrementStock",
-    orderId: orderId,
-    deduped: false,
-    updated: stockPlan.updates.map(function(update) {
-      return {
-        productId: update.productId,
-        previousQty: update.previousQty,
-        nextQty: update.nextQty
-      };
-    })
-  };
 }
 
 function planStockDecrement_(items) {
@@ -795,7 +1020,7 @@ function planStockDecrement_(items) {
     }
 
     const currentQty = toStrictNumberOrNull_(found.row[stockQtyCol]);
-    if (currentQty === null || !Number.isInteger(currentQty) || currentQty <= 0) {
+    if (currentQty === null || !Number.isInteger(currentQty) || currentQty < 0) {
       throw inventoryError_("INVALID_STOCK_QTY", "Product stock quantity is invalid", {
         productId: item.productId
       });
@@ -818,6 +1043,7 @@ function planStockDecrement_(items) {
 
   return {
     sheet: sheet,
+    sheetId: sheet.getSheetId(),
     headers: headers,
     stockQtyCol: stockQtyCol,
     updatedAtCol: updatedAtCol,
@@ -825,63 +1051,72 @@ function planStockDecrement_(items) {
   };
 }
 
-function applyStockPlan_(plan, now) {
-  plan.updates.forEach(function(update) {
-    plan.sheet.getRange(update.rowNumber, plan.stockQtyCol + 1).setValue(update.nextQty);
-    if (plan.updatedAtCol !== -1) plan.sheet.getRange(update.rowNumber, plan.updatedAtCol + 1).setValue(now);
-  });
-}
-
 function handleAppendOrderAndDecrementStock(payload) {
-  const orderId = String(payload.orderId || payload.order_id || payload.externalReference || "").trim();
-  if (!orderId) throw new Error("appendOrderAndDecrementStock requires orderId");
+  const orderId = normalizeInventoryOrderId_(payload);
+  const productCount = Array.isArray(payload.items) ? payload.items.length : 0;
+  logInventoryApply_("inventory.apply.started", { orderId: orderId, productCount: productCount });
 
-  const items = normalizeStockItems_(payload.items);
+  try {
+    const items = normalizeStockItems_(payload.items);
+    const fingerprint = inventoryDemandFingerprint_(items);
+    if (legacyInventoryDeductionExists_(orderId)) {
+      return alreadyAppliedInventoryResult_("appendOrderAndDecrementStock", orderId, true);
+    }
 
-  const props = PropertiesService.getScriptProperties();
-  const deductionKey = stockDeductionPropertyKey_(orderId);
-  if (props.getProperty(deductionKey)) {
-    return { ok: true, action: "appendOrderAndDecrementStock", deduped: true, orderId: orderId };
+    const salesSheetName = payload.sheet || payload.sheetName || SHEET_SALES;
+    assertAllowedSheet_(salesSheetName);
+    if (normalizeKey(salesSheetName) !== normalizeKey(SHEET_SALES)) {
+      throw new Error("appendOrderAndDecrementStock only supports ventas sheet");
+    }
+
+    const rowInput = payload.row || payload.data || payload.values || payload.order;
+    if (rowInput === undefined || rowInput === null) throw new Error("appendOrderAndDecrementStock requires row");
+
+    const spreadsheet = getSpreadsheet_();
+    const journal = resolveInventoryJournal_(spreadsheet, orderId, fingerprint);
+    if (journal.outcome === "ALREADY_APPLIED") {
+      return alreadyAppliedInventoryResult_("appendOrderAndDecrementStock", orderId, false);
+    }
+
+    const salesSheet = getSheetOrThrow(SHEET_SALES);
+    const salesHeaders = getHeaders(salesSheet);
+    const rowValues = buildAppendRowValues_(salesSheet, rowInput);
+    const existingSalesRow = findOrderRowNumber_(salesSheet, salesHeaders, orderId);
+    const salesRowNumber = existingSalesRow === -1 ? salesSheet.getLastRow() + 1 : existingSalesRow;
+    const stockPlan = planStockDecrement_(items);
+    const now = new Date().toISOString();
+    const salesAppend = existingSalesRow === -1
+      ? { sheetId: salesSheet.getSheetId(), values: rowValues }
+      : null;
+    const requests = buildAtomicInventoryRequests_(stockPlan, journal, orderId, fingerprint, now, salesAppend);
+    commitAtomicInventoryRequests_(requests);
+    clearCatalogCacheAfterInventory_();
+    logInventoryApply_("inventory.apply.applied", { orderId: orderId, productCount: productCount });
+
+    return {
+      ok: true,
+      action: "appendOrderAndDecrementStock",
+      outcome: "APPLIED",
+      orderId: orderId,
+      deduped: false,
+      salesRowNumber: salesRowNumber,
+      dedupedSalesRow: existingSalesRow !== -1,
+      updated: stockPlan.updates.map(function(update) {
+        return {
+          productId: update.productId,
+          previousQty: update.previousQty,
+          nextQty: update.nextQty
+        };
+      })
+    };
+  } catch (err) {
+    logInventoryApply_(err && err.code ? "inventory.apply.conflict" : "inventory.apply.error", {
+      orderId: orderId,
+      productCount: productCount,
+      code: err && err.code ? err.code : "INVENTORY_COMMIT_FAILED"
+    });
+    throw err;
   }
-
-  const salesSheetName = payload.sheet || payload.sheetName || SHEET_SALES;
-  assertAllowedSheet_(salesSheetName);
-  if (normalizeKey(salesSheetName) !== normalizeKey(SHEET_SALES)) {
-    throw new Error("appendOrderAndDecrementStock only supports ventas sheet");
-  }
-
-  const rowInput = payload.row || payload.data || payload.values || payload.order;
-  if (rowInput === undefined || rowInput === null) throw new Error("appendOrderAndDecrementStock requires row");
-
-  const salesSheet = getSheetOrThrow(SHEET_SALES);
-  const salesHeaders = getHeaders(salesSheet);
-  const rowValues = buildAppendRowValues_(salesSheet, rowInput);
-  const existingSalesRow = findOrderRowNumber_(salesSheet, salesHeaders, orderId);
-  const stockPlan = planStockDecrement_(items);
-  const now = new Date().toISOString();
-
-  if (existingSalesRow === -1) {
-    salesSheet.appendRow(rowValues);
-  }
-  applyStockPlan_(stockPlan, now);
-  props.setProperty(deductionKey, now);
-  clearCatalogCache_();
-
-  return {
-    ok: true,
-    action: "appendOrderAndDecrementStock",
-    orderId: orderId,
-    deduped: false,
-    salesRowNumber: existingSalesRow === -1 ? salesSheet.getLastRow() : existingSalesRow,
-    dedupedSalesRow: existingSalesRow !== -1,
-    updated: stockPlan.updates.map(function(update) {
-      return {
-        productId: update.productId,
-        previousQty: update.previousQty,
-        nextQty: update.nextQty
-      };
-    })
-  };
 }
 
 function logInternalError_(context, err) {
@@ -901,6 +1136,7 @@ function publicErrorMessage_(err) {
 }
 
 function inventoryPublicErrorMessage_(code) {
+  if (code === "INVALID_ORDER_ID") return "Invalid inventory order id";
   if (code === "INVALID_ITEMS" || code === "INVALID_QUANTITY" || code === "TOO_MANY_ITEMS" || code === "AGGREGATED_QUANTITY_LIMIT") {
     return "Invalid inventory items";
   }
@@ -909,6 +1145,8 @@ function inventoryPublicErrorMessage_(code) {
   if (code === "PRODUCT_INACTIVE" || code === "PRODUCT_NOT_AVAILABLE") return "Product not available";
   if (code === "INVALID_STOCK_QTY") return "Invalid product stock";
   if (code === "INSUFFICIENT_STOCK") return "Insufficient stock";
+  if (code === "INVENTORY_IDEMPOTENCY_CONFLICT") return "Inventory idempotency conflict";
+  if (code === "INVENTORY_JOURNAL_INVALID") return "Inventory journal integrity error";
   return "Inventory validation failed";
 }
 
