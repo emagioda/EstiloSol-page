@@ -12,6 +12,7 @@ import {
   beginCheckoutAttempt,
   buildCheckoutAttemptFingerprint,
   completeCheckoutAttempt,
+  ensureMercadoPagoPreferenceWindow,
   prepareCheckoutAttempt,
   releaseCheckoutAttemptLease,
   restoreCheckoutOrder,
@@ -250,6 +251,7 @@ export async function POST(request: NextRequest) {
     }
 
     const appBaseUrl = (env.getOptionalServer("APP_BASE_URL") || request.nextUrl.origin).replace(/\/$/, "");
+    attempt = await ensureMercadoPagoPreferenceWindow(attempt, ownerToken);
     const urls = buildPreferenceUrls({
       appBaseUrl,
       externalReference: order.externalReference,
@@ -269,6 +271,8 @@ export async function POST(request: NextRequest) {
       externalReference: order.externalReference,
       urls,
       includeAutoReturn: urls.shouldUseAutoReturn,
+      preferenceValidFrom: attempt.preferenceValidFrom!,
+      preferenceExpiresAt: attempt.preferenceExpiresAt!,
     });
 
     await assertCheckoutAttemptLeaseOwner(attempt.checkoutAttemptId, ownerToken);

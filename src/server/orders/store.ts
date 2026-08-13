@@ -20,6 +20,11 @@ import {
   removePendingSalesSheetOrder,
 } from "./salesSheetSync";
 import type { Order, OrderPaymentStatus, OrderStatus } from "./types";
+import {
+  applyMercadoPagoPaymentObservation,
+  MULTIPLE_APPROVED_MP_PAYMENTS,
+  type MercadoPagoPaymentObservation,
+} from "@/src/server/payments/ledger";
 
 export const WEBHOOK_DEDUPE_TTL_SECONDS = 7 * 24 * 3600;
 
@@ -446,6 +451,211 @@ export async function markApproved(
     customer: privacyPolicy.anonymizeCustomer(approvedOrder.customer),
     notes: undefined,
   }, { syncSheet: false });
+}
+
+export type MercadoPagoPaymentReconciliationResult = {
+  order: Order | null;
+  receiptOrder?: Order;
+  duplicate: boolean;
+  firstEffectiveApproval: boolean;
+  activeApprovedPaymentIds: string[];
+  omittedForCapacity: boolean;
+  evictedPaymentIds: string[];
+};
+
+export type MercadoPagoPaymentObservationApplication = {
+  paymentId: string;
+  duplicate: boolean;
+  omittedForCapacity: boolean;
+  evictedPaymentIds: string[];
+};
+
+export type MercadoPagoPaymentBatchReconciliationResult = {
+  order: Order | null;
+  receiptOrder?: Order;
+  firstEffectiveApproval: boolean;
+  activeApprovedPaymentIds: string[];
+  observationResults: MercadoPagoPaymentObservationApplication[];
+};
+
+type MercadoPagoPaymentBatchDependencies = {
+  persistOrder?: (key: string, order: Order, ttlSeconds: number) => Promise<void>;
+};
+
+const paymentProjectionChanged = (before: Order, after: Order) =>
+  before.status !== after.status ||
+  before.paymentStatus !== after.paymentStatus ||
+  before.mpPaymentId !== after.mpPaymentId ||
+  before.mpStatus !== after.mpStatus ||
+  before.inventoryStatus !== after.inventoryStatus ||
+  before.inventoryIssueCode !== after.inventoryIssueCode ||
+  before.inventoryIssueAt !== after.inventoryIssueAt ||
+  before.stockDeductedAt !== after.stockDeductedAt;
+
+export async function reconcileMercadoPagoPaymentObservationBatch(
+  externalReference: string,
+  observations: MercadoPagoPaymentObservation[],
+  dependencies: MercadoPagoPaymentBatchDependencies = {}
+): Promise<MercadoPagoPaymentBatchReconciliationResult> {
+  let inventoryResult: InventoryAttemptResult | undefined;
+  const persistOrder = dependencies.persistOrder ?? setJson;
+  const persisted = await withOrderWriteLock(externalReference, async () => {
+    const stored = await getJson<StoredOrder>(orderKey(externalReference));
+    if (!stored) return null;
+
+    const current = ensureOrderDefaults(stored);
+    let aggregate = current;
+    let acceptedObservationCount = 0;
+    let activeApprovedPaymentIds: string[] = [];
+    const observationResults: MercadoPagoPaymentObservationApplication[] = [];
+
+    // Build the complete financial projection in memory. No observation prefix is persisted.
+    for (const observation of observations) {
+      const ledgerResult = applyMercadoPagoPaymentObservation(aggregate, observation);
+      activeApprovedPaymentIds = ledgerResult.activeApprovedPaymentIds;
+      observationResults.push({
+        paymentId: observation.paymentId,
+        duplicate: ledgerResult.duplicate,
+        omittedForCapacity: ledgerResult.omittedForCapacity,
+        evictedPaymentIds: ledgerResult.evictedPaymentIds,
+      });
+      if (ledgerResult.omittedForCapacity) continue;
+      acceptedObservationCount += 1;
+      aggregate = { ...aggregate, ...ledgerResult.patch };
+    }
+
+    const firstEffectiveApproval =
+      current.paymentStatus !== "confirmed" && aggregate.paymentStatus === "confirmed";
+    if (acceptedObservationCount === 0) {
+      return {
+        before: current,
+        order: current,
+        firstEffectiveApproval: false,
+        activeApprovedPaymentIds,
+        observationResults,
+      };
+    }
+
+    let inventoryPatch: Partial<Order> = {};
+    if (firstEffectiveApproval && shouldAttemptInventoryAutomatically(current)) {
+      inventoryResult = await attemptInventoryForPaidOrder(current);
+      inventoryPatch = inventoryResultToOrderPatch(inventoryResult);
+    }
+
+    const { order: updated } = mergeOrderUpdate(current, {
+      status: aggregate.status,
+      paymentStatus: aggregate.paymentStatus,
+      mpPaymentId: aggregate.mpPaymentId,
+      mpStatus: aggregate.mpStatus,
+      mpPaymentLedger: aggregate.mpPaymentLedger,
+      mpPaymentAttentionCode: aggregate.mpPaymentAttentionCode,
+      approvedAt: aggregate.approvedAt,
+      ...inventoryPatch,
+    });
+    // This is the batch's only durable financial order write.
+    await persistOrder(
+      orderKey(externalReference),
+      updated,
+      privacyPolicy.ttlSecondsForStatus(updated.status)
+    );
+
+    return {
+      before: current,
+      order: updated,
+      receiptOrder: firstEffectiveApproval ? updated : undefined,
+      firstEffectiveApproval,
+      activeApprovedPaymentIds,
+      observationResults,
+    };
+  });
+
+  if (!persisted) {
+    return {
+      order: null,
+      firstEffectiveApproval: false,
+      activeApprovedPaymentIds: [],
+      observationResults: [],
+    };
+  }
+
+  if (inventoryResult) {
+    await reportInventoryAttempt(externalReference, inventoryResult, "payment_approval");
+  } else if (persisted.firstEffectiveApproval) {
+    logEvent("info", "inventory.automatic_attempt_skipped", {
+      orderId: externalReference,
+      inventoryStatus: persisted.before.inventoryStatus ?? "legacy_deducted",
+    });
+  }
+
+  if (persisted.activeApprovedPaymentIds.length > 1) {
+    logEvent("warn", "payments.multiple_approved_mp_payments", {
+      orderId: externalReference,
+      attentionCode: MULTIPLE_APPROVED_MP_PAYMENTS,
+      approvedPaymentCount: persisted.activeApprovedPaymentIds.length,
+    });
+  }
+
+  let projectedOrder = persisted.order;
+  let deferredSheetSynced = true;
+  if (
+    persisted.firstEffectiveApproval &&
+    projectedOrder.salesSheetDeferredUntilApprovedAt &&
+    !projectedOrder.salesSheetSyncedAt
+  ) {
+    const sheetResult = await appendApprovedOrderToSalesSheet(projectedOrder);
+    projectedOrder = sheetResult.order;
+    deferredSheetSynced = sheetResult.synced;
+  } else if (
+    (!projectedOrder.salesSheetDeferredUntilApprovedAt || projectedOrder.salesSheetSyncedAt) &&
+    paymentProjectionChanged(persisted.before, projectedOrder)
+  ) {
+    projectedOrder = (await updateOrder(externalReference, {})) ?? projectedOrder;
+  }
+
+  if (
+    persisted.firstEffectiveApproval &&
+    projectedOrder.paymentStatus === "confirmed" &&
+    privacyPolicy.minimizeApprovedOrderPII &&
+    (!projectedOrder.salesSheetDeferredUntilApprovedAt || deferredSheetSynced)
+  ) {
+    projectedOrder =
+      (await updateOrder(
+        externalReference,
+        {
+          customer: privacyPolicy.anonymizeCustomer(projectedOrder.customer),
+          notes: undefined,
+        },
+        { syncSheet: false }
+      )) ?? projectedOrder;
+  }
+
+  return {
+    order: projectedOrder,
+    receiptOrder: persisted.receiptOrder,
+    firstEffectiveApproval: persisted.firstEffectiveApproval,
+    activeApprovedPaymentIds: persisted.activeApprovedPaymentIds,
+    observationResults: persisted.observationResults,
+  };
+}
+
+export async function reconcileMercadoPagoPaymentObservation(
+  externalReference: string,
+  observation: MercadoPagoPaymentObservation
+): Promise<MercadoPagoPaymentReconciliationResult> {
+  const batch = await reconcileMercadoPagoPaymentObservationBatch(
+    externalReference,
+    [observation]
+  );
+  const application = batch.observationResults[0];
+  return {
+    order: batch.order,
+    receiptOrder: batch.receiptOrder,
+    duplicate: application?.duplicate ?? false,
+    firstEffectiveApproval: batch.firstEffectiveApproval,
+    activeApprovedPaymentIds: batch.activeApprovedPaymentIds,
+    omittedForCapacity: application?.omittedForCapacity ?? false,
+    evictedPaymentIds: application?.evictedPaymentIds ?? [],
+  };
 }
 
 export async function retryPaidOrderInventory(externalReference: string): Promise<Order | null> {

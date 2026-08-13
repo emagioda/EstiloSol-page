@@ -14,10 +14,16 @@ export type MpSearchPayment = {
   external_reference?: string;
   transaction_amount?: number;
   currency_id?: string;
+  status_detail?: string;
 };
 
 export type MpSearchResponse = {
   results?: MpSearchPayment[];
+  paging?: {
+    total?: number;
+    limit?: number;
+    offset?: number;
+  };
 };
 
 export type MpPaymentResponse = {
@@ -26,6 +32,7 @@ export type MpPaymentResponse = {
   external_reference?: string;
   transaction_amount?: number;
   currency_id?: string;
+  status_detail?: string;
 };
 
 export const CANCELLED_PAYMENT_STATUSES = new Set(["cancelled", "canceled"]);

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InventoryOperationError } from "@/src/server/inventory/errors";
 import type { Order } from "@/src/server/orders/types";
+import { setJson } from "@/src/server/kv";
 
 vi.mock("@/src/server/sheets/repository", () => ({
   appendOrderToSalesSheet: vi.fn(),
@@ -27,6 +28,7 @@ import {
   ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS,
   ORDER_WRITE_LOCK_TTL_SECONDS,
   orderWriteLockCoversWorstCaseSheetUpdate,
+  reconcileMercadoPagoPaymentObservationBatch,
   retryPaidOrderInventory,
   updateOrder,
 } from "./store";
@@ -276,6 +278,77 @@ describe("PR 2 order store inventory state", () => {
     const updated = await transition(order.externalReference, { paymentId: "pay", mpStatus: expectedStatus });
     expect(updated).toMatchObject({ inventoryStatus: "deducted", stockDeductedAt: 123 });
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+  });
+});
+
+describe("AUD3 Mercado Pago bulk order-store reconciliation", () => {
+  const observation = (paymentId: string, status: string, observedAt: number) => ({
+    paymentId,
+    status,
+    amount: 1000,
+    currency: "ARS" as const,
+    observedAt,
+  });
+
+  it("AUD3-PAY-BATCH-01 persists only the final confirmed aggregate", async () => {
+    const order = makeOrder();
+    await createOrder(order, { syncSheet: false });
+    const statesBeforeFinancialWrite: string[] = [];
+    const persistOrder = vi.fn(async (key: string, value: Order, ttlSeconds: number) => {
+      statesBeforeFinancialWrite.push(
+        (await getOrder(order.externalReference))?.paymentStatus ?? "missing"
+      );
+      if (value.paymentStatus === "cancelled") {
+        throw new Error("injected intermediate cancelled write failure");
+      }
+      expect(value).toMatchObject({ status: "approved", paymentStatus: "confirmed" });
+      expect(Object.keys(value.mpPaymentLedger ?? {})).toEqual(["B", "A"]);
+      await setJson(key, value, ttlSeconds);
+    });
+
+    const result = await reconcileMercadoPagoPaymentObservationBatch(
+      order.externalReference,
+      [observation("B", "rejected", 10), observation("A", "approved", 20)],
+      { persistOrder }
+    );
+
+    expect(statesBeforeFinancialWrite).toEqual(["pending"]);
+    expect(persistOrder).toHaveBeenCalledTimes(1);
+    expect(result.order).toMatchObject({ status: "approved", paymentStatus: "confirmed" });
+    expect(await getOrder(order.externalReference)).toMatchObject({
+      status: "approved",
+      paymentStatus: "confirmed",
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-PAY-BATCH-06 a failed final write persists no observation prefix", async () => {
+    const order = makeOrder();
+    await createOrder(order, { syncSheet: false });
+    const persistOrder = vi.fn(async () => {
+      throw new Error("KV unavailable");
+    });
+
+    await expect(
+      reconcileMercadoPagoPaymentObservationBatch(
+        order.externalReference,
+        [
+          observation("B", "rejected", 10),
+          observation("C", "cancelled", 20),
+          observation("A", "approved", 30),
+        ],
+        { persistOrder }
+      )
+    ).rejects.toThrow("KV unavailable");
+
+    expect(persistOrder).toHaveBeenCalledTimes(1);
+    expect(await getOrder(order.externalReference)).toMatchObject({
+      status: "created",
+      paymentStatus: "pending",
+    });
+    expect((await getOrder(order.externalReference))?.mpPaymentLedger).toBeUndefined();
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
   });
 });
 

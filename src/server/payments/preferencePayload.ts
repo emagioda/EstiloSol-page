@@ -90,6 +90,8 @@ type BuildPreferencePayloadInput = {
   externalReference: string;
   urls: ReturnType<typeof buildPreferenceUrls>;
   includeAutoReturn: boolean;
+  preferenceValidFrom: number;
+  preferenceExpiresAt: number;
 };
 
 export const buildPreferencePayload = (input: BuildPreferencePayloadInput) => {
@@ -122,6 +124,9 @@ export const buildPreferencePayload = (input: BuildPreferencePayloadInput) => {
       pending: input.urls.pending,
     },
     ...(input.includeAutoReturn ? { auto_return: "approved" as const } : {}),
+    expires: true,
+    expiration_date_from: new Date(input.preferenceValidFrom).toISOString(),
+    expiration_date_to: new Date(input.preferenceExpiresAt).toISOString(),
     binary_mode: true,
     notification_url: input.urls.webhook,
     external_reference: input.externalReference,

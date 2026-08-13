@@ -11,6 +11,8 @@ const items: OrderItem[] = [
     currency: "ARS",
   },
 ];
+const preferenceValidFrom = Date.UTC(2026, 7, 12, 15, 0, 0);
+const preferenceExpiresAt = preferenceValidFrom + 48 * 60 * 60 * 1000;
 
 describe("preferencePayload", () => {
   it("builds default preference urls and replaces external reference", () => {
@@ -121,6 +123,8 @@ describe("preferencePayload", () => {
       externalReference: "es-123",
       urls,
       includeAutoReturn: true,
+      preferenceValidFrom,
+      preferenceExpiresAt,
     });
 
     expect(withAutoReturn.items).toHaveLength(1);
@@ -135,6 +139,12 @@ describe("preferencePayload", () => {
       phone: { number: "+5491112345678" },
     });
     expect(withAutoReturn.auto_return).toBe("approved");
+    expect(withAutoReturn.expires).toBe(true);
+    expect(withAutoReturn.expiration_date_from).toBe("2026-08-12T15:00:00.000Z");
+    expect(withAutoReturn.expiration_date_to).toBe("2026-08-14T15:00:00.000Z");
+    expect(
+      Date.parse(withAutoReturn.expiration_date_to) - Date.parse(withAutoReturn.expiration_date_from)
+    ).toBe(48 * 60 * 60 * 1000);
     expect(withAutoReturn.metadata).toEqual({
       store: "estilo-sol",
       delivery_method: "pickup",
@@ -150,6 +160,8 @@ describe("preferencePayload", () => {
       externalReference: "es-123",
       urls,
       includeAutoReturn: false,
+      preferenceValidFrom,
+      preferenceExpiresAt,
     });
 
     expect(withoutAutoReturn).not.toHaveProperty("auto_return");
@@ -189,6 +201,8 @@ describe("preferencePayload", () => {
       externalReference: "es-123",
       urls,
       includeAutoReturn: true,
+      preferenceValidFrom,
+      preferenceExpiresAt,
     });
 
     expect(payload.items).toHaveLength(1);
