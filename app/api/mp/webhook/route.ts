@@ -99,6 +99,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Payment lookup failed" }, { status: 503 });
   }
 
+  const fetchedPaymentId =
+    paymentResult.data.id === undefined
+      ? null
+      : String(paymentResult.data.id).trim().toLowerCase();
+  if (fetchedPaymentId !== null && fetchedPaymentId !== requestedPaymentId) {
+    logEvent("error", "payments.webhook_fetched_payment_id_mismatch", {
+      signedPaymentId: requestedPaymentId,
+    });
+    await trackBusinessEvent("payment.webhook.payment_lookup_failed", {
+      paymentId: requestedPaymentId,
+      reason: "fetched_id_mismatch",
+    });
+    return NextResponse.json({ error: "Payment lookup failed" }, { status: 503 });
+  }
+
   const externalReference = String(paymentResult.data.external_reference ?? "");
   if (!externalReference) {
     await trackBusinessEvent("payment.webhook.no_external_reference", { paymentId: requestedPaymentId });

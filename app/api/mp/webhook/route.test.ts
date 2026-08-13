@@ -124,6 +124,40 @@ describe("mercado pago webhook route", () => {
     );
   });
 
+  it("AUD3-WEBHOOK-ID-04 rejects a fetched payment ID different from the signed ID", async () => {
+    const ref = `es-webhook-id-mismatch-${Date.now()}`;
+    await createOrder({
+      externalReference: ref,
+      status: "created",
+      paymentStatus: "pending",
+      shippingStatus: "in_process",
+      inventoryStatus: "pending",
+      items: [{ productId: "p1", title: "Producto", unitPrice: 1000, qty: 1, currency: "ARS" }],
+      total: 1000,
+      currency: "ARS",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, { syncSheet: false });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        id: "67890",
+        status: "approved",
+        external_reference: ref,
+        transaction_amount: 1000,
+        currency_id: "ARS",
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+
+    const response = await POST(signedWebhookRequest("12345"));
+    const stored = await getOrder(ref);
+
+    expect(response.status).toBe(503);
+    expect(stored).toMatchObject({ status: "created", paymentStatus: "pending" });
+    expect(stored?.mpPaymentLedger).toBeUndefined();
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+  });
+
   it("does not dedupe webhook events when Mercado Pago lookup fails", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
 

@@ -12,6 +12,7 @@ import {
   MercadoPagoPaymentSearchPaginationError,
 } from "@/src/server/payments/mpClient";
 import { reconcileMercadoPagoPayment } from "@/src/server/payments/reconciliation";
+import type { MpPaymentResponse, MpSearchPayment } from "@/src/server/payments/shared";
 import { checkRateLimit, checkRateLimitByKey } from "@/src/server/security/rateLimit";
 import { parseExternalReference } from "@/src/server/validation/payments";
 
@@ -108,6 +109,51 @@ const parseVerifyPaymentBody = async (request: NextRequest) => {
   };
 };
 
+const PROTECTED_MP_PAYMENT_STATUSES = new Set(["approved", "refunded", "charged_back"]);
+
+const normalizedPaymentStatus = (payment: MpPaymentResponse | MpSearchPayment) =>
+  String(payment.status ?? "").trim().toLowerCase();
+
+const paymentIdentity = (
+  payment: MpPaymentResponse | MpSearchPayment,
+  fallbackPaymentId?: string
+) => String(payment.id ?? fallbackPaymentId ?? "").trim();
+
+const isProtectedDirectPaymentObservation = (
+  order: Order,
+  payment: MpPaymentResponse,
+  fallbackPaymentId: string
+) => {
+  const paymentId = paymentIdentity(payment, fallbackPaymentId);
+  const existingEntry = order.mpPaymentLedger?.[paymentId];
+  return Boolean(
+    PROTECTED_MP_PAYMENT_STATUSES.has(normalizedPaymentStatus(payment)) ||
+      existingEntry?.approvedAt !== undefined ||
+      (existingEntry && PROTECTED_MP_PAYMENT_STATUSES.has(existingEntry.status)) ||
+      (order.paymentStatus === "confirmed" && order.mpPaymentId === paymentId)
+  );
+};
+
+const buildIncompleteSearchResponse = async (ref: string, fallbackOrder: Order) => {
+  const latestOrder = (await getOrder(ref)) ?? fallbackOrder;
+  if (latestOrder.paymentStatus === "confirmed") {
+    return buildOrderResponse(latestOrder);
+  }
+  return NextResponse.json(
+    {
+      error: "No se pudo completar la busqueda de pagos",
+      code: "MP_PAYMENT_SEARCH_INCOMPLETE",
+    },
+    { status: 503 }
+  );
+};
+
+type StagedPaymentObservation = {
+  payment: MpPaymentResponse | MpSearchPayment;
+  fallbackPaymentId?: string;
+  source: "verify_payment_id" | "verify_search";
+};
+
 const confirmPayment = async (ref: string, paymentId: string | null, accessToken: string) => {
   let order = await getOrder(ref);
   if (!order) {
@@ -115,6 +161,7 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
     return NextResponse.json({ approved: false, message: "Pago no encontrado" }, { status: 200 });
   }
 
+  let stagedDirectPayment: StagedPaymentObservation | null = null;
   if (paymentId) {
     let paymentById: Awaited<ReturnType<typeof fetchPaymentByIdFromMp>> | null = null;
     try {
@@ -127,17 +174,27 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
       });
     }
     if (paymentById?.response.ok && paymentById.data) {
-      const reconciliation = await reconcileMercadoPagoPayment({
-        externalReference: ref,
-        payment: paymentById.data,
-        fallbackPaymentId: paymentId,
-        source: "verify_payment_id",
-      });
-      if (reconciliation.outcome === "reconciled") order = reconciliation.order;
+      if (isProtectedDirectPaymentObservation(order, paymentById.data, paymentId)) {
+        const reconciliation = await reconcileMercadoPagoPayment({
+          externalReference: ref,
+          payment: paymentById.data,
+          fallbackPaymentId: paymentId,
+          source: "verify_payment_id",
+        });
+        if (reconciliation.outcome === "reconciled") {
+          order = reconciliation.order;
+        }
+      } else {
+        stagedDirectPayment = {
+          payment: paymentById.data,
+          fallbackPaymentId: paymentId,
+          source: "verify_payment_id",
+        };
+      }
     }
   }
 
-  const seenPaymentIds = new Set<string>();
+  const stagedPayments = new Map<string, StagedPaymentObservation>();
   const searchPages = iteratePaymentSearchPagesByExternalReference(ref, accessToken);
   while (true) {
     let nextPage: Awaited<ReturnType<typeof searchPages.next>>;
@@ -172,7 +229,11 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
         errorName: error instanceof Error ? error.name : "unknown",
       });
       await trackBusinessEvent("payment.verify.network_error", { externalReference: ref });
-      return buildOrderResponse(latestOrder);
+      await trackBusinessEvent("payment.verify.search_incomplete", {
+        externalReference: ref,
+        reason: "network_error",
+      });
+      return buildIncompleteSearchResponse(ref, order);
     }
 
     if (nextPage.done) break;
@@ -186,20 +247,43 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
         externalReference: ref,
         status: search.response.status,
       });
-      return buildOrderResponse((await getOrder(ref)) ?? order);
+      await trackBusinessEvent("payment.verify.search_incomplete", {
+        externalReference: ref,
+        reason: "non_ok",
+        status: search.response.status,
+      });
+      return buildIncompleteSearchResponse(ref, order);
     }
 
     for (const payment of search.data?.results ?? []) {
-      const candidateId = String(payment.id ?? "");
-      if (!candidateId || seenPaymentIds.has(candidateId)) continue;
-      seenPaymentIds.add(candidateId);
-      const reconciliation = await reconcileMercadoPagoPayment({
-        externalReference: ref,
-        payment,
-        source: "verify_search",
-      });
-      if (reconciliation.outcome === "reconciled") order = reconciliation.order;
+      const candidateId = paymentIdentity(payment);
+      if (!candidateId || stagedPayments.has(candidateId)) {
+        continue;
+      }
+      stagedPayments.set(candidateId, { payment, source: "verify_search" });
     }
+  }
+
+  if (stagedDirectPayment) {
+    const directPaymentId = paymentIdentity(
+      stagedDirectPayment.payment,
+      stagedDirectPayment.fallbackPaymentId
+    );
+    if (directPaymentId && !stagedPayments.has(directPaymentId)) {
+      stagedPayments.set(directPaymentId, stagedDirectPayment);
+    }
+  }
+
+  for (const observation of stagedPayments.values()) {
+    const reconciliation = await reconcileMercadoPagoPayment({
+      externalReference: ref,
+      payment: observation.payment,
+      ...(observation.fallbackPaymentId
+        ? { fallbackPaymentId: observation.fallbackPaymentId }
+        : {}),
+      source: observation.source,
+    });
+    if (reconciliation.outcome === "reconciled") order = reconciliation.order;
   }
 
   return buildOrderResponse(order);
