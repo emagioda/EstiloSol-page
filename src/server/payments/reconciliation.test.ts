@@ -23,8 +23,14 @@ vi.mock("@/src/server/http/afterResponse", () => ({
 
 import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
 import { createOrder, getOrder } from "@/src/server/orders/store";
-import { decrementProductsStockInSheet } from "@/src/server/sheets/repository";
-import { reconcileMercadoPagoPayment } from "./reconciliation";
+import {
+  appendOrderToSalesSheet,
+  decrementProductsStockInSheet,
+} from "@/src/server/sheets/repository";
+import {
+  reconcileMercadoPagoPayment,
+  reconcileMercadoPagoPaymentObservations,
+} from "./reconciliation";
 
 let sequence = 0;
 const makeOrder = async (patch: Partial<Order> = {}) => {
@@ -63,6 +69,20 @@ const reconcile = (order: Order, paymentId: string, status: string, overrides: R
     externalReference: order.externalReference,
     payment: payment(order, paymentId, status, overrides),
     source: "verify_search",
+  });
+
+const reconcileBatch = (
+  order: Order,
+  observations: Array<{ paymentId: string; status: string; observedAt?: number }>
+) =>
+  reconcileMercadoPagoPaymentObservations({
+    externalReference: order.externalReference,
+    validationOrder: order,
+    observations: observations.map(({ paymentId, status, observedAt }) => ({
+      payment: payment(order, paymentId, status),
+      source: "verify_search",
+      ...(observedAt === undefined ? {} : { observedAt }),
+    })),
   });
 
 const flushReceipts = async () => {
@@ -200,6 +220,101 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
 
     expect(stored?.paymentStatus).toBe("confirmed");
     expect(stored?.mpPaymentLedger).toHaveProperty("A.approvedAt");
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-PAY-BATCH-02 aggregates two approvals with one inventory and receipt effect", async () => {
+    const order = await makeOrder();
+    const result = await reconcileBatch(order, [
+      { paymentId: "A", status: "approved", observedAt: 10 },
+      { paymentId: "B", status: "approved", observedAt: 20 },
+    ]);
+    await flushReceipts();
+    const stored = await getOrder(order.externalReference);
+
+    expect(result).toMatchObject({ outcome: "reconciled", firstEffectiveApproval: true });
+    expect(stored).toMatchObject({
+      paymentStatus: "confirmed",
+      mpPaymentAttentionCode: "MULTIPLE_APPROVED_MP_PAYMENTS",
+    });
+    expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["A", "B"]);
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-PAY-BATCH-03 persists only confirmed for refund plus other approval", async () => {
+    const order = await makeOrder();
+    const result = await reconcileBatch(order, [
+      { paymentId: "A", status: "refunded", observedAt: 10 },
+      { paymentId: "B", status: "approved", observedAt: 20 },
+    ]);
+    await flushReceipts();
+    const stored = await getOrder(order.externalReference);
+
+    expect(result).toMatchObject({ outcome: "reconciled", firstEffectiveApproval: true });
+    expect(stored?.paymentStatus).toBe("confirmed");
+    expect(stored?.mpPaymentLedger).toMatchObject({
+      A: { status: "refunded" },
+      B: { status: "approved" },
+    });
+    expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(appendOrderToSalesSheet).mock.calls[0]?.[0]).toMatchObject({
+      paymentStatus: "confirmed",
+      mpPaymentId: "B",
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-PAY-BATCH-04 applies rejected cancelled and approved as one final aggregate", async () => {
+    const order = await makeOrder();
+    await reconcileBatch(order, [
+      { paymentId: "B", status: "rejected", observedAt: 10 },
+      { paymentId: "C", status: "cancelled", observedAt: 20 },
+      { paymentId: "A", status: "approved", observedAt: 30 },
+    ]);
+    await flushReceipts();
+    const stored = await getOrder(order.externalReference);
+
+    expect(stored?.paymentStatus).toBe("confirmed");
+    expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["B", "C", "A"]);
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-PAY-BATCH-05 commits a complete non-approved aggregate normally", async () => {
+    const order = await makeOrder();
+    const result = await reconcileBatch(order, [
+      { paymentId: "B", status: "rejected", observedAt: 10 },
+      { paymentId: "C", status: "cancelled", observedAt: 20 },
+    ]);
+    await flushReceipts();
+    const stored = await getOrder(order.externalReference);
+
+    expect(result).toMatchObject({ outcome: "reconciled", firstEffectiveApproval: false });
+    expect(stored).toMatchObject({ status: "cancelled", paymentStatus: "cancelled" });
+    expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["B", "C"]);
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-PAY-BATCH-07 retry is ledger-idempotent with no duplicate effects", async () => {
+    const order = await makeOrder();
+    const observations = [
+      { paymentId: "B", status: "rejected", observedAt: 10 },
+      { paymentId: "A", status: "approved", observedAt: 20 },
+    ];
+
+    await reconcileBatch(order, observations);
+    await flushReceipts();
+    const firstLedger = (await getOrder(order.externalReference))?.mpPaymentLedger;
+    await reconcileBatch(order, observations);
+    await flushReceipts();
+    const stored = await getOrder(order.externalReference);
+
+    expect(stored?.mpPaymentLedger).toEqual(firstLedger);
+    expect(stored?.paymentStatus).toBe("confirmed");
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
     expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
   });

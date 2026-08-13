@@ -463,6 +463,25 @@ export type MercadoPagoPaymentReconciliationResult = {
   evictedPaymentIds: string[];
 };
 
+export type MercadoPagoPaymentObservationApplication = {
+  paymentId: string;
+  duplicate: boolean;
+  omittedForCapacity: boolean;
+  evictedPaymentIds: string[];
+};
+
+export type MercadoPagoPaymentBatchReconciliationResult = {
+  order: Order | null;
+  receiptOrder?: Order;
+  firstEffectiveApproval: boolean;
+  activeApprovedPaymentIds: string[];
+  observationResults: MercadoPagoPaymentObservationApplication[];
+};
+
+type MercadoPagoPaymentBatchDependencies = {
+  persistOrder?: (key: string, order: Order, ttlSeconds: number) => Promise<void>;
+};
+
 const paymentProjectionChanged = (before: Order, after: Order) =>
   before.status !== after.status ||
   before.paymentStatus !== after.paymentStatus ||
@@ -473,39 +492,68 @@ const paymentProjectionChanged = (before: Order, after: Order) =>
   before.inventoryIssueAt !== after.inventoryIssueAt ||
   before.stockDeductedAt !== after.stockDeductedAt;
 
-export async function reconcileMercadoPagoPaymentObservation(
+export async function reconcileMercadoPagoPaymentObservationBatch(
   externalReference: string,
-  observation: MercadoPagoPaymentObservation
-): Promise<MercadoPagoPaymentReconciliationResult> {
+  observations: MercadoPagoPaymentObservation[],
+  dependencies: MercadoPagoPaymentBatchDependencies = {}
+): Promise<MercadoPagoPaymentBatchReconciliationResult> {
   let inventoryResult: InventoryAttemptResult | undefined;
+  const persistOrder = dependencies.persistOrder ?? setJson;
   const persisted = await withOrderWriteLock(externalReference, async () => {
     const stored = await getJson<StoredOrder>(orderKey(externalReference));
     if (!stored) return null;
 
     const current = ensureOrderDefaults(stored);
-    const ledgerResult = applyMercadoPagoPaymentObservation(current, observation);
-    if (ledgerResult.omittedForCapacity) {
+    let aggregate = current;
+    let acceptedObservationCount = 0;
+    let activeApprovedPaymentIds: string[] = [];
+    const observationResults: MercadoPagoPaymentObservationApplication[] = [];
+
+    // Build the complete financial projection in memory. No observation prefix is persisted.
+    for (const observation of observations) {
+      const ledgerResult = applyMercadoPagoPaymentObservation(aggregate, observation);
+      activeApprovedPaymentIds = ledgerResult.activeApprovedPaymentIds;
+      observationResults.push({
+        paymentId: observation.paymentId,
+        duplicate: ledgerResult.duplicate,
+        omittedForCapacity: ledgerResult.omittedForCapacity,
+        evictedPaymentIds: ledgerResult.evictedPaymentIds,
+      });
+      if (ledgerResult.omittedForCapacity) continue;
+      acceptedObservationCount += 1;
+      aggregate = { ...aggregate, ...ledgerResult.patch };
+    }
+
+    const firstEffectiveApproval =
+      current.paymentStatus !== "confirmed" && aggregate.paymentStatus === "confirmed";
+    if (acceptedObservationCount === 0) {
       return {
         before: current,
         order: current,
-        duplicate: false,
         firstEffectiveApproval: false,
-        activeApprovedPaymentIds: ledgerResult.activeApprovedPaymentIds,
-        omittedForCapacity: true,
-        evictedPaymentIds: [],
+        activeApprovedPaymentIds,
+        observationResults,
       };
     }
+
     let inventoryPatch: Partial<Order> = {};
-    if (ledgerResult.firstEffectiveApproval && shouldAttemptInventoryAutomatically(current)) {
+    if (firstEffectiveApproval && shouldAttemptInventoryAutomatically(current)) {
       inventoryResult = await attemptInventoryForPaidOrder(current);
       inventoryPatch = inventoryResultToOrderPatch(inventoryResult);
     }
 
     const { order: updated } = mergeOrderUpdate(current, {
-      ...ledgerResult.patch,
+      status: aggregate.status,
+      paymentStatus: aggregate.paymentStatus,
+      mpPaymentId: aggregate.mpPaymentId,
+      mpStatus: aggregate.mpStatus,
+      mpPaymentLedger: aggregate.mpPaymentLedger,
+      mpPaymentAttentionCode: aggregate.mpPaymentAttentionCode,
+      approvedAt: aggregate.approvedAt,
       ...inventoryPatch,
     });
-    await setJson(
+    // This is the batch's only durable financial order write.
+    await persistOrder(
       orderKey(externalReference),
       updated,
       privacyPolicy.ttlSecondsForStatus(updated.status)
@@ -514,23 +562,19 @@ export async function reconcileMercadoPagoPaymentObservation(
     return {
       before: current,
       order: updated,
-      receiptOrder: ledgerResult.firstEffectiveApproval ? updated : undefined,
-      duplicate: ledgerResult.duplicate,
-      firstEffectiveApproval: ledgerResult.firstEffectiveApproval,
-      activeApprovedPaymentIds: ledgerResult.activeApprovedPaymentIds,
-      omittedForCapacity: false,
-      evictedPaymentIds: ledgerResult.evictedPaymentIds,
+      receiptOrder: firstEffectiveApproval ? updated : undefined,
+      firstEffectiveApproval,
+      activeApprovedPaymentIds,
+      observationResults,
     };
   });
 
   if (!persisted) {
     return {
       order: null,
-      duplicate: false,
       firstEffectiveApproval: false,
       activeApprovedPaymentIds: [],
-      omittedForCapacity: false,
-      evictedPaymentIds: [],
+      observationResults: [],
     };
   }
 
@@ -588,11 +632,29 @@ export async function reconcileMercadoPagoPaymentObservation(
   return {
     order: projectedOrder,
     receiptOrder: persisted.receiptOrder,
-    duplicate: persisted.duplicate,
     firstEffectiveApproval: persisted.firstEffectiveApproval,
     activeApprovedPaymentIds: persisted.activeApprovedPaymentIds,
-    omittedForCapacity: persisted.omittedForCapacity,
-    evictedPaymentIds: persisted.evictedPaymentIds,
+    observationResults: persisted.observationResults,
+  };
+}
+
+export async function reconcileMercadoPagoPaymentObservation(
+  externalReference: string,
+  observation: MercadoPagoPaymentObservation
+): Promise<MercadoPagoPaymentReconciliationResult> {
+  const batch = await reconcileMercadoPagoPaymentObservationBatch(
+    externalReference,
+    [observation]
+  );
+  const application = batch.observationResults[0];
+  return {
+    order: batch.order,
+    receiptOrder: batch.receiptOrder,
+    duplicate: application?.duplicate ?? false,
+    firstEffectiveApproval: batch.firstEffectiveApproval,
+    activeApprovedPaymentIds: batch.activeApprovedPaymentIds,
+    omittedForCapacity: application?.omittedForCapacity ?? false,
+    evictedPaymentIds: application?.evictedPaymentIds ?? [],
   };
 }
 

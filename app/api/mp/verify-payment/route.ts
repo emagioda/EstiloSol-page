@@ -11,7 +11,10 @@ import {
   iteratePaymentSearchPagesByExternalReference,
   MercadoPagoPaymentSearchPaginationError,
 } from "@/src/server/payments/mpClient";
-import { reconcileMercadoPagoPayment } from "@/src/server/payments/reconciliation";
+import {
+  reconcileMercadoPagoPayment,
+  reconcileMercadoPagoPaymentObservations,
+} from "@/src/server/payments/reconciliation";
 import type { MpPaymentResponse, MpSearchPayment } from "@/src/server/payments/shared";
 import { checkRateLimit, checkRateLimitByKey } from "@/src/server/security/rateLimit";
 import { parseExternalReference } from "@/src/server/validation/payments";
@@ -217,7 +220,7 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
         }
         return NextResponse.json(
           {
-            error: "La bÃºsqueda de pagos excediÃ³ el lÃ­mite seguro",
+            error: "No se pudo completar la búsqueda de pagos",
             code: "MP_PAYMENT_SEARCH_INCOMPLETE",
           },
           { status: 503 }
@@ -274,16 +277,13 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
     }
   }
 
-  for (const observation of stagedPayments.values()) {
-    const reconciliation = await reconcileMercadoPagoPayment({
-      externalReference: ref,
-      payment: observation.payment,
-      ...(observation.fallbackPaymentId
-        ? { fallbackPaymentId: observation.fallbackPaymentId }
-        : {}),
-      source: observation.source,
-    });
-    if (reconciliation.outcome === "reconciled") order = reconciliation.order;
+  const reconciliation = await reconcileMercadoPagoPaymentObservations({
+    externalReference: ref,
+    validationOrder: order,
+    observations: Array.from(stagedPayments.values()),
+  });
+  if (reconciliation.outcome === "reconciled") {
+    order = reconciliation.order;
   }
 
   return buildOrderResponse(order);
