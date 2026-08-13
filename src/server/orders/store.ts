@@ -20,6 +20,11 @@ import {
   removePendingSalesSheetOrder,
 } from "./salesSheetSync";
 import type { Order, OrderPaymentStatus, OrderStatus } from "./types";
+import {
+  applyMercadoPagoPaymentObservation,
+  MULTIPLE_APPROVED_MP_PAYMENTS,
+  type MercadoPagoPaymentObservation,
+} from "@/src/server/payments/ledger";
 
 export const WEBHOOK_DEDUPE_TTL_SECONDS = 7 * 24 * 3600;
 
@@ -446,6 +451,130 @@ export async function markApproved(
     customer: privacyPolicy.anonymizeCustomer(approvedOrder.customer),
     notes: undefined,
   }, { syncSheet: false });
+}
+
+export type MercadoPagoPaymentReconciliationResult = {
+  order: Order | null;
+  receiptOrder?: Order;
+  duplicate: boolean;
+  firstEffectiveApproval: boolean;
+  activeApprovedPaymentIds: string[];
+};
+
+const paymentProjectionChanged = (before: Order, after: Order) =>
+  before.status !== after.status ||
+  before.paymentStatus !== after.paymentStatus ||
+  before.mpPaymentId !== after.mpPaymentId ||
+  before.mpStatus !== after.mpStatus ||
+  before.inventoryStatus !== after.inventoryStatus ||
+  before.inventoryIssueCode !== after.inventoryIssueCode ||
+  before.inventoryIssueAt !== after.inventoryIssueAt ||
+  before.stockDeductedAt !== after.stockDeductedAt;
+
+export async function reconcileMercadoPagoPaymentObservation(
+  externalReference: string,
+  observation: MercadoPagoPaymentObservation
+): Promise<MercadoPagoPaymentReconciliationResult> {
+  let inventoryResult: InventoryAttemptResult | undefined;
+  const persisted = await withOrderWriteLock(externalReference, async () => {
+    const stored = await getJson<StoredOrder>(orderKey(externalReference));
+    if (!stored) return null;
+
+    const current = ensureOrderDefaults(stored);
+    const ledgerResult = applyMercadoPagoPaymentObservation(current, observation);
+    let inventoryPatch: Partial<Order> = {};
+    if (ledgerResult.firstEffectiveApproval && shouldAttemptInventoryAutomatically(current)) {
+      inventoryResult = await attemptInventoryForPaidOrder(current);
+      inventoryPatch = inventoryResultToOrderPatch(inventoryResult);
+    }
+
+    const { order: updated } = mergeOrderUpdate(current, {
+      ...ledgerResult.patch,
+      ...inventoryPatch,
+    });
+    await setJson(
+      orderKey(externalReference),
+      updated,
+      privacyPolicy.ttlSecondsForStatus(updated.status)
+    );
+
+    return {
+      before: current,
+      order: updated,
+      receiptOrder: ledgerResult.firstEffectiveApproval ? updated : undefined,
+      duplicate: ledgerResult.duplicate,
+      firstEffectiveApproval: ledgerResult.firstEffectiveApproval,
+      activeApprovedPaymentIds: ledgerResult.activeApprovedPaymentIds,
+    };
+  });
+
+  if (!persisted) {
+    return {
+      order: null,
+      duplicate: false,
+      firstEffectiveApproval: false,
+      activeApprovedPaymentIds: [],
+    };
+  }
+
+  if (inventoryResult) {
+    await reportInventoryAttempt(externalReference, inventoryResult, "payment_approval");
+  } else if (persisted.firstEffectiveApproval) {
+    logEvent("info", "inventory.automatic_attempt_skipped", {
+      orderId: externalReference,
+      inventoryStatus: persisted.before.inventoryStatus ?? "legacy_deducted",
+    });
+  }
+
+  if (persisted.activeApprovedPaymentIds.length > 1) {
+    logEvent("warn", "payments.multiple_approved_mp_payments", {
+      orderId: externalReference,
+      attentionCode: MULTIPLE_APPROVED_MP_PAYMENTS,
+      approvedPaymentCount: persisted.activeApprovedPaymentIds.length,
+    });
+  }
+
+  let projectedOrder = persisted.order;
+  let deferredSheetSynced = true;
+  if (
+    persisted.firstEffectiveApproval &&
+    projectedOrder.salesSheetDeferredUntilApprovedAt &&
+    !projectedOrder.salesSheetSyncedAt
+  ) {
+    const sheetResult = await appendApprovedOrderToSalesSheet(projectedOrder);
+    projectedOrder = sheetResult.order;
+    deferredSheetSynced = sheetResult.synced;
+  } else if (
+    (!projectedOrder.salesSheetDeferredUntilApprovedAt || projectedOrder.salesSheetSyncedAt) &&
+    paymentProjectionChanged(persisted.before, projectedOrder)
+  ) {
+    projectedOrder = (await updateOrder(externalReference, {})) ?? projectedOrder;
+  }
+
+  if (
+    persisted.firstEffectiveApproval &&
+    projectedOrder.paymentStatus === "confirmed" &&
+    privacyPolicy.minimizeApprovedOrderPII &&
+    (!projectedOrder.salesSheetDeferredUntilApprovedAt || deferredSheetSynced)
+  ) {
+    projectedOrder =
+      (await updateOrder(
+        externalReference,
+        {
+          customer: privacyPolicy.anonymizeCustomer(projectedOrder.customer),
+          notes: undefined,
+        },
+        { syncSheet: false }
+      )) ?? projectedOrder;
+  }
+
+  return {
+    order: projectedOrder,
+    receiptOrder: persisted.receiptOrder,
+    duplicate: persisted.duplicate,
+    firstEffectiveApproval: persisted.firstEffectiveApproval,
+    activeApprovedPaymentIds: persisted.activeApprovedPaymentIds,
+  };
 }
 
 export async function retryPaidOrderInventory(externalReference: string): Promise<Order | null> {

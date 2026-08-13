@@ -300,7 +300,7 @@ describe("verify-payment confirmation flow", () => {
 
     expect(response.status).toBe(200);
     expect(body.approved).toBe(false);
-    expect(updatedOrder?.status).toBe("pending");
+    expect(updatedOrder?.status).toBe("created");
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
   });
 
@@ -500,6 +500,75 @@ describe("verify-payment confirmation flow", () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ref }),
   }));
+
+  it("AUD3-PAY-03 verify reconciles every search result instead of choosing one", async () => {
+    const ref = await createPr2Order("multiple-payments");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      results: [
+        {
+          id: "A",
+          status: "approved",
+          external_reference: ref,
+          transaction_amount: 1000,
+          currency_id: "ARS",
+        },
+        {
+          id: "B",
+          status: "rejected",
+          external_reference: ref,
+          transaction_amount: 1000,
+          currency_id: "ARS",
+        },
+      ],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    const response = await postVerify(ref);
+    const body = await response.json();
+    const stored = await getOrder(ref);
+    expect(body.approved).toBe(true);
+    expect(stored?.paymentStatus).toBe("confirmed");
+    expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["A", "B"]);
+  });
+
+  it("AUD3-PAY-15 MP timeout does not degrade a legacy confirmed order", async () => {
+    const ref = await createPr2Order("timeout-confirmed", {
+      status: "approved",
+      paymentStatus: "confirmed",
+      mpPaymentId: "A",
+      mpStatus: "approved",
+      approvedAt: Date.now(),
+      inventoryStatus: "deducted",
+      stockDeductedAt: Date.now(),
+    });
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("network timeout"));
+
+    const body = await (await postVerify(ref)).json();
+    const stored = await getOrder(ref);
+    expect(body.approved).toBe(true);
+    expect(stored).toMatchObject({ paymentStatus: "confirmed", mpPaymentId: "A" });
+    expect(stored?.mpPaymentLedger).toBeUndefined();
+  });
+
+  it("AUD3-PAY-16 MP not found does not degrade a legacy confirmed order", async () => {
+    const ref = await createPr2Order("not-found-confirmed", {
+      status: "approved",
+      paymentStatus: "confirmed",
+      mpPaymentId: "A",
+      mpStatus: "approved",
+      approvedAt: Date.now(),
+      inventoryStatus: "deducted",
+      stockDeductedAt: Date.now(),
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ message: "not found" }), { status: 404 })
+    );
+
+    const body = await (await postVerify(ref)).json();
+    const stored = await getOrder(ref);
+    expect(body.approved).toBe(true);
+    expect(stored).toMatchObject({ paymentStatus: "confirmed", mpPaymentId: "A" });
+    expect(stored?.mpPaymentLedger).toBeUndefined();
+  });
 
   it("PR2-VERIFY-01 deducted inventory still returns approved true", async () => {
     const ref = await createPr2Order("verify-deducted");

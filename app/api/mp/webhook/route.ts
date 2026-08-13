@@ -1,81 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/src/config/env";
-import { scheduleAfterResponse } from "@/src/server/http/afterResponse";
-import { getJson, setJson } from "@/src/server/kv";
+import { setJson } from "@/src/server/kv";
 import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
-import {
-  fetchPaymentByIdFromMp,
-} from "@/src/server/payments/mpClient";
-import { amountMatches, terminalOrderStatusFromMpStatus } from "@/src/server/payments/shared";
-import type { MpPaymentResponse } from "@/src/server/payments/shared";
-import {
-  extractWebhookDataId,
-  isValidWebhookSignature,
-} from "@/src/server/payments/webhookSignature";
-import {
-  WEBHOOK_DEDUPE_TTL_SECONDS,
-  claimReceiptEmailDelivery,
-  getOrder,
-  markApproved,
-  markTerminalPaymentState,
-  paymentDedupeKey,
-  releaseReceiptEmailDelivery,
-  updateOrder,
-  webhookDedupeKey,
-} from "@/src/server/orders/store";
+import { WEBHOOK_DEDUPE_TTL_SECONDS, webhookDedupeKey } from "@/src/server/orders/store";
+import { fetchPaymentByIdFromMp } from "@/src/server/payments/mpClient";
+import { reconcileMercadoPagoPayment } from "@/src/server/payments/reconciliation";
+import { terminalOrderStatusFromMpStatus } from "@/src/server/payments/shared";
+import { extractWebhookDataId, isValidWebhookSignature } from "@/src/server/payments/webhookSignature";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
-import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
-import type { Order } from "@/src/server/orders/types";
 
 export const runtime = "nodejs";
 
-type MpWebhookPayload = {
-  data?: {
-    id?: string | number;
-  };
-};
-
-const trySendReceiptEmail = async (
-  order: Order,
-  paymentId: string | number | undefined,
-  approvedAt: number
-) => {
-  if (order.receiptEmailSentAt) return;
-  const claimed = await claimReceiptEmailDelivery(order.externalReference);
-  if (!claimed) return;
-
-  const latestOrder = await getOrder(order.externalReference);
-  if (latestOrder?.receiptEmailSentAt) return;
-
-  const result = await sendOrderReceiptEmail({
-    order,
-    paymentId,
-    approvedAt,
-  });
-
-  if (result.sent) {
-    await updateOrder(order.externalReference, { receiptEmailSentAt: Date.now() });
-    await trackBusinessEvent("payment.receipt_email.sent", { externalReference: order.externalReference });
-    return;
-  }
-
-  if (result.reason === "missing_customer_email") {
-    await releaseReceiptEmailDelivery(order.externalReference);
-    return;
-  }
-
-  logEvent("warn", "payments.receipt_email_failed", {
-    externalReference: order.externalReference,
-    reason: result.reason,
-    detail: result.detail,
-  });
-  await trackBusinessEvent("payment.receipt_email.failed", {
-    externalReference: order.externalReference,
-    reason: result.reason,
-  });
-  await releaseReceiptEmailDelivery(order.externalReference);
-};
+type MpWebhookPayload = { data?: { id?: string | number } };
 
 export async function POST(request: NextRequest) {
   const envStatus = env.validatePaymentsServerEnv();
@@ -98,12 +35,10 @@ export async function POST(request: NextRequest) {
 
   const webhookSecret = env.getOptionalServer("MP_WEBHOOK_SECRET");
   const body = (await request.json().catch(() => null)) as MpWebhookPayload | null;
-
   if (!body || typeof body !== "object") {
     await trackBusinessEvent("payment.webhook.invalid_payload", { route: "webhook" });
     return NextResponse.json({ error: "Invalid webhook payload" }, { status: 400 });
   }
-
   if (!webhookSecret && process.env.NODE_ENV === "production") {
     return NextResponse.json({ error: "MP_WEBHOOK_SECRET missing" }, { status: 500 });
   }
@@ -113,7 +48,6 @@ export async function POST(request: NextRequest) {
     await trackBusinessEvent("payment.webhook.no_data_id", { route: "webhook" });
     return NextResponse.json({ received: true }, { status: 200 });
   }
-
   if (webhookSecret) {
     const signatureCheck = isValidWebhookSignature({
       secret: webhookSecret,
@@ -121,134 +55,85 @@ export async function POST(request: NextRequest) {
       xRequestId: request.headers.get("x-request-id"),
       xSignatureHeader: request.headers.get("x-signature"),
     });
-
     if (!signatureCheck.ok && signatureCheck.reason === "missing_headers") {
       await trackBusinessEvent("payment.webhook.missing_signature_headers", { eventId: dataIdLower });
       return NextResponse.json({ error: "Missing webhook signature headers" }, { status: 401 });
     }
-
-    if (
-      !signatureCheck.ok &&
-      (signatureCheck.reason === "invalid_signature" ||
-        signatureCheck.reason === "invalid_timestamp" ||
-        signatureCheck.reason === "stale_timestamp")
-    ) {
+    if (!signatureCheck.ok) {
       await trackBusinessEvent("payment.webhook.invalid_signature", { eventId: dataIdLower });
       return NextResponse.json({ error: "Invalid webhook signature" }, { status: 401 });
     }
   }
 
-  const paymentId = /^\d+$/.test(dataIdLower) ? dataIdLower : body.data?.id ? String(body.data.id) : "";
-  if (!paymentId) {
-    return NextResponse.json({ received: true }, { status: 200 });
-  }
-
-  let paymentInfo: MpPaymentResponse | null;
-  let paymentResponse: Response;
+  const requestedPaymentId = String(body.data?.id ?? dataIdLower);
+  let paymentResult: Awaited<ReturnType<typeof fetchPaymentByIdFromMp>>;
   try {
-    const paymentResult = await fetchPaymentByIdFromMp(paymentId, accessToken);
-    paymentResponse = paymentResult.response;
-    paymentInfo = paymentResult.data;
+    paymentResult = await fetchPaymentByIdFromMp(requestedPaymentId, accessToken);
   } catch (error) {
-    logEvent("error", "payments.webhook_payment_network_error", { paymentId, error });
-    await trackBusinessEvent("payment.webhook.payment_lookup_failed", { paymentId });
+    logEvent("error", "payments.webhook_payment_network_error", {
+      paymentId: requestedPaymentId,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    await trackBusinessEvent("payment.webhook.payment_lookup_failed", { paymentId: requestedPaymentId });
+    return NextResponse.json({ error: "Payment lookup failed" }, { status: 503 });
+  }
+  if (!paymentResult.response.ok || !paymentResult.data) {
+    logEvent("error", "payments.webhook_payment_fetch_failed", {
+      paymentId: requestedPaymentId,
+      status: paymentResult.response.status,
+    });
+    await trackBusinessEvent("payment.webhook.payment_lookup_failed", { paymentId: requestedPaymentId });
     return NextResponse.json({ error: "Payment lookup failed" }, { status: 503 });
   }
 
-  if (!paymentResponse.ok || !paymentInfo) {
-    logEvent("error", "payments.webhook_payment_fetch_failed", { paymentId, status: paymentResponse.status });
-    await trackBusinessEvent("payment.webhook.payment_lookup_failed", { paymentId });
-    return NextResponse.json({ error: "Payment lookup failed" }, { status: 503 });
-  }
-
-  const externalReference = String(paymentInfo.external_reference || "").trim();
+  const externalReference = String(paymentResult.data.external_reference ?? "");
   if (!externalReference) {
-    await trackBusinessEvent("payment.webhook.no_external_reference", { paymentId });
+    await trackBusinessEvent("payment.webhook.no_external_reference", { paymentId: requestedPaymentId });
     return NextResponse.json({ received: true }, { status: 200 });
   }
 
-  const order = await getOrder(externalReference);
-  if (!order) {
-    await trackBusinessEvent("payment.webhook.order_not_found", { externalReference });
-    return NextResponse.json({ received: true }, { status: 200 });
-  }
-
-  const status = String(paymentInfo.status || "").trim().toLowerCase();
-  const amount = Number(paymentInfo.transaction_amount);
-  const currency = String(paymentInfo.currency_id || "").toUpperCase();
-  const resolvedPaymentId = String(paymentInfo.id || paymentId);
-  const dedupeKey = webhookDedupeKey(`${resolvedPaymentId}:${status || "unknown"}`);
-  const alreadyProcessed = await getJson<string>(dedupeKey);
-  if (alreadyProcessed) {
-    logEvent("info", "payments.webhook_deduped", { eventId: dataIdLower, paymentId: resolvedPaymentId, status });
-    await trackBusinessEvent("payment.webhook.deduped", {
-      eventId: dataIdLower,
-      paymentId: resolvedPaymentId,
-      mpStatus: status,
-    });
-    return NextResponse.json({ received: true }, { status: 200 });
-  }
-
-  if (
-    status === "approved" &&
-    Number.isFinite(amount) &&
-    currency === "ARS" &&
-    order.currency === "ARS" &&
-    amountMatches(amount, order.total)
-  ) {
-    const paymentKey = paymentDedupeKey(resolvedPaymentId);
-    const paymentProcessed = await getJson<string>(paymentKey);
-    if (!paymentProcessed) {
-      const approvedAt = Date.now();
-      let approvedOrder: Order | null;
-      try {
-        approvedOrder = await markApproved(externalReference, {
-          paymentId: resolvedPaymentId,
-          mpStatus: status,
-          approvedAt,
-        });
-      } catch (error) {
-        logEvent("error", "payments.webhook_order_persistence_failed", {
-          externalReference,
-          errorName: error instanceof Error ? error.name : "unknown",
-        });
-        return NextResponse.json({ error: "Order persistence failed" }, { status: 503 });
-      }
-      if (!approvedOrder || approvedOrder.paymentStatus !== "confirmed") {
-        return NextResponse.json({ error: "Order persistence failed" }, { status: 503 });
-      }
-      scheduleAfterResponse(() => trySendReceiptEmail(order, resolvedPaymentId, approvedAt));
-      await setJson(paymentKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
-      logEvent("info", "payments.approved_from_webhook", {
-        externalReference,
-        paymentId: resolvedPaymentId,
-        amount,
-      });
-      await trackBusinessEvent("payment.webhook.approved", {
-        externalReference,
-        paymentId: resolvedPaymentId,
-      });
-    }
-    await setJson(dedupeKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
-    return NextResponse.json({ received: true }, { status: 200 });
-  }
-
-  const terminalStatus = terminalOrderStatusFromMpStatus(status);
-  if (terminalStatus) {
-    await markTerminalPaymentState(externalReference, {
-      status: terminalStatus,
-      paymentId: resolvedPaymentId,
-      mpStatus: status,
-    });
-    await setJson(dedupeKey, "1", WEBHOOK_DEDUPE_TTL_SECONDS);
-    await trackBusinessEvent("payment.webhook.terminal_status", {
+  try {
+    const reconciliation = await reconcileMercadoPagoPayment({
       externalReference,
-      mpStatus: status,
-      orderStatus: terminalStatus,
+      payment: paymentResult.data,
+      fallbackPaymentId: requestedPaymentId,
+      source: "webhook",
     });
+    if (reconciliation.outcome === "reconciled") {
+      await setJson(
+        webhookDedupeKey(`${reconciliation.paymentId}:${reconciliation.status}`),
+        "1",
+        WEBHOOK_DEDUPE_TTL_SECONDS
+      );
+      if (reconciliation.status === "approved") {
+        await trackBusinessEvent("payment.webhook.approved", {
+          externalReference,
+          paymentId: reconciliation.paymentId,
+          mpStatus: reconciliation.status,
+        });
+      } else {
+        const terminalStatus = terminalOrderStatusFromMpStatus(reconciliation.status);
+        if (terminalStatus) {
+          await trackBusinessEvent("payment.webhook.terminal_status", {
+            externalReference,
+            paymentId: reconciliation.paymentId,
+            mpStatus: reconciliation.status,
+            orderStatus: terminalStatus,
+          });
+        }
+      }
+    } else if (reconciliation.outcome === "order_not_found") {
+      await trackBusinessEvent("payment.webhook.order_not_found", { externalReference });
+    }
+    return NextResponse.json({ received: true }, { status: 200 });
+  } catch (error) {
+    logEvent("error", "payments.webhook_reconciliation_failed", {
+      paymentId: requestedPaymentId,
+      externalReference,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    return NextResponse.json({ error: "Payment reconciliation failed" }, { status: 503 });
   }
-
-  return NextResponse.json({ received: true }, { status: 200 });
 }
 
 export function GET() {

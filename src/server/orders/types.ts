@@ -14,6 +14,19 @@ export type OrderInventoryStatus = "pending" | "deducted" | "conflict" | "error"
 export type OrderPaymentMethod = "mercadopago" | "transfer" | "cash";
 export type OrderDeliveryMethod = "delivery" | "pickup";
 
+export type MercadoPagoPaymentLedgerEntry = {
+  paymentId: string;
+  status: string;
+  statusDetail?: string;
+  amount: number;
+  currency: "ARS";
+  firstSeenAt: number;
+  lastSeenAt: number;
+  approvedAt?: number;
+};
+
+export type MercadoPagoPaymentAttentionCode = "MULTIPLE_APPROVED_MP_PAYMENTS";
+
 export type OrderItem = {
   productId: string;
   title: string;
@@ -64,6 +77,8 @@ export type Order = {
   mpPreferenceId?: string;
   mpPaymentId?: string;
   mpStatus?: string;
+  mpPaymentLedger?: Record<string, MercadoPagoPaymentLedgerEntry>;
+  mpPaymentAttentionCode?: MercadoPagoPaymentAttentionCode;
   approvedAt?: number;
   inventoryStatus?: OrderInventoryStatus;
   inventoryIssueCode?: string;

@@ -19,6 +19,7 @@ export const CHECKOUT_ATTEMPT_LEASE_TTL_SECONDS = 90;
 // fallback TTL bounds coordination after a crash without turning the
 // fingerprint into a durable idempotency key.
 export const CHECKOUT_ATTEMPT_COORDINATION_TTL_SECONDS = 120;
+export const MERCADO_PAGO_PREFERENCE_TTL_MS = 48 * 60 * 60 * 1000;
 
 export const CHECKOUT_ATTEMPT_REQUIRED = "CHECKOUT_ATTEMPT_REQUIRED";
 export const CHECKOUT_ATTEMPT_CONFLICT = "CHECKOUT_ATTEMPT_CONFLICT";
@@ -81,6 +82,8 @@ export type CheckoutAttemptRecord = CheckoutOrderIdentity & {
   state: CheckoutAttemptState;
   createdAt: number;
   updatedAt: number;
+  preferenceValidFrom?: number;
+  preferenceExpiresAt?: number;
   snapshot?: CheckoutAttemptSnapshot;
   result?: CheckoutAttemptResult;
 };
@@ -506,6 +509,47 @@ export async function prepareCheckoutAttempt(
   };
   await setJson(attemptKey(attempt.checkoutAttemptId), prepared, CHECKOUT_ATTEMPT_TTL_SECONDS);
   return prepared;
+}
+
+export async function ensureMercadoPagoPreferenceWindow(
+  attempt: CheckoutAttemptRecord,
+  ownerToken: string,
+  now = Date.now()
+): Promise<CheckoutAttemptRecord> {
+  await assertCheckoutAttemptLeaseOwner(attempt.checkoutAttemptId, ownerToken);
+  const hasStart = attempt.preferenceValidFrom !== undefined;
+  const hasEnd = attempt.preferenceExpiresAt !== undefined;
+
+  if (hasStart !== hasEnd) {
+    throw new Error("Checkout attempt has an incomplete Mercado Pago preference window");
+  }
+  if (hasStart && hasEnd) {
+    if (
+      !Number.isSafeInteger(attempt.preferenceValidFrom) ||
+      !Number.isSafeInteger(attempt.preferenceExpiresAt) ||
+      attempt.preferenceExpiresAt! - attempt.preferenceValidFrom! !== MERCADO_PAGO_PREFERENCE_TTL_MS
+    ) {
+      throw new Error("Checkout attempt has an invalid Mercado Pago preference window");
+    }
+    return attempt;
+  }
+
+  if (!Number.isSafeInteger(now)) {
+    throw new Error("Invalid server timestamp for Mercado Pago preference window");
+  }
+  const withWindow: CheckoutAttemptRecord = {
+    ...attempt,
+    preferenceValidFrom: now,
+    preferenceExpiresAt: now + MERCADO_PAGO_PREFERENCE_TTL_MS,
+    updatedAt: now,
+  };
+  await setJson(attemptKey(attempt.checkoutAttemptId), withWindow, CHECKOUT_ATTEMPT_TTL_SECONDS);
+  logEvent("info", "payments.mp.preference_window_created", {
+    checkoutAttemptId: attempt.checkoutAttemptId,
+    externalReference: attempt.externalReference,
+    validForMs: MERCADO_PAGO_PREFERENCE_TTL_MS,
+  });
+  return withWindow;
 }
 
 export async function completeCheckoutAttempt(

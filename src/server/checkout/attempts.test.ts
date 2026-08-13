@@ -2,15 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getJson } from "@/src/server/kv";
 import type { Order } from "@/src/server/orders/types";
 import type { ParsedCheckoutBody } from "@/src/server/validation/payments";
+import { privacyPolicy } from "@/src/server/privacy/policy";
 import {
   CheckoutAttemptConflictError,
   CHECKOUT_ATTEMPT_ALIAS_TTL_SECONDS,
   CHECKOUT_ATTEMPT_COORDINATION_TTL_SECONDS,
   CHECKOUT_ATTEMPT_TTL_SECONDS,
+  MERCADO_PAGO_PREFERENCE_TTL_MS,
   acquireCheckoutAttemptLease,
   beginCheckoutAttempt,
   buildCheckoutAttemptFingerprint,
   completeCheckoutAttempt,
+  ensureMercadoPagoPreferenceWindow,
   getCheckoutAttempt,
   getCheckoutAttemptAlias,
   getOrCreateCheckoutAttempt,
@@ -62,6 +65,94 @@ afterEach(() => {
 });
 
 describe("AUD3 checkout attempt claims", () => {
+  it("AUD3-PAY-17 persists and reuses one exact 48-hour Mercado Pago window", async () => {
+    const id = attemptId("preference-window");
+    const fingerprint = buildCheckoutAttemptFingerprint(checkoutBody());
+    const beginning = await beginCheckoutAttempt(id, fingerprint);
+    expect(beginning.outcome).toBe("claimed");
+    if (beginning.outcome !== "claimed") throw new Error("attempt was not claimed");
+
+    const now = Date.UTC(2026, 7, 12, 15, 0, 0);
+    const first = await ensureMercadoPagoPreferenceWindow(beginning.attempt, beginning.ownerToken, now);
+    const replay = await ensureMercadoPagoPreferenceWindow(
+      first,
+      beginning.ownerToken,
+      now + 60_000
+    );
+
+    expect(first.preferenceValidFrom).toBe(now);
+    expect(first.preferenceExpiresAt).toBe(now + MERCADO_PAGO_PREFERENCE_TTL_MS);
+    expect(replay.preferenceValidFrom).toBe(first.preferenceValidFrom);
+    expect(replay.preferenceExpiresAt).toBe(first.preferenceExpiresAt);
+    expect(CHECKOUT_ATTEMPT_TTL_SECONDS * 1000).toBeGreaterThan(
+      MERCADO_PAGO_PREFERENCE_TTL_MS
+    );
+    expect(privacyPolicy.ttlSecondsForStatus("preference_created") * 1000).toBeGreaterThan(
+      MERCADO_PAGO_PREFERENCE_TTL_MS
+    );
+    await completeCheckoutAttempt(
+      replay,
+      {
+        kind: "mercadopago",
+        response: {
+          checkoutAttemptId: id,
+          id: "preference-window-test",
+          externalReference: replay.externalReference,
+        },
+      },
+      beginning.ownerToken
+    );
+    await releaseCheckoutAttemptLease(id, beginning.ownerToken);
+  });
+
+  it("AUD3-PREF-08 gives a new intentional attempt its own 48-hour window", async () => {
+    const firstId = attemptId("window-first");
+    const secondId = attemptId("window-second");
+    const first = await getOrCreateCheckoutAttempt(
+      firstId,
+      buildCheckoutAttemptFingerprint(checkoutBody({ notes: "first purchase" }))
+    );
+    const second = await getOrCreateCheckoutAttempt(
+      secondId,
+      buildCheckoutAttemptFingerprint(checkoutBody({ notes: "second purchase" }))
+    );
+    const firstOwner = await acquireCheckoutAttemptLease(firstId);
+    const secondOwner = await acquireCheckoutAttemptLease(secondId);
+    expect(firstOwner).toBeTruthy();
+    expect(secondOwner).toBeTruthy();
+
+    const firstWindow = await ensureMercadoPagoPreferenceWindow(first.attempt, firstOwner!, 1_000_000);
+    const secondWindow = await ensureMercadoPagoPreferenceWindow(second.attempt, secondOwner!, 1_060_000);
+
+    expect(secondWindow.preferenceValidFrom).not.toBe(firstWindow.preferenceValidFrom);
+    expect(firstWindow.preferenceExpiresAt! - firstWindow.preferenceValidFrom!).toBe(
+      MERCADO_PAGO_PREFERENCE_TTL_MS
+    );
+    expect(secondWindow.preferenceExpiresAt! - secondWindow.preferenceValidFrom!).toBe(
+      MERCADO_PAGO_PREFERENCE_TTL_MS
+    );
+    await releaseCheckoutAttemptLease(firstId, firstOwner!);
+    await releaseCheckoutAttemptLease(secondId, secondOwner!);
+  });
+
+  it("fails closed instead of renewing an incomplete stored preference window", async () => {
+    const id = attemptId("window-corrupt");
+    const created = await getOrCreateCheckoutAttempt(
+      id,
+      buildCheckoutAttemptFingerprint(checkoutBody({ notes: "corrupt window" }))
+    );
+    const owner = await acquireCheckoutAttemptLease(id);
+    expect(owner).toBeTruthy();
+    await expect(
+      ensureMercadoPagoPreferenceWindow(
+        { ...created.attempt, preferenceValidFrom: 1_000_000 },
+        owner!,
+        2_000_000
+      )
+    ).rejects.toThrow("incomplete Mercado Pago preference window");
+    await releaseCheckoutAttemptLease(id, owner!);
+  });
+
   it("AUD3-IDEM-01 atomically creates the first attempt", async () => {
     const id = attemptId("create");
     const fingerprint = buildCheckoutAttemptFingerprint(checkoutBody());

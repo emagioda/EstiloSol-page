@@ -80,7 +80,7 @@ export async function searchPaymentsByExternalReference(
   searchUrl.searchParams.set("external_reference", externalReference);
   searchUrl.searchParams.set("sort", "date_created");
   searchUrl.searchParams.set("criteria", "desc");
-  searchUrl.searchParams.set("limit", "5");
+  searchUrl.searchParams.set("limit", "20");
 
   const response = await fetchWithPolicy(
     searchUrl.toString(),

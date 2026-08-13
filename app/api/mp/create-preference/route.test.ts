@@ -105,6 +105,17 @@ const installPreferenceFetchMock = (options: FetchMockOptions = {}) => {
   return { fetchMock, mpBodies, mpIdempotencyKeys, sheetPostBodies };
 };
 
+const expectExactPreferenceWindow = (body: Record<string, unknown>) => {
+  expect(body.expires).toBe(true);
+  expect(typeof body.expiration_date_from).toBe("string");
+  expect(typeof body.expiration_date_to).toBe("string");
+  const from = Date.parse(String(body.expiration_date_from));
+  const to = Date.parse(String(body.expiration_date_to));
+  expect(Number.isFinite(from)).toBe(true);
+  expect(Number.isFinite(to)).toBe(true);
+  expect(to - from).toBe(48 * 60 * 60 * 1000);
+};
+
 describe("create-preference local development flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -195,7 +206,9 @@ describe("create-preference local development flow", () => {
     const checkoutAttemptId = `attempt-${Date.now()}-same`;
     const body = buildCheckoutBody({ checkoutAttemptId });
 
+    const serverStartLowerBound = Date.now();
     const firstResponse = await POST(createRequest(body));
+    const serverStartUpperBound = Date.now();
     const firstBody = (await firstResponse.json()) as { initPoint?: string; externalReference?: string };
     const secondResponse = await POST(createRequest(body));
     const secondBody = (await secondResponse.json()) as { initPoint?: string; externalReference?: string };
@@ -204,6 +217,13 @@ describe("create-preference local development flow", () => {
     expect(secondResponse.status).toBe(200);
     expect(secondBody).toMatchObject(firstBody);
     expect(mpBodies).toHaveLength(1);
+    expectExactPreferenceWindow(mpBodies[0]);
+    expect(Date.parse(String(mpBodies[0].expiration_date_from))).toBeGreaterThanOrEqual(
+      serverStartLowerBound
+    );
+    expect(Date.parse(String(mpBodies[0].expiration_date_from))).toBeLessThanOrEqual(
+      serverStartUpperBound
+    );
     expect(sheetPostBodies.filter((entry) => entry.action === "appendRow")).toHaveLength(0);
 
     fetchMock.mockRestore();
@@ -232,6 +252,7 @@ describe("create-preference local development flow", () => {
     expect(firstBody.checkoutAttemptId).not.toBe(secondBody.checkoutAttemptId);
     expect(firstBody.externalReference).not.toBe(secondBody.externalReference);
     expect(mpBodies).toHaveLength(2);
+    mpBodies.forEach(expectExactPreferenceWindow);
     expect(sheetPostBodies.filter((entry) => entry.action === "appendRow")).toHaveLength(0);
 
     fetchMock.mockRestore();
@@ -320,6 +341,7 @@ describe("create-preference local development flow", () => {
     expect(typeof body.summaryToken).toBe("string");
 
     expect(mpBodies).toHaveLength(1);
+    expectExactPreferenceWindow(mpBodies[0]);
     expect(sheetPostBodies.filter((entry) => entry.action === "appendRow")).toHaveLength(0);
     expect(mpBodies[0]).not.toHaveProperty("auto_return");
     expect(mpBodies[0].metadata).toMatchObject({
@@ -553,6 +575,7 @@ describe("create-preference local development flow", () => {
     expect(retryBody.summaryToken).toBe(leftBody.summaryToken);
     expect(retryBody.id).toBe(leftBody.id);
     expect(mpBodies).toHaveLength(1);
+    expectExactPreferenceWindow(mpBodies[0]);
     expect(mpIdempotencyKeys).toHaveLength(1);
     expect(mpIdempotencyKeys[0]).toMatch(/^[a-f0-9]{64}$/);
     fetchMock.mockRestore();
@@ -583,6 +606,9 @@ describe("create-preference local development flow", () => {
       new Set([secondBody.externalReference])
     );
     expect(new Set(mpIdempotencyKeys)).toHaveLength(1);
+    expect(new Set(mpBodies.map((entry) => entry.expiration_date_from))).toHaveLength(1);
+    expect(new Set(mpBodies.map((entry) => entry.expiration_date_to))).toHaveLength(1);
+    mpBodies.forEach(expectExactPreferenceWindow);
     fetchMock.mockRestore();
   });
 
