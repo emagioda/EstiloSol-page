@@ -327,7 +327,7 @@ describe("verify-payment confirmation flow", () => {
       updatedAt: Date.now(),
     }, { syncSheet: false });
 
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       new Response(JSON.stringify({ results: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -484,15 +484,17 @@ describe("verify-payment confirmation flow", () => {
   };
 
   const mockApprovedSearch = (ref: string) => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      results: [{
-        id: `pay-${ref}`,
-        status: "approved",
-        external_reference: ref,
-        transaction_amount: 1000,
-        currency_id: "ARS",
-      }],
-    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({
+        results: [{
+          id: `pay-${ref}`,
+          status: "approved",
+          external_reference: ref,
+          transaction_amount: 1000,
+          currency_id: "ARS",
+        }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    );
   };
 
   const postVerify = (ref: string) => POST(new NextRequest("http://localhost:3000/api/mp/verify-payment", {
@@ -528,6 +530,147 @@ describe("verify-payment confirmation flow", () => {
     expect(body.approved).toBe(true);
     expect(stored?.paymentStatus).toBe("confirmed");
     expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["A", "B"]);
+  });
+
+  it("AUD3-PAY-PAGE-01 finds and reconciles an approval on page 2", async () => {
+    const ref = await createPr2Order("approval-page-2");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        paging: { total: 2, offset: 0, limit: 1 },
+        results: [{
+          id: "A",
+          status: "pending",
+          external_reference: ref,
+          transaction_amount: 1000,
+          currency_id: "ARS",
+        }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        paging: { total: 2, offset: 1, limit: 1 },
+        results: [{
+          id: "B",
+          status: "approved",
+          external_reference: ref,
+          transaction_amount: 1000,
+          currency_id: "ARS",
+        }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    const response = await postVerify(ref);
+    const body = await response.json();
+    const stored = await getOrder(ref);
+
+    expect(response.status).toBe(200);
+    expect(body.approved).toBe(true);
+    expect(stored?.paymentStatus).toBe("confirmed");
+    expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["A", "B"]);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("offset=0");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("offset=1");
+  });
+
+  it("AUD3-PAY-PAGE-02 deduplicates payment IDs repeated across pages", async () => {
+    const ref = await createPr2Order("duplicate-pages");
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        paging: { total: 2, offset: 0, limit: 1 },
+        results: [{
+          id: "A",
+          status: "approved",
+          external_reference: ref,
+          transaction_amount: 1000,
+          currency_id: "ARS",
+        }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        paging: { total: 2, offset: 1, limit: 1 },
+        results: [{
+          id: "A",
+          status: "approved",
+          external_reference: ref,
+          transaction_amount: 1000,
+          currency_id: "ARS",
+        }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    const body = await (await postVerify(ref)).json();
+    const stored = await getOrder(ref);
+
+    expect(body.approved).toBe(true);
+    expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["A"]);
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-PAY-PAGE-03 a later page failure preserves an approval already reconciled", async () => {
+    const ref = await createPr2Order("page-failure-after-approval");
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        paging: { total: 2, offset: 0, limit: 1 },
+        results: [{
+          id: "A",
+          status: "approved",
+          external_reference: ref,
+          transaction_amount: 1000,
+          currency_id: "ARS",
+        }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: "page failed" }), { status: 400 }));
+
+    const response = await postVerify(ref);
+    const body = await response.json();
+    const stored = await getOrder(ref);
+
+    expect(response.status).toBe(200);
+    expect(body.approved).toBe(true);
+    expect(stored).toMatchObject({ paymentStatus: "confirmed", mpPaymentId: "A" });
+  });
+
+  it("AUD3-PAY-PAGE-04 reports a safe incomplete search above the bounded result ceiling", async () => {
+    const ref = await createPr2Order("page-result-ceiling");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      paging: { total: 201, offset: 0, limit: 20 },
+      results: [{
+        id: "A",
+        status: "approved",
+        external_reference: ref,
+        transaction_amount: 1000,
+        currency_id: "ARS",
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    const response = await postVerify(ref);
+    const body = await response.json();
+    const stored = await getOrder(ref);
+
+    expect(response.status).toBe(503);
+    expect(body).toMatchObject({ code: "MP_PAYMENT_SEARCH_INCOMPLETE" });
+    expect(stored?.paymentStatus).toBe("pending");
+    expect(stored?.mpPaymentLedger).toBeUndefined();
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+
+    const confirmedRef = await createPr2Order("page-result-ceiling-confirmed", {
+      status: "approved",
+      paymentStatus: "confirmed",
+      mpPaymentId: "KNOWN",
+      mpStatus: "approved",
+      approvedAt: Date.now(),
+      inventoryStatus: "deducted",
+      stockDeductedAt: Date.now(),
+    });
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(JSON.stringify({
+      paging: { total: 201, offset: 0, limit: 20 },
+      results: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    const confirmedResponse = await postVerify(confirmedRef);
+    const confirmedBody = await confirmedResponse.json();
+    const confirmedStored = await getOrder(confirmedRef);
+
+    expect(confirmedResponse.status).toBe(200);
+    expect(confirmedBody.approved).toBe(true);
+    expect(confirmedStored).toMatchObject({
+      paymentStatus: "confirmed",
+      mpPaymentId: "KNOWN",
+    });
   });
 
   it("AUD3-PAY-15 MP timeout does not degrade a legacy confirmed order", async () => {

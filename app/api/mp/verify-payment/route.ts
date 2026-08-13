@@ -6,7 +6,11 @@ import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { resolveOrderInventoryStatus } from "@/src/server/orders/inventory";
 import { getOrder } from "@/src/server/orders/store";
 import type { Order } from "@/src/server/orders/types";
-import { fetchPaymentByIdFromMp, searchPaymentsByExternalReference } from "@/src/server/payments/mpClient";
+import {
+  fetchPaymentByIdFromMp,
+  iteratePaymentSearchPagesByExternalReference,
+  MercadoPagoPaymentSearchPaginationError,
+} from "@/src/server/payments/mpClient";
 import { reconcileMercadoPagoPayment } from "@/src/server/payments/reconciliation";
 import { checkRateLimit, checkRateLimitByKey } from "@/src/server/security/rateLimit";
 import { parseExternalReference } from "@/src/server/validation/payments";
@@ -133,37 +137,69 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
     }
   }
 
-  let search: Awaited<ReturnType<typeof searchPaymentsByExternalReference>> | null = null;
-  try {
-    search = await searchPaymentsByExternalReference(ref, accessToken);
-  } catch (error) {
-    logEvent("error", "payments.verify_search_network_error", {
-      externalReference: ref,
-      errorName: error instanceof Error ? error.name : "unknown",
-    });
-    await trackBusinessEvent("payment.verify.network_error", { externalReference: ref });
-  }
-
-  if (!search) return buildOrderResponse(order);
-  if (!search.response.ok) {
-    logEvent("warn", "payments.search_non_ok", {
-      externalReference: ref,
-      status: search.response.status,
-    });
-    return buildOrderResponse(order);
-  }
-
   const seenPaymentIds = new Set<string>();
-  for (const payment of search.data?.results ?? []) {
-    const candidateId = String(payment.id ?? "");
-    if (!candidateId || seenPaymentIds.has(candidateId)) continue;
-    seenPaymentIds.add(candidateId);
-    const reconciliation = await reconcileMercadoPagoPayment({
-      externalReference: ref,
-      payment,
-      source: "verify_search",
-    });
-    if (reconciliation.outcome === "reconciled") order = reconciliation.order;
+  const searchPages = iteratePaymentSearchPagesByExternalReference(ref, accessToken);
+  while (true) {
+    let nextPage: Awaited<ReturnType<typeof searchPages.next>>;
+    try {
+      nextPage = await searchPages.next();
+    } catch (error) {
+      const latestOrder = (await getOrder(ref)) ?? order;
+      if (error instanceof MercadoPagoPaymentSearchPaginationError) {
+        logEvent("error", "payments.verify_search_incomplete", {
+          externalReference: ref,
+          reason: error.reason,
+          reportedTotal: error.reportedTotal,
+        });
+        await trackBusinessEvent("payment.verify.search_incomplete", {
+          externalReference: ref,
+          reason: error.reason,
+        });
+        if (latestOrder.paymentStatus === "confirmed") {
+          return buildOrderResponse(latestOrder);
+        }
+        return NextResponse.json(
+          {
+            error: "La bÃºsqueda de pagos excediÃ³ el lÃ­mite seguro",
+            code: "MP_PAYMENT_SEARCH_INCOMPLETE",
+          },
+          { status: 503 }
+        );
+      }
+
+      logEvent("error", "payments.verify_search_network_error", {
+        externalReference: ref,
+        errorName: error instanceof Error ? error.name : "unknown",
+      });
+      await trackBusinessEvent("payment.verify.network_error", { externalReference: ref });
+      return buildOrderResponse(latestOrder);
+    }
+
+    if (nextPage.done) break;
+    const search = nextPage.value;
+    if (!search.response.ok) {
+      logEvent("warn", "payments.search_non_ok", {
+        externalReference: ref,
+        status: search.response.status,
+      });
+      await trackBusinessEvent("payment.verify.search_non_ok", {
+        externalReference: ref,
+        status: search.response.status,
+      });
+      return buildOrderResponse((await getOrder(ref)) ?? order);
+    }
+
+    for (const payment of search.data?.results ?? []) {
+      const candidateId = String(payment.id ?? "");
+      if (!candidateId || seenPaymentIds.has(candidateId)) continue;
+      seenPaymentIds.add(candidateId);
+      const reconciliation = await reconcileMercadoPagoPayment({
+        externalReference: ref,
+        payment,
+        source: "verify_search",
+      });
+      if (reconciliation.outcome === "reconciled") order = reconciliation.order;
+    }
   }
 
   return buildOrderResponse(order);

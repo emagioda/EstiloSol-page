@@ -20,7 +20,13 @@ export type MercadoPagoReconciliationResult =
   | { outcome: "order_not_found" }
   | {
       outcome: "ignored";
-      reason: "invalid_payment_id" | "reference_mismatch" | "amount_mismatch" | "currency_mismatch" | "missing_status";
+      reason:
+        | "invalid_payment_id"
+        | "reference_mismatch"
+        | "amount_mismatch"
+        | "currency_mismatch"
+        | "missing_status"
+        | "ledger_capacity";
       order: Order;
     }
   | {
@@ -127,6 +133,18 @@ export async function reconcileMercadoPagoPayment(input: {
     observedAt,
   });
   if (!result.order) return { outcome: "order_not_found" };
+  if (result.omittedForCapacity) {
+    return ignored("ledger_capacity", result.order, input.source);
+  }
+
+  if (result.evictedPaymentIds.length > 0) {
+    logEvent("warn", "payments.mp_ledger_compacted", {
+      orderId: order.externalReference,
+      source: input.source,
+      protectedPaymentId: paymentId,
+      evictedPaymentIds: result.evictedPaymentIds,
+    });
+  }
 
   if (result.firstEffectiveApproval && result.receiptOrder) {
     const approvedAt =

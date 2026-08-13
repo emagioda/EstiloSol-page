@@ -17,15 +17,25 @@ export type MercadoPagoPaymentObservation = {
   observedAt: number;
 };
 
-export class MercadoPagoPaymentLedgerCapacityError extends Error {
-  constructor() {
-    super("Mercado Pago payment ledger capacity exceeded");
-    this.name = "MercadoPagoPaymentLedgerCapacityError";
-  }
-}
-
 const isExplicitApprovalReversal = (status: string) =>
   status === "refunded" || status === "charged_back";
+
+const isProtectedFinancialEvidence = (entry: MercadoPagoPaymentLedgerEntry) =>
+  entry.status === "approved" ||
+  entry.approvedAt !== undefined ||
+  isExplicitApprovalReversal(entry.status);
+
+const compareEvictionCandidates = (
+  left: MercadoPagoPaymentLedgerEntry,
+  right: MercadoPagoPaymentLedgerEntry
+) => {
+  const lastSeenDifference = left.lastSeenAt - right.lastSeenAt;
+  if (lastSeenDifference) return lastSeenDifference;
+  const firstSeenDifference = left.firstSeenAt - right.firstSeenAt;
+  if (firstSeenDifference) return firstSeenDifference;
+  if (left.paymentId === right.paymentId) return 0;
+  return left.paymentId < right.paymentId ? -1 : 1;
+};
 
 const durableStatusForEntry = (
   existing: MercadoPagoPaymentLedgerEntry | undefined,
@@ -87,6 +97,8 @@ export type MercadoPagoLedgerResult = {
   duplicate: boolean;
   firstEffectiveApproval: boolean;
   activeApprovedPaymentIds: string[];
+  omittedForCapacity: boolean;
+  evictedPaymentIds: string[];
 };
 
 export const applyMercadoPagoPaymentObservation = (
@@ -95,10 +107,6 @@ export const applyMercadoPagoPaymentObservation = (
 ): MercadoPagoLedgerResult => {
   const currentLedger = order.mpPaymentLedger ?? {};
   const existing = currentLedger[observation.paymentId];
-  if (!existing && Object.keys(currentLedger).length >= MAX_MERCADO_PAGO_PAYMENT_LEDGER_ENTRIES) {
-    throw new MercadoPagoPaymentLedgerCapacityError();
-  }
-
   const legacyApprovedAt =
     order.paymentStatus === "confirmed" && order.mpPaymentId === observation.paymentId
       ? order.approvedAt ?? observation.observedAt
@@ -108,7 +116,62 @@ export const applyMercadoPagoPaymentObservation = (
     legacyApprovedAt ??
     (observation.status === "approved" ? observation.observedAt : undefined);
   const durableStatus = durableStatusForEntry(existing, observation.status);
-  const entry: MercadoPagoPaymentLedgerEntry = {
+  const incomingIsProtected =
+    approvedAt !== undefined || isExplicitApprovalReversal(durableStatus);
+  const isNewEntry = existing === undefined;
+  const currentEntryCount = Object.keys(currentLedger).length;
+  const omittedForCapacity =
+    isNewEntry &&
+    !incomingIsProtected &&
+    currentEntryCount >= MAX_MERCADO_PAGO_PAYMENT_LEDGER_ENTRIES;
+  if (omittedForCapacity) {
+    const currentApprovedPaymentIds = activeApprovedEntries(currentLedger).map(
+      (entry) => entry.paymentId
+    );
+    const legacyApprovedPaymentId =
+      order.paymentStatus === "confirmed" &&
+      order.mpPaymentId &&
+      !currentLedger[order.mpPaymentId]
+        ? order.mpPaymentId
+        : undefined;
+    return {
+      patch: {
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+        mpPaymentId: order.mpPaymentId,
+        mpStatus: order.mpStatus,
+        mpPaymentLedger: currentLedger,
+        mpPaymentAttentionCode: order.mpPaymentAttentionCode,
+        approvedAt: order.approvedAt,
+      },
+      duplicate: false,
+      firstEffectiveApproval: false,
+      activeApprovedPaymentIds: Array.from(
+        new Set([
+          ...currentApprovedPaymentIds,
+          ...(legacyApprovedPaymentId ? [legacyApprovedPaymentId] : []),
+        ])
+      ),
+      omittedForCapacity: true,
+      evictedPaymentIds: [],
+    };
+  }
+  const evictionsNeeded = Math.max(
+    0,
+    currentEntryCount - MAX_MERCADO_PAGO_PAYMENT_LEDGER_ENTRIES + 1
+  );
+  const evictedPaymentIds =
+    isNewEntry && incomingIsProtected && evictionsNeeded > 0
+      ? Object.values(currentLedger)
+          .filter((entry) => !isProtectedFinancialEvidence(entry))
+          .sort(compareEvictionCandidates)
+          .slice(0, evictionsNeeded)
+          .map((entry) => entry.paymentId)
+      : [];
+  const ledger = { ...currentLedger };
+  for (const paymentId of evictedPaymentIds) delete ledger[paymentId];
+
+  ledger[observation.paymentId] = {
     paymentId: observation.paymentId,
     status: durableStatus,
     ...(durableStatus === observation.status && observation.statusDetail
@@ -122,7 +185,6 @@ export const applyMercadoPagoPaymentObservation = (
     lastSeenAt: observation.observedAt,
     ...(approvedAt !== undefined ? { approvedAt } : {}),
   };
-  const ledger = { ...currentLedger, [observation.paymentId]: entry };
   const approvedEntries = activeApprovedEntries(ledger);
   const legacyApprovedPaymentId =
     order.paymentStatus === "confirmed" &&
@@ -195,5 +257,7 @@ export const applyMercadoPagoPaymentObservation = (
     duplicate: entryIsUnchanged(existing, observation),
     firstEffectiveApproval,
     activeApprovedPaymentIds,
+    omittedForCapacity: false,
+    evictedPaymentIds,
   };
 };

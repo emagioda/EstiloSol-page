@@ -174,6 +174,36 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
   });
 
+  it("AUD3-PAY-CAP-04 capacity compaction cannot repeat inventory or receipt effects", async () => {
+    const mpPaymentLedger = Object.fromEntries(
+      Array.from({ length: 20 }, (_, index) => {
+        const paymentId = `N${index}`;
+        return [
+          paymentId,
+          {
+            paymentId,
+            status: "rejected",
+            amount: 1000,
+            currency: "ARS" as const,
+            firstSeenAt: index + 1,
+            lastSeenAt: index + 1,
+          },
+        ];
+      })
+    );
+    const order = await makeOrder({ mpPaymentLedger });
+
+    await reconcile(order, "A", "approved");
+    await reconcile(order, "A", "approved");
+    await flushReceipts();
+    const stored = await getOrder(order.externalReference);
+
+    expect(stored?.paymentStatus).toBe("confirmed");
+    expect(stored?.mpPaymentLedger).toHaveProperty("A.approvedAt");
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+  });
+
   it("AUD3-PREF-10 reconciles valid payment evidence after the preference window time", async () => {
     const order = await makeOrder();
     const expiredWindow = Date.UTC(2026, 7, 1);

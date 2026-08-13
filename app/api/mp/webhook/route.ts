@@ -65,7 +65,20 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const requestedPaymentId = String(body.data?.id ?? dataIdLower);
+  const bodyPaymentId =
+    body.data?.id === undefined ? null : String(body.data.id).trim().toLowerCase();
+  if (bodyPaymentId !== null && bodyPaymentId !== dataIdLower) {
+    logEvent("warn", "payments.webhook_data_id_mismatch", {
+      signedPaymentId: dataIdLower,
+      bodyPaymentId,
+    });
+    await trackBusinessEvent("payment.webhook.data_id_mismatch", {
+      signedPaymentId: dataIdLower,
+    });
+    return NextResponse.json({ error: "Webhook payment ID mismatch" }, { status: 400 });
+  }
+
+  const requestedPaymentId = dataIdLower;
   let paymentResult: Awaited<ReturnType<typeof fetchPaymentByIdFromMp>>;
   try {
     paymentResult = await fetchPaymentByIdFromMp(requestedPaymentId, accessToken);

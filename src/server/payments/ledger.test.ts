@@ -3,7 +3,6 @@ import type { Order } from "@/src/server/orders/types";
 import {
   applyMercadoPagoPaymentObservation,
   MAX_MERCADO_PAGO_PAYMENT_LEDGER_ENTRIES,
-  MercadoPagoPaymentLedgerCapacityError,
   MULTIPLE_APPROVED_MP_PAYMENTS,
   type MercadoPagoPaymentObservation,
 } from "./ledger";
@@ -148,17 +147,77 @@ describe("AUD3 Mercado Pago payment ledger aggregation", () => {
     });
   });
 
-  it("fails closed at the defensive ledger bound without discarding evidence", () => {
+  it("AUD3-PAY-CAP-01 admits a 21st approved observation by evicting only old nonprotected evidence", () => {
     let order = baseOrder();
     for (let index = 0; index < MAX_MERCADO_PAGO_PAYMENT_LEDGER_ENTRIES; index += 1) {
-      order = apply(order, `P${index}`, index === 0 ? "approved" : "rejected", index + 1);
+      order = apply(order, `P${index}`, "rejected", index + 1);
     }
-    expect(() => apply(order, "OVERFLOW", "pending", 100)).toThrow(
-      MercadoPagoPaymentLedgerCapacityError
+
+    const result = applyMercadoPagoPaymentObservation(
+      order,
+      observation("APPROVED", "approved", 100)
     );
-    expect(Object.keys(order.mpPaymentLedger ?? {})).toHaveLength(
+
+    expect(result.patch.paymentStatus).toBe("confirmed");
+    expect(result.patch.mpPaymentLedger).toHaveProperty("APPROVED.approvedAt", 100);
+    expect(result.patch.mpPaymentLedger).not.toHaveProperty("P0");
+    expect(result.evictedPaymentIds).toEqual(["P0"]);
+    expect(Object.keys(result.patch.mpPaymentLedger ?? {})).toHaveLength(
       MAX_MERCADO_PAGO_PAYMENT_LEDGER_ENTRIES
     );
-    expect(order.mpPaymentLedger?.P0.status).toBe("approved");
+  });
+
+  it("AUD3-PAY-CAP-02 never removes an entry carrying approvedAt during compaction", () => {
+    let order = apply(baseOrder(), "PROTECTED", "approved", 1);
+    order = apply(order, "PROTECTED", "rejected", 2);
+    for (let index = 0; index < MAX_MERCADO_PAGO_PAYMENT_LEDGER_ENTRIES - 1; index += 1) {
+      order = apply(order, `N${index}`, "rejected", index + 10);
+    }
+
+    const result = applyMercadoPagoPaymentObservation(
+      order,
+      observation("NEW_APPROVAL", "approved", 100)
+    );
+
+    expect(result.patch.mpPaymentLedger).toHaveProperty("PROTECTED.approvedAt", 1);
+    expect(result.evictedPaymentIds).toEqual(["N0"]);
+    expect(result.patch.paymentStatus).toBe("confirmed");
+  });
+
+  it("AUD3-PAY-CAP-03 keeps refunds and chargebacks and treats 20 as a soft bound", () => {
+    let order = baseOrder();
+    for (let index = 0; index < MAX_MERCADO_PAGO_PAYMENT_LEDGER_ENTRIES; index += 1) {
+      order = apply(order, `R${index}`, index % 2 === 0 ? "refunded" : "charged_back", index + 1);
+    }
+
+    const result = applyMercadoPagoPaymentObservation(
+      order,
+      observation("APPROVED", "approved", 100)
+    );
+
+    expect(result.evictedPaymentIds).toEqual([]);
+    expect(Object.keys(result.patch.mpPaymentLedger ?? {})).toHaveLength(
+      MAX_MERCADO_PAGO_PAYMENT_LEDGER_ENTRIES + 1
+    );
+    expect(result.patch.mpPaymentLedger?.R0.status).toBe("refunded");
+    expect(result.patch.mpPaymentLedger?.R1.status).toBe("charged_back");
+    expect(result.patch.paymentStatus).toBe("confirmed");
+  });
+
+  it("omits new nonprotected evidence at the soft bound without changing aggregate truth", () => {
+    let order = baseOrder();
+    for (let index = 0; index < MAX_MERCADO_PAGO_PAYMENT_LEDGER_ENTRIES; index += 1) {
+      order = apply(order, `R${index}`, "refunded", index + 1);
+    }
+
+    const result = applyMercadoPagoPaymentObservation(
+      order,
+      observation("OVERFLOW", "pending", 100)
+    );
+
+    expect(result.omittedForCapacity).toBe(true);
+    expect(result.patch.mpPaymentLedger).toEqual(order.mpPaymentLedger);
+    expect(result.patch.mpPaymentLedger).not.toHaveProperty("OVERFLOW");
+    expect(result.patch.paymentStatus).toBe(order.paymentStatus);
   });
 });

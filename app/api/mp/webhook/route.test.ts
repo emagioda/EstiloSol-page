@@ -19,20 +19,28 @@ import {
 import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
 import { InventoryOperationError } from "@/src/server/inventory/errors";
 
-const signedWebhookRequest = (paymentId: string) => {
+const signedWebhookRequest = (
+  paymentId: string,
+  options: { queryPaymentId?: string; bodyPaymentId?: string | number } = {}
+) => {
   const ts = String(Date.now());
   const xRequestId = "req-1";
-  const manifest = `id:${paymentId};request-id:${xRequestId};ts:${ts};`;
+  const signedPaymentId = paymentId.trim().toLowerCase();
+  const manifest = `id:${signedPaymentId};request-id:${xRequestId};ts:${ts};`;
   const v1 = createHmac("sha256", "webhook-secret").update(manifest).digest("hex");
+  const url = new URL("http://localhost:3000/api/mp/webhook");
+  if (options.queryPaymentId !== undefined) {
+    url.searchParams.set("data.id", options.queryPaymentId);
+  }
 
-  return new NextRequest("http://localhost:3000/api/mp/webhook", {
+  return new NextRequest(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-request-id": xRequestId,
       "x-signature": `ts=${ts},v1=${v1}`,
     },
-    body: JSON.stringify({ data: { id: paymentId } }),
+    body: JSON.stringify({ data: { id: options.bodyPaymentId ?? paymentId } }),
   });
 };
 
@@ -67,6 +75,53 @@ describe("mercado pago webhook route", () => {
     expect(fetchMock).not.toHaveBeenCalled();
 
     fetchMock.mockRestore();
+  });
+
+  it("AUD3-WEBHOOK-ID-01 rejects signed query A plus body B without fetching B", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+
+    const response = await POST(signedWebhookRequest("12345", {
+      queryPaymentId: "12345",
+      bodyPaymentId: "67890",
+    }));
+
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-WEBHOOK-ID-02 accepts matching query/body A and fetches exactly signed A", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "12345" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const response = await POST(signedWebhookRequest("12345", {
+      queryPaymentId: "12345",
+      bodyPaymentId: "12345",
+    }));
+
+    expect(response.status).toBe(200);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://api.mercadopago.com/v1/payments/12345"
+    );
+  });
+
+  it("AUD3-WEBHOOK-ID-03 preserves body-only signed ID behavior", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "12345" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const response = await POST(signedWebhookRequest("12345"));
+
+    expect(response.status).toBe(200);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://api.mercadopago.com/v1/payments/12345"
+    );
   });
 
   it("does not dedupe webhook events when Mercado Pago lookup fails", async () => {

@@ -459,6 +459,8 @@ export type MercadoPagoPaymentReconciliationResult = {
   duplicate: boolean;
   firstEffectiveApproval: boolean;
   activeApprovedPaymentIds: string[];
+  omittedForCapacity: boolean;
+  evictedPaymentIds: string[];
 };
 
 const paymentProjectionChanged = (before: Order, after: Order) =>
@@ -482,6 +484,17 @@ export async function reconcileMercadoPagoPaymentObservation(
 
     const current = ensureOrderDefaults(stored);
     const ledgerResult = applyMercadoPagoPaymentObservation(current, observation);
+    if (ledgerResult.omittedForCapacity) {
+      return {
+        before: current,
+        order: current,
+        duplicate: false,
+        firstEffectiveApproval: false,
+        activeApprovedPaymentIds: ledgerResult.activeApprovedPaymentIds,
+        omittedForCapacity: true,
+        evictedPaymentIds: [],
+      };
+    }
     let inventoryPatch: Partial<Order> = {};
     if (ledgerResult.firstEffectiveApproval && shouldAttemptInventoryAutomatically(current)) {
       inventoryResult = await attemptInventoryForPaidOrder(current);
@@ -505,6 +518,8 @@ export async function reconcileMercadoPagoPaymentObservation(
       duplicate: ledgerResult.duplicate,
       firstEffectiveApproval: ledgerResult.firstEffectiveApproval,
       activeApprovedPaymentIds: ledgerResult.activeApprovedPaymentIds,
+      omittedForCapacity: false,
+      evictedPaymentIds: ledgerResult.evictedPaymentIds,
     };
   });
 
@@ -514,6 +529,8 @@ export async function reconcileMercadoPagoPaymentObservation(
       duplicate: false,
       firstEffectiveApproval: false,
       activeApprovedPaymentIds: [],
+      omittedForCapacity: false,
+      evictedPaymentIds: [],
     };
   }
 
@@ -574,6 +591,8 @@ export async function reconcileMercadoPagoPaymentObservation(
     duplicate: persisted.duplicate,
     firstEffectiveApproval: persisted.firstEffectiveApproval,
     activeApprovedPaymentIds: persisted.activeApprovedPaymentIds,
+    omittedForCapacity: persisted.omittedForCapacity,
+    evictedPaymentIds: persisted.evictedPaymentIds,
   };
 }
 

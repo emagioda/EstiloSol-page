@@ -19,6 +19,11 @@ export type MpSearchPayment = {
 
 export type MpSearchResponse = {
   results?: MpSearchPayment[];
+  paging?: {
+    total?: number;
+    limit?: number;
+    offset?: number;
+  };
 };
 
 export type MpPaymentResponse = {
