@@ -369,6 +369,45 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     expect(Object.keys((await getOrder(order.externalReference))?.mpPaymentLedger ?? {})).toEqual(["A"]);
   });
 
+  it.each([
+    ["AUD3-H06-REF-02", "verify_search"],
+    ["AUD3-H06-REF-03", "snapshot_scan"],
+  ] as const)("%s rejects protected evidence for another order during %s with zero local mutation", async (_caseId, source) => {
+    const order = await makeOrder();
+    const before = await getOrder(order.externalReference);
+    vi.mocked(prepareProtectedPaymentDurability).mockImplementationOnce(async (input) =>
+      input.payment.external_reference === input.expectedExternalReference
+        ? { protected: false }
+        : { protected: true, outcome: "reference_mismatch" },
+    );
+
+    const result = await reconcileMercadoPagoPaymentObservations({
+      externalReference: order.externalReference,
+      validationOrder: order,
+      observations: [{
+        payment: payment(order, "B", "approved", {
+          external_reference: `${order.externalReference}-other`,
+        }),
+        source,
+      }],
+    });
+
+    expect(result).toMatchObject({
+      outcome: "reconciled",
+      observationResults: [{ outcome: "ignored", reason: "reference_mismatch", order: null }],
+      firstEffectiveApproval: false,
+    });
+    expect(prepareProtectedPaymentDurability).toHaveBeenCalledWith(expect.objectContaining({
+      expectedExternalReference: order.externalReference,
+      source,
+    }));
+    expect(await getOrder(order.externalReference)).toEqual(before);
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+  });
+
   it("AUD3-PAY-07 two approvals retain both and do not repeat effects", async () => {
     const order = await makeOrder();
     await reconcile(order, "A", "approved");

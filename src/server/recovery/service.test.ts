@@ -24,6 +24,7 @@ import {
   getRecoverySnapshot,
   markRecoveryEventState,
   markRecoverySnapshotState,
+  upsertRecoverySnapshot,
 } from "./repository";
 import { buildRecoveryOrderSnapshot, serializeRecoverySnapshot } from "./snapshot";
 import { completeRecoveryEvent, prepareProtectedPaymentDurability } from "./service";
@@ -101,6 +102,7 @@ describe("AUD3-H06 recovery durability service", () => {
     const stored = storedSnapshot();
     vi.mocked(getRecoverySnapshot).mockResolvedValue(stored);
     const result = await prepareProtectedPaymentDurability({
+      expectedExternalReference: order().externalReference,
       payment: payment(),
       source: "webhook",
       observedAt: NOW,
@@ -135,6 +137,7 @@ describe("AUD3-H06 recovery durability service", () => {
     vi.mocked(getOrder).mockRejectedValueOnce(new Error("KV unavailable"));
     vi.mocked(getRecoverySnapshot).mockResolvedValue(storedSnapshot());
     const result = await prepareProtectedPaymentDurability({
+      expectedExternalReference: order().externalReference,
       payment: payment(),
       source: "webhook",
       observedAt: NOW,
@@ -145,6 +148,7 @@ describe("AUD3-H06 recovery durability service", () => {
 
   it("persists genuine protected evidence as attention when both Order and snapshot are missing", async () => {
     const result = await prepareProtectedPaymentDurability({
+      expectedExternalReference: order().externalReference,
       payment: payment(),
       source: "webhook",
       observedAt: NOW,
@@ -168,6 +172,7 @@ describe("AUD3-H06 recovery durability service", () => {
     } as Awaited<ReturnType<typeof getOrderRowById>>);
 
     const result = await prepareProtectedPaymentDurability({
+      expectedExternalReference: order().externalReference,
       payment: payment("refunded"),
       source: "webhook",
       observedAt: NOW,
@@ -190,6 +195,7 @@ describe("AUD3-H06 recovery durability service", () => {
       currency: "ARS",
     } as Awaited<ReturnType<typeof getOrderRowById>>);
     const result = await prepareProtectedPaymentDurability({
+      expectedExternalReference: order().externalReference,
       payment: payment("charged_back"),
       source: "webhook",
       observedAt: NOW,
@@ -199,6 +205,28 @@ describe("AUD3-H06 recovery durability service", () => {
       validationState: "missing_snapshot",
       processingState: "attention",
     }));
+  });
+
+  it("binds protected evidence to the expected reference before any recovery read or write", async () => {
+    const result = await prepareProtectedPaymentDurability({
+      expectedExternalReference: "es-expected-order-000001",
+      payment: {
+        ...payment(),
+        external_reference: "es-other-order-000002",
+      },
+      source: "verify_payment_id",
+      observedAt: NOW,
+    });
+
+    expect(result).toEqual({ protected: true, outcome: "reference_mismatch" });
+    expect(getOrder).not.toHaveBeenCalled();
+    expect(getRecoverySnapshot).not.toHaveBeenCalled();
+    expect(getOrderRowById).not.toHaveBeenCalled();
+    expect(upsertRecoverySnapshot).not.toHaveBeenCalled();
+    expect(appendRecoveryPaymentEvent).not.toHaveBeenCalled();
+    expect(markRecoveryEventState).not.toHaveBeenCalled();
+    expect(markRecoverySnapshotState).not.toHaveBeenCalled();
+    expect(ensureOrderExists).not.toHaveBeenCalled();
   });
 
   it("minimizes completed snapshot PII only after the durable event is completed", async () => {

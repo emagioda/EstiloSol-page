@@ -139,13 +139,23 @@ const processClaimedSnapshot = async (
           source: "snapshot_scan" as const,
         })),
       });
-      if (result.outcome === "recovery_attention") {
-        return { outcome: "attention", eventsCreated: protectedPayments.length };
-      }
-      if (result.outcome !== "reconciled") {
+      if (result.outcome === "order_not_found") {
         throw new Error("RECOVERY_ORDER_NOT_FOUND");
       }
-      return { outcome: "completed", eventsCreated: protectedPayments.length };
+      const eventsCreated = result.observationResults.filter(
+        (observation) => observation.outcome !== "ignored",
+      ).length;
+      if (result.outcome === "recovery_attention") {
+        return { outcome: "attention", eventsCreated };
+      }
+      if (eventsCreated === 0) {
+        await dependencies.markSnapshot({
+          externalReference: snapshot.externalReference,
+          state: "pending_payment",
+        });
+        return { outcome: "checked", eventsCreated: 0 };
+      }
+      return { outcome: "completed", eventsCreated };
     } catch (error) {
       await dependencies.markSnapshot({
         externalReference: snapshot.externalReference,

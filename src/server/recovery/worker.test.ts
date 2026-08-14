@@ -123,12 +123,67 @@ describe("AUD3-H06 autonomous recovery worker", () => {
       currency_id: "ARS",
       date_last_updated: "2026-08-13T11:59:00.000Z",
     }] as never);
+    deps.reconcileObservations.mockResolvedValue({
+      outcome: "reconciled",
+      order: baseOrder(),
+      observationResults: [{
+        outcome: "reconciled",
+        order: baseOrder(),
+        paymentId: "pay_scan_1",
+        status: "approved",
+        duplicate: false,
+        firstEffectiveApproval: true,
+        activeApprovedPaymentIds: ["pay_scan_1"],
+      }],
+      firstEffectiveApproval: true,
+      activeApprovedPaymentIds: ["pay_scan_1"],
+    } as never);
     const result = await runPaymentRecoveryWorker(deps);
     expect(deps.reconcileObservations).toHaveBeenCalledWith(expect.objectContaining({
       externalReference: snapshot.externalReference,
       observations: [expect.objectContaining({ source: "snapshot_scan" })],
     }));
     expect(result).toMatchObject({ snapshotsScanned: 1, eventsCreated: 1, completed: 1 });
+  });
+
+  it("AUD3-H06-REF-03 keeps snapshot A pending when its scan returns protected payment B", async () => {
+    const snapshot = storedSnapshot();
+    const deps = dependencies({ snapshots: [snapshot] });
+    const paymentB = {
+      id: "pay_scan_other_order",
+      status: "approved",
+      external_reference: "es-worker-recovery-other-order",
+      transaction_amount: 1000,
+      currency_id: "ARS",
+      date_last_updated: "2026-08-13T11:59:00.000Z",
+    };
+    deps.searchPayments.mockResolvedValue([paymentB] as never);
+    deps.reconcileObservations.mockResolvedValue({
+      outcome: "reconciled",
+      order: baseOrder(),
+      observationResults: [{
+        outcome: "ignored",
+        reason: "reference_mismatch",
+        order: null,
+      }],
+      firstEffectiveApproval: false,
+      activeApprovedPaymentIds: [],
+    } as never);
+
+    const result = await runPaymentRecoveryWorker(deps);
+
+    expect(deps.reconcileObservations).toHaveBeenCalledWith({
+      externalReference: snapshot.externalReference,
+      validationOrder: expect.objectContaining({
+        externalReference: snapshot.externalReference,
+      }),
+      observations: [{ payment: paymentB, source: "snapshot_scan" }],
+    });
+    expect(deps.markSnapshot).toHaveBeenCalledWith({
+      externalReference: snapshot.externalReference,
+      state: "pending_payment",
+    });
+    expect(result).toMatchObject({ eventsCreated: 0, completed: 0, attention: 0 });
   });
 
   it("keeps snapshot recovery retryable with a safe code when financial reconciliation fails", async () => {

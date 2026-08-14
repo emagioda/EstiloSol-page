@@ -248,6 +248,23 @@ describe("mercado pago webhook route", () => {
     await vi.waitFor(() => expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1));
   });
 
+  it("AUD3-H06-REF-04 keeps a signed matching webhook on the normal durable path", async () => {
+    const { ref, paymentId } = await setupApprovedWebhook();
+
+    const response = await POST(signedWebhookRequest(paymentId));
+
+    expect(response.status).toBe(200);
+    expect(prepareProtectedPaymentDurability).toHaveBeenCalledWith(expect.objectContaining({
+      expectedExternalReference: ref,
+      source: "webhook",
+      payment: expect.objectContaining({ external_reference: ref }),
+    }));
+    expect(await getOrder(ref)).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+    });
+  });
+
   it("AUD3-H06-EVT-02 returns 503 and does no inventory/KV effect when inbox durability fails", async () => {
     const { ref, paymentId } = await setupApprovedWebhook();
     vi.mocked(prepareProtectedPaymentDurability).mockRejectedValueOnce(

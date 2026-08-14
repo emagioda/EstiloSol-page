@@ -63,7 +63,7 @@ export type MercadoPagoReconciliationResult =
         | "currency_mismatch"
         | "missing_status"
         | "ledger_capacity";
-      order: Order;
+      order: Order | null;
     }
   | {
       outcome: "reconciled";
@@ -250,11 +250,15 @@ export async function reconcileMercadoPagoPayment(input: {
   observedAt?: number;
 }): Promise<MercadoPagoReconciliationResult> {
   const durable = await prepareProtectedPaymentDurability({
+    expectedExternalReference: input.externalReference,
     payment: input.payment,
     source: input.source,
     fallbackPaymentId: input.fallbackPaymentId,
     observedAt: input.observedAt,
   });
+  if (durable.protected && durable.outcome === "reference_mismatch") {
+    return { outcome: "ignored", reason: "reference_mismatch", order: null };
+  }
   if (durable.protected && durable.outcome !== "ready") {
     return {
       outcome: "recovery_attention",
@@ -339,23 +343,34 @@ export async function reconcileMercadoPagoPaymentObservations(input: {
   const durability = [] as Array<{
     input: MercadoPagoObservationInput;
     event?: RecoveryPaymentEvent;
-    attentionResult?: MercadoPagoReconciliationResult;
+    earlyResult?: MercadoPagoReconciliationResult;
     order?: Order;
   }>;
   let recoveredOrder: Order | undefined;
   for (const observationInput of input.observations) {
     const preparedDurability = await prepareProtectedPaymentDurability({
+      expectedExternalReference: input.externalReference,
       payment: observationInput.payment,
       source: observationInput.source,
       fallbackPaymentId: observationInput.fallbackPaymentId,
       observedAt: observationInput.observedAt,
     });
+    if (
+      preparedDurability.protected &&
+      preparedDurability.outcome === "reference_mismatch"
+    ) {
+      durability.push({
+        input: observationInput,
+        earlyResult: { outcome: "ignored", reason: "reference_mismatch", order: null },
+      });
+      continue;
+    }
     if (preparedDurability.protected && preparedDurability.outcome !== "ready") {
       durability.push({
         input: observationInput,
         event: preparedDurability.event,
         order: preparedDurability.order ?? undefined,
-        attentionResult: {
+        earlyResult: {
           outcome: "recovery_attention",
           paymentId: preparedDurability.event.paymentId,
           status: preparedDurability.event.financialStatus,
@@ -380,8 +395,11 @@ export async function reconcileMercadoPagoPaymentObservations(input: {
     input.validationOrder ?? recoveredOrder ?? (await getOrder(input.externalReference));
   if (!validationOrder) {
     const attentionResults = durability
-      .map((entry) => entry.attentionResult)
-      .filter((entry): entry is MercadoPagoReconciliationResult => Boolean(entry));
+      .map((entry) => entry.earlyResult)
+      .filter(
+        (entry): entry is Extract<MercadoPagoReconciliationResult, { outcome: "recovery_attention" }> =>
+          entry?.outcome === "recovery_attention",
+      );
     if (attentionResults.length > 0) {
       return {
         outcome: "recovery_attention",
@@ -394,8 +412,8 @@ export async function reconcileMercadoPagoPaymentObservations(input: {
 
   const prepared = await Promise.all(
     durability.map(async (entry) => {
-      if (entry.attentionResult) {
-        return { ok: false as const, result: entry.attentionResult, event: entry.event };
+      if (entry.earlyResult) {
+        return { ok: false as const, result: entry.earlyResult, event: entry.event };
       }
       const validation = validateObservation(validationOrder, entry.input);
       if (!validation.ok) {

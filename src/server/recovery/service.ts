@@ -39,6 +39,10 @@ export type PreparedProtectedPayment =
   | { protected: false }
   | {
       protected: true;
+      outcome: "reference_mismatch";
+    }
+  | {
+      protected: true;
       outcome: "attention";
       event: RecoveryPaymentEvent;
       order: Order | null;
@@ -186,6 +190,7 @@ const persistValidatedEvent = async (input: {
 };
 
 export const prepareProtectedPaymentDurability = async (input: {
+  expectedExternalReference: string;
   payment: MpPaymentResponse | MpSearchPayment;
   fallbackPaymentId?: string;
   source: RecoveryPaymentSource;
@@ -193,6 +198,9 @@ export const prepareProtectedPaymentDurability = async (input: {
 }): Promise<PreparedProtectedPayment> => {
   const observation = normalizeProtectedPaymentObservation(input);
   if (!observation) return { protected: false };
+  if (observation.externalReference !== input.expectedExternalReference) {
+    return { protected: true, outcome: "reference_mismatch" };
+  }
 
   let order = await safeReadOrder(observation.externalReference);
   let storedSnapshot: StoredRecoverySnapshot | null = null;
