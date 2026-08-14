@@ -24,6 +24,10 @@ type HarnessOptions = {
   journalRows?: unknown[][];
   journalReadFailure?: boolean;
   lockFailure?: boolean;
+  recoverySnapshotHeaders?: string[];
+  recoverySnapshotRows?: unknown[][];
+  recoveryEventHeaders?: string[];
+  recoveryEventRows?: unknown[][];
   sheetsServiceEnabled?: boolean;
 };
 
@@ -34,6 +38,7 @@ type SheetState = {
   headers: unknown[];
   rows: unknown[][];
   hidden?: boolean;
+  frozenRows?: number;
 };
 
 const scriptSource = readFileSync(
@@ -94,6 +99,24 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
       hidden: true,
     });
   }
+  if (options.recoverySnapshotHeaders || options.recoverySnapshotRows) {
+    states.set("_order_recovery_snapshots", {
+      id: 104,
+      name: "_order_recovery_snapshots",
+      headers: options.recoverySnapshotHeaders ?? [],
+      rows: options.recoverySnapshotRows ?? [],
+      hidden: true,
+    });
+  }
+  if (options.recoveryEventHeaders || options.recoveryEventRows) {
+    states.set("_payment_recovery_events", {
+      id: 105,
+      name: "_payment_recovery_events",
+      headers: options.recoveryEventHeaders ?? [],
+      rows: options.recoveryEventRows ?? [],
+      hidden: true,
+    });
+  }
 
   const buildSheet = (state: SheetState) => ({
     getSheetId: () => state.id,
@@ -116,7 +139,23 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
         state.rows[row - 2][column - 1] = value;
         writes.push({ sheet: state.name, row, column, value });
       },
+      setValues: (values: unknown[][]) => {
+        values.forEach((sourceRow, rowOffset) => {
+          if (row + rowOffset === 1) {
+            state.headers = sourceRow.slice();
+          } else {
+            const targetIndex = row + rowOffset - 2;
+            state.rows[targetIndex] ??= [];
+            sourceRow.forEach((value, columnOffset) => {
+              state.rows[targetIndex][column + columnOffset - 1] = value;
+            });
+          }
+        });
+      },
     }),
+    setFrozenRows: (count: number) => { state.frozenRows = count; },
+    hideSheet: () => { state.hidden = true; },
+    isSheetHidden: () => state.hidden === true,
     appendRow: (values: unknown[]) => {
       state.rows.push(values.slice());
     },
@@ -128,6 +167,13 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
       return state ? buildSheet(state) : null;
     },
     getSheets: () => [...states.values()].map(buildSheet),
+    insertSheet: (name: string) => {
+      if (states.has(name)) throw new Error("duplicate sheet");
+      const id = Math.max(100, ...[...states.values()].map((state) => state.id)) + 1;
+      const state: SheetState = { id, name, headers: [], rows: [] };
+      states.set(name, state);
+      return buildSheet(state);
+    },
   };
 
   const decodeCell = (cell: { userEnteredValue?: Record<string, unknown> }) => {
@@ -277,7 +323,7 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
   });
 
   vm.runInContext(
-    `${scriptSource}\n;globalThis.__inventoryApi = { normalizeStockItems_, inventoryDemandFingerprint_, resolveInventoryJournal_, planStockDecrement_, buildAtomicInventoryRequests_, commitAtomicInventoryRequests_, handleDecrementStock, handleAppendOrderAndDecrementStock, normalizeProduct, buildProductsPayloadObject, doGet, doPost };`,
+    `${scriptSource}\n;globalThis.__inventoryApi = { normalizeStockItems_, inventoryDemandFingerprint_, resolveInventoryJournal_, planStockDecrement_, buildAtomicInventoryRequests_, commitAtomicInventoryRequests_, handleAppendRow, handleDecrementStock, handleAppendOrderAndDecrementStock, normalizeProduct, buildProductsPayloadObject, ensureRecoverySchema_, handleUpsertRecoverySnapshot_, handleAppendRecoveryPaymentEvent_, handleClaimRecoveryWork_, handleMarkRecoveryWork_, doGet, doPost };`,
     context,
   );
 
@@ -741,6 +787,332 @@ describe("Apps Script authoritative inventory planning", () => {
     },
   );
 });
+
+describe("AUD3-H06 Apps Script recovery journal", () => {
+  it("AUD3-H06-10 keeps one ventas row when an append response is lost and retried", () => {
+    const harness = createHarness([]);
+    const payload = {
+      sheet: "ventas",
+      row: { nro_de_compra: "es-recovery-response-loss-000001", items_json: "[]" },
+    };
+
+    harness.api.handleAppendRow(payload);
+    const retry = harness.api.handleAppendRow(payload) as Record<string, unknown>;
+
+    expect(retry).toMatchObject({ ok: true, deduped: true, rowNumber: 2 });
+    expect(harness.salesRows).toEqual([["es-recovery-response-loss-000001", "[]"]]);
+  });
+
+  it("bootstraps exact hidden schemas with frozen headers under ScriptLock", () => {
+    const harness = createHarness([]);
+    const result = recoveryPost(harness, "ensureRecoverySchema");
+
+    expect(result).toMatchObject({ ok: true, result: "RECOVERY_SCHEMA_READY" });
+    expect(harness.states.get("_order_recovery_snapshots")).toMatchObject({
+      headers: recoverySnapshotHeaders,
+      hidden: true,
+      frozenRows: 1,
+    });
+    expect(harness.states.get("_payment_recovery_events")).toMatchObject({
+      headers: recoveryEventHeaders,
+      hidden: true,
+      frozenRows: 1,
+    });
+    expect(harness.locks).toEqual({ waited: 1, released: 1 });
+  });
+
+  it("rejects recovery bootstrap without the admin token", () => {
+    const harness = createHarness([]);
+    expect(recoveryPost(harness, "ensureRecoverySchema", {}, "write-token")).toMatchObject({
+      ok: false,
+      error: "Unauthorized",
+    });
+    expect(harness.states.has("_order_recovery_snapshots")).toBe(false);
+  });
+
+  it("fails closed on malformed recovery headers", () => {
+    const harness = createHarness([], { recoverySnapshotHeaders: ["wrong"] });
+    expect(recoveryPost(harness, "ensureRecoverySchema")).toMatchObject({
+      ok: false,
+      code: "RECOVERY_SCHEMA_INVALID",
+    });
+  });
+
+  it("stores and same-hash replays one immutable snapshot", () => {
+    const harness = createHarness([]);
+    const snapshot = recoverySnapshot();
+    expect(recoveryPost(harness, "upsertRecoverySnapshot", { snapshot }).result).toBe("SNAPSHOT_STORED");
+    expect(recoveryPost(harness, "upsertRecoverySnapshot", { snapshot }).result).toBe("SNAPSHOT_ALREADY_EXISTS");
+    expect(harness.states.get("_order_recovery_snapshots")?.rows).toHaveLength(1);
+    expect(harness.logs.map((entry) => entry.event)).toContain("recovery.snapshot.replayed");
+  });
+
+  it("AUD3-H06-SNAP-04 marks a different valid snapshot hash as attention and never overwrites content", () => {
+    const harness = createHarness([]);
+    const original = recoverySnapshot();
+    recoveryPost(harness, "upsertRecoverySnapshot", { snapshot: original });
+    const conflict = recoverySnapshot({ marker: "different" });
+
+    expect(recoveryPost(harness, "upsertRecoverySnapshot", { snapshot: conflict })).toMatchObject({
+      ok: false,
+      code: "RECOVERY_SNAPSHOT_CONFLICT",
+    });
+    const row = harness.states.get("_order_recovery_snapshots")?.rows[0] ?? [];
+    expect(row[4]).toBe(original.snapshot_json);
+    expect(row[8]).toBe("attention");
+    expect(row[10]).toBe("RECOVERY_SNAPSHOT_CONFLICT");
+  });
+
+  it("fails closed when duplicate snapshot identities already exist", () => {
+    const snapshot = recoverySnapshot();
+    const row = recoverySnapshotHeaders.map((header) => snapshot[header as keyof typeof snapshot]);
+    const harness = createHarness([], {
+      recoverySnapshotHeaders,
+      recoverySnapshotRows: [row, row.slice()],
+    });
+    expect(recoveryPost(harness, "getRecoverySnapshot", { externalReference: snapshot.external_reference })).toMatchObject({
+      ok: false,
+      code: "RECOVERY_SCHEMA_INVALID",
+    });
+  });
+
+  it("stores and exactly replays one minimized financial event", () => {
+    const harness = createHarness([]);
+    const event = recoveryEvent();
+    expect(recoveryPost(harness, "appendRecoveryPaymentEvent", { event }).result).toBe("EVENT_STORED");
+    expect(recoveryPost(harness, "appendRecoveryPaymentEvent", { event }).result).toBe("EVENT_ALREADY_STORED");
+    expect(harness.states.get("_payment_recovery_events")?.rows).toHaveLength(1);
+  });
+
+  it("marks an inconsistent event-key payload as attention", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "appendRecoveryPaymentEvent", { event: recoveryEvent() });
+    expect(recoveryPost(harness, "appendRecoveryPaymentEvent", {
+      event: recoveryEvent({ amount: 999 }),
+    })).toMatchObject({ ok: false, code: "RECOVERY_EVENT_CONFLICT" });
+    const row = harness.states.get("_payment_recovery_events")?.rows[0] ?? [];
+    expect(row[13]).toBe("attention");
+    expect(row[18]).toBe("RECOVERY_EVENT_CONFLICT");
+  });
+
+  it("keeps Admin recovery attention listings free of snapshot JSON and customer PII", () => {
+    const harness = createHarness([]);
+    const original = recoverySnapshot();
+    recoveryPost(harness, "upsertRecoverySnapshot", { snapshot: original });
+    recoveryPost(harness, "upsertRecoverySnapshot", {
+      snapshot: recoverySnapshot({ marker: "conflict" }),
+    });
+
+    const response = recoveryPost(harness, "listRecoveryAttention", { limit: 20 });
+    const serialized = JSON.stringify(response).toLowerCase();
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: "RECOVERY_ATTENTION_LISTED",
+      items: [expect.objectContaining({ kind: "snapshot", state: "attention" })],
+    });
+    expect(serialized).not.toContain("snapshot_json");
+    expect(serialized).not.toContain("customer");
+    expect(serialized).not.toContain("email");
+    expect(serialized).not.toContain("phone");
+    expect(serialized).not.toContain("address");
+  });
+
+  it("fails closed when duplicate event keys already exist", () => {
+    const event = recoveryEvent();
+    const row = recoveryEventHeaders.map((header) => event[header as keyof typeof event]);
+    const harness = createHarness([], {
+      recoveryEventHeaders,
+      recoveryEventRows: [row, row.slice()],
+    });
+    expect(recoveryPost(harness, "getRecoveryPaymentEvent", { eventKey: event.event_key })).toMatchObject({
+      ok: false,
+      code: "RECOVERY_SCHEMA_INVALID",
+    });
+  });
+
+  it("claims once, replays the same lease response, and reclaims an expired lease", () => {
+    const event = recoveryEvent();
+    const harness = createHarness([]);
+    recoveryPost(harness, "appendRecoveryPaymentEvent", { event });
+    const first = recoveryPost(harness, "claimRecoveryWork", {
+      leaseOwner: "worker:recovery:one",
+      claimedAt: "2026-08-13T12:00:00.000Z",
+      leaseExpiresAt: "2026-08-13T12:05:00.000Z",
+      maxEvents: 20,
+      maxSnapshots: 20,
+    }) as { events?: Array<Record<string, unknown>> };
+    const replay = recoveryPost(harness, "claimRecoveryWork", {
+      leaseOwner: "worker:recovery:one",
+      claimedAt: "2026-08-13T12:00:00.000Z",
+      leaseExpiresAt: "2026-08-13T12:05:00.000Z",
+      maxEvents: 20,
+      maxSnapshots: 20,
+    }) as { events?: Array<Record<string, unknown>> };
+    const reclaimed = recoveryPost(harness, "claimRecoveryWork", {
+      leaseOwner: "worker:recovery:two",
+      claimedAt: "2026-08-13T12:06:00.000Z",
+      leaseExpiresAt: "2026-08-13T12:11:00.000Z",
+      maxEvents: 20,
+      maxSnapshots: 20,
+    }) as { events?: Array<Record<string, unknown>> };
+
+    expect(first.events?.[0]).toMatchObject({ attempt_count: 1, lease_owner: "worker:recovery:one" });
+    expect(replay.events?.[0]).toMatchObject({ attempt_count: 1, lease_owner: "worker:recovery:one" });
+    expect(reclaimed.events?.[0]).toMatchObject({ attempt_count: 2, lease_owner: "worker:recovery:two" });
+  });
+
+  it("coordinates snapshot claims and fairly selects the least recently checked row", () => {
+    const first = recoverySnapshot({
+      external_reference: "es-recovery-000001",
+      last_checked_at: "2026-08-13T11:50:00.000Z",
+    });
+    const second = recoverySnapshot({
+      external_reference: "es-recovery-000002",
+      checkout_attempt_id: "attempt-recovery-000002",
+      snapshot_json: "",
+      snapshot_hash: "c".repeat(64),
+      last_checked_at: "",
+    });
+    const firstRow = recoverySnapshotHeaders.map((header) => first[header as keyof typeof first]);
+    const secondRow = recoverySnapshotHeaders.map((header) => second[header as keyof typeof second]);
+    const harness = createHarness([], {
+      recoverySnapshotHeaders,
+      recoverySnapshotRows: [firstRow, secondRow],
+      recoveryEventHeaders,
+    });
+
+    const fairClaim = recoveryPost(harness, "claimRecoveryWork", {
+      leaseOwner: "worker:snapshot:one",
+      claimedAt: "2026-08-13T12:00:00.000Z",
+      leaseExpiresAt: "2026-08-13T12:05:00.000Z",
+      maxEvents: 20,
+      maxSnapshots: 1,
+    }) as { snapshots?: Array<Record<string, unknown>> };
+    const overlap = recoveryPost(harness, "claimRecoveryWork", {
+      leaseOwner: "worker:snapshot:two",
+      claimedAt: "2026-08-13T12:01:00.000Z",
+      leaseExpiresAt: "2026-08-13T12:06:00.000Z",
+      maxEvents: 20,
+      maxSnapshots: 2,
+    }) as { snapshots?: Array<Record<string, unknown>> };
+    const reclaimed = recoveryPost(harness, "claimRecoveryWork", {
+      leaseOwner: "worker:snapshot:three",
+      claimedAt: "2026-08-13T12:06:00.000Z",
+      leaseExpiresAt: "2026-08-13T12:11:00.000Z",
+      maxEvents: 20,
+      maxSnapshots: 2,
+    }) as { snapshots?: Array<Record<string, unknown>> };
+
+    expect(fairClaim.snapshots?.map((row) => row.external_reference)).toEqual([
+      "es-recovery-000002",
+    ]);
+    expect(overlap.snapshots?.map((row) => row.external_reference)).toEqual([
+      "es-recovery-000001",
+    ]);
+    expect(reclaimed.snapshots?.map((row) => row.external_reference)).toEqual([
+      "es-recovery-000002",
+      "es-recovery-000001",
+    ]);
+  });
+
+  it("keeps completed work monotonic", () => {
+    const harness = createHarness([]);
+    const event = recoveryEvent();
+    recoveryPost(harness, "appendRecoveryPaymentEvent", { event });
+    recoveryPost(harness, "markRecoveryWorkCompleted", { eventKey: event.event_key });
+    expect(recoveryPost(harness, "markRecoveryWorkRetryable", {
+      eventKey: event.event_key,
+      errorCode: "LATE_FAILURE",
+    })).toMatchObject({ ok: false, code: "RECOVERY_WORK_LEASE_CONFLICT" });
+    const row = harness.states.get("_payment_recovery_events")?.rows[0] ?? [];
+    expect(row[13]).toBe("completed");
+  });
+
+  it("normalizes free-form recovery failures instead of persisting sensitive error text", () => {
+    const harness = createHarness([]);
+    const event = recoveryEvent();
+    recoveryPost(harness, "appendRecoveryPaymentEvent", { event });
+
+    recoveryPost(harness, "markRecoveryWorkRetryable", {
+      eventKey: event.event_key,
+      errorCode: "failure for customer@example.test",
+    });
+
+    const row = harness.states.get("_payment_recovery_events")?.rows[0] ?? [];
+    expect(row[18]).toBe("RECOVERY_TECHNICAL_FAILURE");
+    expect(JSON.stringify(row)).not.toContain("customer@example.test");
+  });
+});
+
+const recoverySnapshotHeaders = [
+  "external_reference", "checkout_attempt_id", "schema_version", "snapshot_hash",
+  "snapshot_json", "created_at", "preference_valid_from", "preference_expires_at",
+  "recovery_state", "last_checked_at", "last_error_code", "updated_at", "completed_at",
+];
+const recoveryEventHeaders = [
+  "event_key", "payment_id", "external_reference", "financial_status", "status_detail",
+  "amount", "currency", "mp_updated_at", "observed_at", "source", "schema_version",
+  "snapshot_hash", "validation_state", "processing_state", "attempt_count", "lease_owner",
+  "lease_expires_at", "last_attempt_at", "last_error_code", "updated_at", "completed_at",
+];
+const recoverySnapshot = (patch: Record<string, unknown> = {}) => {
+  const { marker = "original", ...rowPatch } = patch;
+  const snapshotJson = JSON.stringify({
+    schemaVersion: 1,
+    externalReference: "es-recovery-000001",
+    checkoutAttemptId: "attempt-recovery-000001",
+    marker,
+  });
+  return {
+    external_reference: "es-recovery-000001",
+    checkout_attempt_id: "attempt-recovery-000001",
+    schema_version: 1,
+    snapshot_hash: createHash("sha256").update(snapshotJson).digest("hex"),
+    snapshot_json: snapshotJson,
+    created_at: "2026-08-13T10:00:00.000Z",
+    preference_valid_from: "2026-08-13T10:00:00.000Z",
+    preference_expires_at: "2026-08-15T10:00:00.000Z",
+    recovery_state: "pending_payment",
+    last_checked_at: "",
+    last_error_code: "",
+    updated_at: "2026-08-13T10:00:00.000Z",
+    completed_at: "",
+    ...rowPatch,
+  };
+};
+const recoveryEvent = (patch: Record<string, unknown> = {}) => ({
+  event_key: "a".repeat(64),
+  payment_id: "pay_1",
+  external_reference: "es-recovery-000001",
+  financial_status: "approved",
+  status_detail: "accredited",
+  amount: 1000,
+  currency: "ARS",
+  mp_updated_at: "2026-08-13T11:00:00.000Z",
+  observed_at: "2026-08-13T11:00:01.000Z",
+  source: "webhook",
+  schema_version: 1,
+  snapshot_hash: "b".repeat(64),
+  validation_state: "validated",
+  processing_state: "pending",
+  attempt_count: 0,
+  lease_owner: "",
+  lease_expires_at: "",
+  last_attempt_at: "",
+  last_error_code: "",
+  updated_at: "2026-08-13T11:00:01.000Z",
+  completed_at: "",
+  ...patch,
+});
+const recoveryPost = (
+  harness: ReturnType<typeof createHarness>,
+  action: string,
+  payload: Record<string, unknown> = {},
+  token = "admin-token",
+) => JSON.parse((harness.api.doPost({
+  postData: { contents: JSON.stringify({ action, token, ...payload }) },
+}) as { getContent: () => string }).getContent()) as Record<string, unknown>;
 
 describe("AUD3 crash-safe inventory matrix", () => {
   it("preserves the production web app config while enabling the Advanced Sheets Service", () => {

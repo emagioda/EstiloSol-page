@@ -20,6 +20,50 @@ const SHEET_FULFILLMENT = "envios";
 const SHEET_INVENTORY_TRANSACTIONS = "_inventory_transactions";
 const INVENTORY_TRANSACTION_HEADERS = ["order_id", "demand_fingerprint", "applied_at", "state"];
 const INVENTORY_TRANSACTION_STATE_APPLIED = "APPLIED";
+const SHEET_ORDER_RECOVERY_SNAPSHOTS = "_order_recovery_snapshots";
+const SHEET_PAYMENT_RECOVERY_EVENTS = "_payment_recovery_events";
+const RECOVERY_SCHEMA_VERSION = 1;
+const ORDER_RECOVERY_SNAPSHOT_HEADERS = [
+  "external_reference",
+  "checkout_attempt_id",
+  "schema_version",
+  "snapshot_hash",
+  "snapshot_json",
+  "created_at",
+  "preference_valid_from",
+  "preference_expires_at",
+  "recovery_state",
+  "last_checked_at",
+  "last_error_code",
+  "updated_at",
+  "completed_at"
+];
+const PAYMENT_RECOVERY_EVENT_HEADERS = [
+  "event_key",
+  "payment_id",
+  "external_reference",
+  "financial_status",
+  "status_detail",
+  "amount",
+  "currency",
+  "mp_updated_at",
+  "observed_at",
+  "source",
+  "schema_version",
+  "snapshot_hash",
+  "validation_state",
+  "processing_state",
+  "attempt_count",
+  "lease_owner",
+  "lease_expires_at",
+  "last_attempt_at",
+  "last_error_code",
+  "updated_at",
+  "completed_at"
+];
+const RECOVERY_SNAPSHOT_STATES = ["pending_payment", "payment_observed", "attention", "completed", "expired_unpaid"];
+const RECOVERY_EVENT_STATES = ["pending", "processing", "retryable", "attention", "completed"];
+const RECOVERY_FINANCIAL_STATUSES = ["approved", "refunded", "charged_back"];
 const CACHE_PRODUCTS_KEY = "catalog:products:active:v4";
 const CACHE_PRODUCTS_TTL_SECONDS = 180;
 const ALLOWED_SHEETS = [SHEET_PRODUCTS, SHEET_SALES, SHEET_FULFILLMENT];
@@ -230,6 +274,24 @@ function getPostScope_(payload, action) {
   const isProductsMutation =
     normalizedSheet === normalizeKey(SHEET_PRODUCTS) ||
     Boolean(payload.productId || payload.product_id);
+
+  if ([
+    "ensure_recovery_schema",
+    "upsert_recovery_snapshot",
+    "get_recovery_snapshot",
+    "list_recovery_snapshots_for_scan",
+    "append_recovery_payment_event",
+    "get_recovery_payment_event",
+    "list_recovery_payment_events",
+    "claim_recovery_work",
+    "mark_recovery_work_retryable",
+    "mark_recovery_work_attention",
+    "mark_recovery_work_completed",
+    "mark_recovery_snapshot_checked",
+    "mark_recovery_snapshot_completed",
+    "mark_recovery_snapshot_expired_unpaid",
+    "list_recovery_attention"
+  ].indexOf(action) !== -1) return "admin";
 
   if (action === "decrement_stock" || action === "decrementstock") return "write";
   if (action === "append_order_and_decrement_stock" || action === "appendorderanddecrementstock") return "write";
@@ -1119,6 +1181,543 @@ function handleAppendOrderAndDecrementStock(payload) {
   }
 }
 
+function recoveryError_(code, message) {
+  const error = new Error(message);
+  error.name = "RecoveryError";
+  error.code = code;
+  return error;
+}
+
+function sha256Hex_(value) {
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(value),
+    Utilities.Charset.UTF_8
+  );
+  return digest.map(function(byte) {
+    return ((byte < 0 ? byte + 256 : byte).toString(16).padStart(2, "0"));
+  }).join("");
+}
+
+function assertRecoveryHeaders_(sheet, expectedHeaders) {
+  const headers = getHeaders(sheet);
+  const valid = headers.length === expectedHeaders.length && headers.every(function(header, index) {
+    return header === expectedHeaders[index];
+  });
+  if (!valid) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Recovery sheet headers are invalid");
+  }
+}
+
+function ensureRecoverySheet_(spreadsheet, sheetName, expectedHeaders) {
+  let sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(sheetName);
+    sheet.getRange(1, 1, 1, expectedHeaders.length).setValues([expectedHeaders.slice()]);
+    sheet.setFrozenRows(1);
+    sheet.hideSheet();
+  }
+  assertRecoveryHeaders_(sheet, expectedHeaders);
+  if (typeof sheet.isSheetHidden === "function" && !sheet.isSheetHidden()) {
+    sheet.hideSheet();
+  }
+  return sheet;
+}
+
+function ensureRecoverySchema_() {
+  const spreadsheet = getSpreadsheet_();
+  const snapshotSheet = ensureRecoverySheet_(
+    spreadsheet,
+    SHEET_ORDER_RECOVERY_SNAPSHOTS,
+    ORDER_RECOVERY_SNAPSHOT_HEADERS
+  );
+  const eventSheet = ensureRecoverySheet_(
+    spreadsheet,
+    SHEET_PAYMENT_RECOVERY_EVENTS,
+    PAYMENT_RECOVERY_EVENT_HEADERS
+  );
+  return { snapshotSheet: snapshotSheet, eventSheet: eventSheet };
+}
+
+function assertExactObjectKeys_(input, headers, code) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw recoveryError_(code, "Recovery row must be an object");
+  }
+  const keys = Object.keys(input).sort();
+  const expected = headers.slice().sort();
+  if (keys.length !== expected.length || keys.some(function(key, index) { return key !== expected[index]; })) {
+    throw recoveryError_(code, "Recovery row keys are invalid");
+  }
+}
+
+function assertRecoveryIsoDate_(value, field, allowEmpty) {
+  const text = String(value === null || value === undefined ? "" : value).trim();
+  if (!text && allowEmpty) return "";
+  if (!text || isNaN(Date.parse(text))) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid recovery timestamp: " + field);
+  }
+  return new Date(Date.parse(text)).toISOString();
+}
+
+function safeRecoveryErrorCode_(value) {
+  const code = String(value || "").trim();
+  if (!code) return "";
+  return /^[A-Z0-9_]{3,120}$/.test(code) ? code : "RECOVERY_TECHNICAL_FAILURE";
+}
+
+function recoveryRowToObject_(headers, row) {
+  const result = {};
+  headers.forEach(function(header, index) {
+    result[header] = row[index] === undefined || row[index] === null ? "" : row[index];
+  });
+  return result;
+}
+
+function readRecoveryRows_(sheet, headers, identityHeader, duplicateCode) {
+  assertRecoveryHeaders_(sheet, headers);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  const rows = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+  const identityIndex = headers.indexOf(identityHeader);
+  const seen = {};
+  const result = [];
+  rows.forEach(function(row, index) {
+    if (!row.some(function(cell) { return cell !== "" && cell !== null && cell !== undefined; })) return;
+    const identity = String(row[identityIndex] === undefined || row[identityIndex] === null ? "" : row[identityIndex]).trim();
+    if (!identity || seen[identity]) {
+      throw recoveryError_(duplicateCode, "Recovery sheet contains missing or duplicate identities");
+    }
+    seen[identity] = true;
+    result.push({ rowNumber: index + 2, values: row.slice(), object: recoveryRowToObject_(headers, row) });
+  });
+  return result;
+}
+
+function setRecoveryCell_(sheet, rowNumber, headers, header, value) {
+  const index = headers.indexOf(header);
+  if (index === -1) throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Recovery column missing: " + header);
+  sheet.getRange(rowNumber, index + 1).setValue(value);
+}
+
+function validateRecoverySnapshotInput_(input) {
+  assertExactObjectKeys_(input, ORDER_RECOVERY_SNAPSHOT_HEADERS, "RECOVERY_SCHEMA_INVALID");
+  const externalReference = String(input.external_reference || "").trim();
+  const checkoutAttemptId = String(input.checkout_attempt_id || "").trim();
+  const snapshotHash = String(input.snapshot_hash || "").trim();
+  const snapshotJson = String(input.snapshot_json || "");
+  if (!/^es-[a-z0-9-]{6,80}$/i.test(externalReference) || !checkoutAttemptId || checkoutAttemptId.length > 160) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid recovery snapshot identity");
+  }
+  if (Number(input.schema_version) !== RECOVERY_SCHEMA_VERSION || !/^[a-f0-9]{64}$/.test(snapshotHash)) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid recovery snapshot schema/hash");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(snapshotJson);
+  } catch (error) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Recovery snapshot JSON is malformed");
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    parsed.externalReference !== externalReference ||
+    parsed.checkoutAttemptId !== checkoutAttemptId ||
+    Number(parsed.schemaVersion) !== RECOVERY_SCHEMA_VERSION ||
+    sha256Hex_(snapshotJson) !== snapshotHash
+  ) {
+    throw recoveryError_("RECOVERY_SNAPSHOT_CONFLICT", "Recovery snapshot integrity mismatch");
+  }
+  if (String(input.recovery_state) !== "pending_payment") {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "New recovery snapshot state is invalid");
+  }
+  assertRecoveryIsoDate_(input.created_at, "created_at", false);
+  assertRecoveryIsoDate_(input.preference_valid_from, "preference_valid_from", false);
+  assertRecoveryIsoDate_(input.preference_expires_at, "preference_expires_at", false);
+  assertRecoveryIsoDate_(input.last_checked_at, "last_checked_at", true);
+  assertRecoveryIsoDate_(input.updated_at, "updated_at", false);
+  assertRecoveryIsoDate_(input.completed_at, "completed_at", true);
+  return ORDER_RECOVERY_SNAPSHOT_HEADERS.map(function(header) { return input[header]; });
+}
+
+function recoverySnapshotImmutableMatches_(existing, candidate) {
+  const immutableHeaders = [
+    "external_reference",
+    "checkout_attempt_id",
+    "schema_version",
+    "snapshot_hash",
+    "snapshot_json",
+    "created_at",
+    "preference_valid_from",
+    "preference_expires_at"
+  ];
+  return immutableHeaders.every(function(header) {
+    return String(existing[header]) === String(candidate[header]);
+  });
+}
+
+function handleUpsertRecoverySnapshot_(payload) {
+  const schema = ensureRecoverySchema_();
+  const rowValues = validateRecoverySnapshotInput_(payload.snapshot);
+  const rows = readRecoveryRows_(
+    schema.snapshotSheet,
+    ORDER_RECOVERY_SNAPSHOT_HEADERS,
+    "external_reference",
+    "RECOVERY_SCHEMA_INVALID"
+  );
+  const externalReference = String(payload.snapshot.external_reference);
+  const existing = rows.filter(function(row) {
+    return String(row.object.external_reference) === externalReference;
+  });
+  if (existing.length > 1) throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Duplicate recovery snapshots");
+  if (existing.length === 1) {
+    if (!recoverySnapshotImmutableMatches_(existing[0].object, payload.snapshot)) {
+      const now = new Date().toISOString();
+      setRecoveryCell_(schema.snapshotSheet, existing[0].rowNumber, ORDER_RECOVERY_SNAPSHOT_HEADERS, "recovery_state", "attention");
+      setRecoveryCell_(schema.snapshotSheet, existing[0].rowNumber, ORDER_RECOVERY_SNAPSHOT_HEADERS, "last_error_code", "RECOVERY_SNAPSHOT_CONFLICT");
+      setRecoveryCell_(schema.snapshotSheet, existing[0].rowNumber, ORDER_RECOVERY_SNAPSHOT_HEADERS, "updated_at", now);
+      console.info(JSON.stringify({ event: "recovery.snapshot.conflict", orderId: externalReference }));
+      throw recoveryError_("RECOVERY_SNAPSHOT_CONFLICT", "Recovery snapshot already exists with different content");
+    }
+    console.info(JSON.stringify({ event: "recovery.snapshot.replayed", orderId: externalReference }));
+    return { ok: true, result: "SNAPSHOT_ALREADY_EXISTS", snapshot: existing[0].object };
+  }
+  schema.snapshotSheet.appendRow(rowValues);
+  const stored = recoveryRowToObject_(ORDER_RECOVERY_SNAPSHOT_HEADERS, rowValues);
+  console.info(JSON.stringify({ event: "recovery.snapshot.persisted", orderId: externalReference }));
+  return { ok: true, result: "SNAPSHOT_STORED", snapshot: stored };
+}
+
+function findRecoverySnapshot_(externalReference) {
+  const schema = ensureRecoverySchema_();
+  const rows = readRecoveryRows_(
+    schema.snapshotSheet,
+    ORDER_RECOVERY_SNAPSHOT_HEADERS,
+    "external_reference",
+    "RECOVERY_SCHEMA_INVALID"
+  ).filter(function(row) { return String(row.object.external_reference) === String(externalReference || "").trim(); });
+  if (rows.length > 1) throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Duplicate recovery snapshots");
+  return { sheet: schema.snapshotSheet, row: rows.length === 1 ? rows[0] : null };
+}
+
+function handleGetRecoverySnapshot_(payload) {
+  const found = findRecoverySnapshot_(payload.externalReference);
+  if (!found.row) return { ok: true, result: "RECOVERY_SNAPSHOT_NOT_FOUND" };
+  return { ok: true, result: "RECOVERY_SNAPSHOT_FOUND", snapshot: found.row.object };
+}
+
+function validateRecoveryEventInput_(input) {
+  assertExactObjectKeys_(input, PAYMENT_RECOVERY_EVENT_HEADERS, "RECOVERY_SCHEMA_INVALID");
+  const eventKey = String(input.event_key || "").trim();
+  const paymentId = String(input.payment_id || "").trim();
+  const externalReference = String(input.external_reference || "").trim();
+  const status = String(input.financial_status || "").trim();
+  const currency = String(input.currency || "").trim();
+  if (!/^[a-f0-9]{64}$/.test(eventKey) || !/^[A-Za-z0-9_-]{1,64}$/.test(paymentId)) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid recovery event identity");
+  }
+  if (externalReference.length > 160 || RECOVERY_FINANCIAL_STATUSES.indexOf(status) === -1) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid recovery financial reference/status");
+  }
+  if (!isFinite(Number(input.amount)) || Number(input.amount) < 0 || !/^[A-Z]{3}$/.test(currency)) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid recovery financial amount/currency");
+  }
+  if (Number(input.schema_version) !== RECOVERY_SCHEMA_VERSION) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid recovery event schema");
+  }
+  if (["validated", "missing_snapshot", "conflict"].indexOf(String(input.validation_state)) === -1) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid recovery validation state");
+  }
+  if (["pending", "attention"].indexOf(String(input.processing_state)) === -1) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid initial recovery processing state");
+  }
+  if (Number(input.attempt_count) !== 0 || String(input.lease_owner || "") || String(input.lease_expires_at || "")) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid initial recovery coordination state");
+  }
+  assertRecoveryIsoDate_(input.mp_updated_at, "mp_updated_at", true);
+  assertRecoveryIsoDate_(input.observed_at, "observed_at", false);
+  assertRecoveryIsoDate_(input.last_attempt_at, "last_attempt_at", true);
+  assertRecoveryIsoDate_(input.updated_at, "updated_at", false);
+  assertRecoveryIsoDate_(input.completed_at, "completed_at", true);
+  return PAYMENT_RECOVERY_EVENT_HEADERS.map(function(header) { return input[header]; });
+}
+
+function recoveryEventFinancialPayloadMatches_(existing, candidate) {
+  const immutableHeaders = [
+    "event_key",
+    "payment_id",
+    "external_reference",
+    "financial_status",
+    "status_detail",
+    "amount",
+    "currency",
+    "mp_updated_at",
+    "schema_version",
+    "snapshot_hash",
+    "validation_state"
+  ];
+  return immutableHeaders.every(function(header) {
+    return String(existing[header]) === String(candidate[header]);
+  });
+}
+
+function handleAppendRecoveryPaymentEvent_(payload) {
+  const schema = ensureRecoverySchema_();
+  const rowValues = validateRecoveryEventInput_(payload.event);
+  const rows = readRecoveryRows_(
+    schema.eventSheet,
+    PAYMENT_RECOVERY_EVENT_HEADERS,
+    "event_key",
+    "RECOVERY_SCHEMA_INVALID"
+  );
+  const eventKey = String(payload.event.event_key);
+  const existing = rows.filter(function(row) { return String(row.object.event_key) === eventKey; });
+  if (existing.length > 1) throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Duplicate recovery events");
+  if (existing.length === 1) {
+    if (!recoveryEventFinancialPayloadMatches_(existing[0].object, payload.event)) {
+      const now = new Date().toISOString();
+      setRecoveryCell_(schema.eventSheet, existing[0].rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "processing_state", "attention");
+      setRecoveryCell_(schema.eventSheet, existing[0].rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "last_error_code", "RECOVERY_EVENT_CONFLICT");
+      setRecoveryCell_(schema.eventSheet, existing[0].rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "updated_at", now);
+      console.info(JSON.stringify({ event: "recovery.payment_event.conflict", paymentId: payload.event.payment_id }));
+      throw recoveryError_("RECOVERY_EVENT_CONFLICT", "Recovery event key has conflicting financial data");
+    }
+    console.info(JSON.stringify({ event: "recovery.payment_event.replayed", paymentId: existing[0].object.payment_id }));
+    return { ok: true, result: "EVENT_ALREADY_STORED", event: existing[0].object };
+  }
+  schema.eventSheet.appendRow(rowValues);
+  const stored = recoveryRowToObject_(PAYMENT_RECOVERY_EVENT_HEADERS, rowValues);
+  console.info(JSON.stringify({ event: "recovery.payment_event.persisted", paymentId: stored.payment_id, state: stored.processing_state }));
+  return { ok: true, result: "EVENT_STORED", event: stored };
+}
+
+function findRecoveryEvent_(eventKey) {
+  const schema = ensureRecoverySchema_();
+  const rows = readRecoveryRows_(
+    schema.eventSheet,
+    PAYMENT_RECOVERY_EVENT_HEADERS,
+    "event_key",
+    "RECOVERY_SCHEMA_INVALID"
+  ).filter(function(row) { return String(row.object.event_key) === String(eventKey || "").trim(); });
+  if (rows.length > 1) throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Duplicate recovery events");
+  return { sheet: schema.eventSheet, row: rows.length === 1 ? rows[0] : null };
+}
+
+function handleGetRecoveryPaymentEvent_(payload) {
+  const found = findRecoveryEvent_(payload.eventKey);
+  if (!found.row) return { ok: true, result: "RECOVERY_EVENT_NOT_FOUND" };
+  return { ok: true, result: "RECOVERY_EVENT_FOUND", event: found.row.object };
+}
+
+function boundedRecoveryLimit_(value, fallback) {
+  const parsed = Math.trunc(Number(value));
+  if (!isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, 50);
+}
+
+function handleListRecoveryPaymentEvents_(payload) {
+  const schema = ensureRecoverySchema_();
+  const limit = boundedRecoveryLimit_(payload.limit, 20);
+  const rows = readRecoveryRows_(schema.eventSheet, PAYMENT_RECOVERY_EVENT_HEADERS, "event_key", "RECOVERY_SCHEMA_INVALID");
+  return { ok: true, result: "RECOVERY_EVENTS_LISTED", events: rows.slice(0, limit).map(function(row) { return row.object; }) };
+}
+
+function handleListRecoverySnapshotsForScan_(payload) {
+  const schema = ensureRecoverySchema_();
+  const limit = boundedRecoveryLimit_(payload.limit, 20);
+  const rows = readRecoveryRows_(schema.snapshotSheet, ORDER_RECOVERY_SNAPSHOT_HEADERS, "external_reference", "RECOVERY_SCHEMA_INVALID")
+    .filter(function(row) { return ["pending_payment", "payment_observed"].indexOf(String(row.object.recovery_state)) !== -1; });
+  return { ok: true, result: "RECOVERY_SNAPSHOTS_LISTED", snapshots: rows.slice(0, limit).map(function(row) { return row.object; }) };
+}
+
+function handleClaimRecoveryWork_(payload) {
+  const schema = ensureRecoverySchema_();
+  const leaseOwner = String(payload.leaseOwner || "").trim();
+  const claimedAt = assertRecoveryIsoDate_(payload.claimedAt, "claimedAt", false);
+  const leaseExpiresAt = assertRecoveryIsoDate_(payload.leaseExpiresAt, "leaseExpiresAt", false);
+  if (!/^[A-Za-z0-9._:-]{8,160}$/.test(leaseOwner) || Date.parse(leaseExpiresAt) <= Date.parse(claimedAt)) {
+    throw recoveryError_("RECOVERY_WORK_LEASE_CONFLICT", "Invalid recovery work lease");
+  }
+  const maxEvents = boundedRecoveryLimit_(payload.maxEvents, 20);
+  const maxSnapshots = boundedRecoveryLimit_(payload.maxSnapshots, 20);
+  const eventRows = readRecoveryRows_(schema.eventSheet, PAYMENT_RECOVERY_EVENT_HEADERS, "event_key", "RECOVERY_SCHEMA_INVALID");
+  const claimedEvents = [];
+  const eventResponseReplays = [];
+  const eligibleEventRows = [];
+  eventRows.forEach(function(row) {
+    const state = String(row.object.processing_state);
+    const currentOwner = String(row.object.lease_owner || "");
+    const currentExpiry = Date.parse(String(row.object.lease_expires_at || ""));
+    const responseReplay = state === "processing" && currentOwner === leaseOwner && currentExpiry > Date.parse(claimedAt);
+    const eligible = state === "pending" || state === "retryable" || (state === "processing" && (!isFinite(currentExpiry) || currentExpiry <= Date.parse(claimedAt)));
+    if (responseReplay) eventResponseReplays.push(row);
+    else if (eligible) eligibleEventRows.push(row);
+  });
+  eligibleEventRows.sort(function(left, right) {
+    const leftAttempt = Date.parse(String(left.object.last_attempt_at || ""));
+    const rightAttempt = Date.parse(String(right.object.last_attempt_at || ""));
+    const leftTime = isFinite(leftAttempt) ? leftAttempt : 0;
+    const rightTime = isFinite(rightAttempt) ? rightAttempt : 0;
+    return leftTime - rightTime || left.rowNumber - right.rowNumber;
+  });
+
+  eventResponseReplays.concat(eligibleEventRows).slice(0, maxEvents).forEach(function(row) {
+    const state = String(row.object.processing_state);
+    const currentOwner = String(row.object.lease_owner || "");
+    const currentExpiry = Date.parse(String(row.object.lease_expires_at || ""));
+    const responseReplay = state === "processing" && currentOwner === leaseOwner && currentExpiry > Date.parse(claimedAt);
+    if (!responseReplay) {
+      setRecoveryCell_(schema.eventSheet, row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "processing_state", "processing");
+      setRecoveryCell_(schema.eventSheet, row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "attempt_count", Number(row.object.attempt_count || 0) + 1);
+      setRecoveryCell_(schema.eventSheet, row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "lease_owner", leaseOwner);
+      setRecoveryCell_(schema.eventSheet, row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "lease_expires_at", leaseExpiresAt);
+      setRecoveryCell_(schema.eventSheet, row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "last_attempt_at", claimedAt);
+      setRecoveryCell_(schema.eventSheet, row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "updated_at", claimedAt);
+      row.object.processing_state = "processing";
+      row.object.attempt_count = Number(row.object.attempt_count || 0) + 1;
+      row.object.lease_owner = leaseOwner;
+      row.object.lease_expires_at = leaseExpiresAt;
+      row.object.last_attempt_at = claimedAt;
+      row.object.updated_at = claimedAt;
+    }
+    claimedEvents.push(row.object);
+  });
+
+  const snapshotRows = readRecoveryRows_(schema.snapshotSheet, ORDER_RECOVERY_SNAPSHOT_HEADERS, "external_reference", "RECOVERY_SCHEMA_INVALID");
+  const claimedSnapshots = [];
+  const snapshotResponseReplays = [];
+  const eligibleSnapshotRows = [];
+  const claimedAtMs = Date.parse(claimedAt);
+  const snapshotLeaseDurationMs = Date.parse(leaseExpiresAt) - claimedAtMs;
+  snapshotRows.forEach(function(row) {
+    if (["pending_payment", "payment_observed"].indexOf(String(row.object.recovery_state)) === -1) return;
+    const responseReplay = String(row.object.last_checked_at || "") === claimedAt;
+    const lastCheckedAt = Date.parse(String(row.object.last_checked_at || ""));
+    const eligible = !isFinite(lastCheckedAt) || lastCheckedAt <= claimedAtMs - snapshotLeaseDurationMs;
+    if (responseReplay) snapshotResponseReplays.push(row);
+    else if (eligible) eligibleSnapshotRows.push(row);
+  });
+  eligibleSnapshotRows.sort(function(left, right) {
+    const leftChecked = Date.parse(String(left.object.last_checked_at || ""));
+    const rightChecked = Date.parse(String(right.object.last_checked_at || ""));
+    const leftTime = isFinite(leftChecked) ? leftChecked : 0;
+    const rightTime = isFinite(rightChecked) ? rightChecked : 0;
+    return leftTime - rightTime || left.rowNumber - right.rowNumber;
+  });
+
+  snapshotResponseReplays.concat(eligibleSnapshotRows).slice(0, maxSnapshots).forEach(function(row) {
+    const responseReplay = String(row.object.last_checked_at || "") === claimedAt;
+    if (!responseReplay) {
+      setRecoveryCell_(schema.snapshotSheet, row.rowNumber, ORDER_RECOVERY_SNAPSHOT_HEADERS, "last_checked_at", claimedAt);
+      setRecoveryCell_(schema.snapshotSheet, row.rowNumber, ORDER_RECOVERY_SNAPSHOT_HEADERS, "updated_at", claimedAt);
+      row.object.last_checked_at = claimedAt;
+      row.object.updated_at = claimedAt;
+    }
+    claimedSnapshots.push(row.object);
+  });
+  return { ok: true, result: "WORK_CLAIMED", events: claimedEvents, snapshots: claimedSnapshots };
+}
+
+function handleMarkRecoveryWork_(payload, targetState) {
+  if (["retryable", "attention", "completed"].indexOf(targetState) === -1) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid recovery work target state");
+  }
+  const found = findRecoveryEvent_(payload.eventKey);
+  if (!found.row) throw recoveryError_("RECOVERY_EVENT_NOT_FOUND", "Recovery event not found");
+  const currentState = String(found.row.object.processing_state);
+  if (currentState === "completed") {
+    if (targetState !== "completed") {
+      throw recoveryError_("RECOVERY_WORK_LEASE_CONFLICT", "Completed recovery work is monotonic");
+    }
+    return { ok: true, result: "WORK_COMPLETED", event: found.row.object };
+  }
+  const leaseOwner = String(payload.leaseOwner || "").trim();
+  if (leaseOwner && String(found.row.object.lease_owner || "") !== leaseOwner) {
+    throw recoveryError_("RECOVERY_WORK_LEASE_CONFLICT", "Recovery work lease owner mismatch");
+  }
+  const now = new Date().toISOString();
+  setRecoveryCell_(found.sheet, found.row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "processing_state", targetState);
+  setRecoveryCell_(found.sheet, found.row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "lease_owner", "");
+  setRecoveryCell_(found.sheet, found.row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "lease_expires_at", "");
+  const errorCode = targetState === "completed" ? "" : safeRecoveryErrorCode_(payload.errorCode);
+  setRecoveryCell_(found.sheet, found.row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "last_error_code", errorCode);
+  setRecoveryCell_(found.sheet, found.row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "updated_at", now);
+  if (targetState === "completed") {
+    setRecoveryCell_(found.sheet, found.row.rowNumber, PAYMENT_RECOVERY_EVENT_HEADERS, "completed_at", now);
+  }
+  found.row.object.processing_state = targetState;
+  found.row.object.lease_owner = "";
+  found.row.object.lease_expires_at = "";
+  found.row.object.last_error_code = errorCode;
+  found.row.object.updated_at = now;
+  if (targetState === "completed") found.row.object.completed_at = now;
+  const result = targetState === "completed" ? "WORK_COMPLETED" : targetState === "attention" ? "WORK_ATTENTION" : "WORK_RETRYABLE";
+  return { ok: true, result: result, event: found.row.object };
+}
+
+function handleMarkRecoverySnapshot_(payload, forcedState) {
+  const found = findRecoverySnapshot_(payload.externalReference);
+  if (!found.row) throw recoveryError_("RECOVERY_SNAPSHOT_NOT_FOUND", "Recovery snapshot not found");
+  const currentState = String(found.row.object.recovery_state);
+  const targetState = forcedState || String(payload.recoveryState || "");
+  if (RECOVERY_SNAPSHOT_STATES.indexOf(targetState) === -1) {
+    throw recoveryError_("RECOVERY_SCHEMA_INVALID", "Invalid recovery snapshot target state");
+  }
+  if ((currentState === "completed" || currentState === "expired_unpaid") && targetState !== currentState) {
+    throw recoveryError_("RECOVERY_WORK_LEASE_CONFLICT", "Terminal recovery snapshot state is monotonic");
+  }
+  const now = new Date().toISOString();
+  setRecoveryCell_(found.sheet, found.row.rowNumber, ORDER_RECOVERY_SNAPSHOT_HEADERS, "recovery_state", targetState);
+  setRecoveryCell_(found.sheet, found.row.rowNumber, ORDER_RECOVERY_SNAPSHOT_HEADERS, "last_checked_at", now);
+  const errorCode = safeRecoveryErrorCode_(payload.errorCode);
+  setRecoveryCell_(found.sheet, found.row.rowNumber, ORDER_RECOVERY_SNAPSHOT_HEADERS, "last_error_code", errorCode);
+  setRecoveryCell_(found.sheet, found.row.rowNumber, ORDER_RECOVERY_SNAPSHOT_HEADERS, "updated_at", now);
+  if (targetState === "completed" || targetState === "expired_unpaid") {
+    setRecoveryCell_(found.sheet, found.row.rowNumber, ORDER_RECOVERY_SNAPSHOT_HEADERS, "completed_at", now);
+    if (payload.redactSnapshot === true) {
+      setRecoveryCell_(found.sheet, found.row.rowNumber, ORDER_RECOVERY_SNAPSHOT_HEADERS, "snapshot_json", "");
+      found.row.object.snapshot_json = "";
+    }
+    found.row.object.completed_at = now;
+  }
+  found.row.object.recovery_state = targetState;
+  found.row.object.last_checked_at = now;
+  found.row.object.last_error_code = errorCode;
+  found.row.object.updated_at = now;
+  return { ok: true, result: "RECOVERY_SNAPSHOT_UPDATED", snapshot: found.row.object };
+}
+
+function handleListRecoveryAttention_(payload) {
+  const schema = ensureRecoverySchema_();
+  const limit = boundedRecoveryLimit_(payload.limit, 50);
+  const items = [];
+  readRecoveryRows_(schema.eventSheet, PAYMENT_RECOVERY_EVENT_HEADERS, "event_key", "RECOVERY_SCHEMA_INVALID").forEach(function(row) {
+    if (String(row.object.processing_state) === "completed") return;
+    items.push({
+      kind: "payment_event",
+      external_reference: row.object.external_reference,
+      payment_id: row.object.payment_id,
+      financial_status: row.object.financial_status,
+      state: row.object.processing_state,
+      last_error_code: row.object.last_error_code,
+      updated_at: row.object.updated_at
+    });
+  });
+  readRecoveryRows_(schema.snapshotSheet, ORDER_RECOVERY_SNAPSHOT_HEADERS, "external_reference", "RECOVERY_SCHEMA_INVALID").forEach(function(row) {
+    if (String(row.object.recovery_state) !== "attention") return;
+    items.push({
+      kind: "snapshot",
+      external_reference: row.object.external_reference,
+      payment_id: "",
+      financial_status: "",
+      state: row.object.recovery_state,
+      last_error_code: row.object.last_error_code,
+      updated_at: row.object.updated_at
+    });
+  });
+  items.sort(function(left, right) { return Date.parse(String(right.updated_at || "")) - Date.parse(String(left.updated_at || "")); });
+  return { ok: true, result: "RECOVERY_ATTENTION_LISTED", items: items.slice(0, limit) };
+}
+
 function logInternalError_(context, err) {
   const detail = err && err.stack ? err.stack : String(err && err.message ? err.message : err);
   console.error(context + ": " + detail);
@@ -1153,6 +1752,14 @@ function inventoryPublicErrorMessage_(code) {
 function publicPostErrorPayload_(err) {
   if (!err || typeof err.code !== "string") {
     return { ok: false, error: publicErrorMessage_(err) };
+  }
+
+  if (err.name === "RecoveryError") {
+    return {
+      ok: false,
+      error: "Recovery operation failed",
+      code: err.code
+    };
   }
 
   const payload = {
@@ -1208,6 +1815,24 @@ function doPost(e) {
     if (action === "update_row" || action === "update") return jsonOutput(handleUpdateRow(payload));
     if (action === "decrement_stock" || action === "decrementstock") return jsonOutput(handleDecrementStock(payload));
     if (action === "append_order_and_decrement_stock" || action === "appendorderanddecrementstock") return jsonOutput(handleAppendOrderAndDecrementStock(payload));
+    if (action === "ensure_recovery_schema") {
+      ensureRecoverySchema_();
+      return jsonOutput({ ok: true, result: "RECOVERY_SCHEMA_READY" });
+    }
+    if (action === "upsert_recovery_snapshot") return jsonOutput(handleUpsertRecoverySnapshot_(payload));
+    if (action === "get_recovery_snapshot") return jsonOutput(handleGetRecoverySnapshot_(payload));
+    if (action === "list_recovery_snapshots_for_scan") return jsonOutput(handleListRecoverySnapshotsForScan_(payload));
+    if (action === "append_recovery_payment_event") return jsonOutput(handleAppendRecoveryPaymentEvent_(payload));
+    if (action === "get_recovery_payment_event") return jsonOutput(handleGetRecoveryPaymentEvent_(payload));
+    if (action === "list_recovery_payment_events") return jsonOutput(handleListRecoveryPaymentEvents_(payload));
+    if (action === "claim_recovery_work") return jsonOutput(handleClaimRecoveryWork_(payload));
+    if (action === "mark_recovery_work_retryable") return jsonOutput(handleMarkRecoveryWork_(payload, "retryable"));
+    if (action === "mark_recovery_work_attention") return jsonOutput(handleMarkRecoveryWork_(payload, "attention"));
+    if (action === "mark_recovery_work_completed") return jsonOutput(handleMarkRecoveryWork_(payload, "completed"));
+    if (action === "mark_recovery_snapshot_checked") return jsonOutput(handleMarkRecoverySnapshot_(payload, null));
+    if (action === "mark_recovery_snapshot_completed") return jsonOutput(handleMarkRecoverySnapshot_(payload, "completed"));
+    if (action === "mark_recovery_snapshot_expired_unpaid") return jsonOutput(handleMarkRecoverySnapshot_(payload, "expired_unpaid"));
+    if (action === "list_recovery_attention") return jsonOutput(handleListRecoveryAttention_(payload));
     throw new Error("Unsupported action");
   } catch (err) {
     logInternalError_("doPost", err);

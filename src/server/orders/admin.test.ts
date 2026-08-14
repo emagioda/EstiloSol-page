@@ -323,4 +323,81 @@ describe("PR 2 admin KV and Sheets reconciliation", () => {
     expect(secondResult).toHaveLength(1);
     expect(appendOrder).toHaveBeenCalledTimes(1);
   });
+
+  it("AUD3-H06-MERGE-01 preserves Sheet confirmed over stale KV pending without writing pending", () => {
+    const resolution = resolveAdminOrderState(
+      makeSheetOrder({ paymentStatus: "confirmed" }),
+      makeKvOrder({ status: "created", paymentStatus: "pending" }),
+    );
+    expect(resolution.order.paymentStatus).toBe("confirmed");
+    expect(resolution.syncUpdates?.paymentStatus).not.toBe("pending");
+  });
+
+  it("AUD3-H06-MERGE-02 preserves Sheet confirmed over stale KV cancelled", () => {
+    const resolution = resolveAdminOrderState(
+      makeSheetOrder({ paymentStatus: "confirmed" }),
+      makeKvOrder({ status: "cancelled", paymentStatus: "cancelled" }),
+    );
+    expect(resolution.order.paymentStatus).toBe("confirmed");
+    expect(resolution.syncUpdates?.paymentStatus).not.toBe("cancelled");
+  });
+
+  it("AUD3-H06-MERGE-03 promotes Sheet pending from KV confirmed", () => {
+    const resolution = resolveAdminOrderState(
+      makeSheetOrder({ paymentStatus: "pending" }),
+      makeKvOrder({ status: "approved", paymentStatus: "confirmed" }),
+    );
+    expect(resolution.order.paymentStatus).toBe("confirmed");
+    expect(resolution.syncUpdates).toMatchObject({
+      paymentStatus: "confirmed",
+      orderStatus: "approved",
+    });
+  });
+
+  it("AUD3-H06-MERGE-04 applies charged_back only with actual KV ledger evidence", () => {
+    const resolution = resolveAdminOrderState(
+      makeSheetOrder({ paymentStatus: "confirmed" }),
+      makeKvOrder({
+        status: "charged_back",
+        paymentStatus: "charged_back",
+        mpPaymentLedger: {
+          pay_1: {
+            paymentId: "pay_1",
+            status: "charged_back",
+            amount: 1000,
+            currency: "ARS",
+            firstSeenAt: INVENTORY_ISSUE_AT,
+            lastSeenAt: STOCK_DEDUCTED_AT,
+          },
+        },
+      }),
+    );
+    expect(resolution.order.paymentStatus).toBe("charged_back");
+    expect(resolution.syncUpdates?.paymentStatus).toBe("charged_back");
+  });
+
+  it("AUD3-H06-MERGE-05 flags contradictory reversal evidence without a silent downgrade", () => {
+    const resolution = resolveAdminOrderState(
+      makeSheetOrder({ paymentStatus: "refunded" }),
+      makeKvOrder({
+        status: "charged_back",
+        paymentStatus: "charged_back",
+        mpPaymentLedger: {
+          pay_1: {
+            paymentId: "pay_1",
+            status: "charged_back",
+            amount: 1000,
+            currency: "ARS",
+            firstSeenAt: INVENTORY_ISSUE_AT,
+            lastSeenAt: STOCK_DEDUCTED_AT,
+          },
+        },
+      }),
+    );
+    expect(resolution.order).toMatchObject({
+      paymentStatus: "refunded",
+      financialAttentionCode: "FINANCIAL_EVIDENCE_CONFLICT",
+    });
+    expect(resolution.syncUpdates?.paymentStatus).not.toBe("charged_back");
+  });
 });

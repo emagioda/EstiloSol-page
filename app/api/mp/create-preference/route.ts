@@ -29,6 +29,7 @@ import { buildOrderFromCheckout } from "@/src/server/orders/createFromCheckout";
 import { createOrder, getOrder, markPreferenceCreated } from "@/src/server/orders/store";
 import { createPreferenceOnMp, isValidMpPreferenceResponse } from "@/src/server/payments/mpClient";
 import { buildPreferencePayload, buildPreferenceUrls } from "@/src/server/payments/preferencePayload";
+import { persistCheckoutRecoverySnapshot } from "@/src/server/recovery/service";
 import { checkRateLimit } from "@/src/server/security/rateLimit";
 import { parseCheckoutBody } from "@/src/server/validation/payments";
 
@@ -252,6 +253,13 @@ export async function POST(request: NextRequest) {
 
     const appBaseUrl = (env.getOptionalServer("APP_BASE_URL") || request.nextUrl.origin).replace(/\/$/, "");
     attempt = await ensureMercadoPagoPreferenceWindow(attempt, ownerToken);
+    sideEffectsStarted = true;
+    await persistCheckoutRecoverySnapshot({
+      order,
+      checkoutAttemptId: attempt.checkoutAttemptId,
+      preferenceValidFrom: attempt.preferenceValidFrom!,
+      preferenceExpiresAt: attempt.preferenceExpiresAt!,
+    });
     const urls = buildPreferenceUrls({
       appBaseUrl,
       externalReference: order.externalReference,

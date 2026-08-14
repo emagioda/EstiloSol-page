@@ -21,6 +21,15 @@ vi.mock("@/src/server/http/afterResponse", () => ({
     scheduledTasks.push(task);
   }),
 }));
+vi.mock("@/src/server/recovery/service", () => ({
+  prepareProtectedPaymentDurability: vi.fn(async () => ({ protected: false })),
+  completeRecoveryEvent: vi.fn(async () => undefined),
+  markRecoveryEventRetryableSafely: vi.fn(async () => undefined),
+}));
+vi.mock("@/src/server/recovery/repository", () => ({
+  getRecoverySnapshot: vi.fn(async () => null),
+  markRecoveryEventState: vi.fn(async () => undefined),
+}));
 
 import { GET, POST } from "@/app/api/mp/verify-payment/route";
 import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";

@@ -52,6 +52,11 @@ type CreateOrderOptions = {
   syncSheet?: boolean;
 };
 
+type EnsureOrderResult = {
+  order: Order;
+  created: boolean;
+};
+
 type OrderPatch = Partial<Omit<Order, "externalReference" | "createdAt">>;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -143,6 +148,56 @@ export async function createOrder(order: Order, options: CreateOrderOptions = {}
   );
 }
 
+const recoveryOrderIdentityMatches = (current: Order, candidate: Order): boolean =>
+  current.externalReference === candidate.externalReference &&
+  current.total === candidate.total &&
+  current.currency === candidate.currency &&
+  JSON.stringify(current.items) === JSON.stringify(candidate.items);
+
+export async function ensureOrderExists(
+  order: Order,
+  options: CreateOrderOptions = { syncSheet: false },
+): Promise<EnsureOrderResult> {
+  return withOrderWriteLock(order.externalReference, async () => {
+    const existing = await getJson<StoredOrder>(orderKey(order.externalReference));
+    if (existing) {
+      const normalized = ensureOrderDefaults(existing);
+      if (!recoveryOrderIdentityMatches(normalized, order)) {
+        throw new Error(`Recovery order conflicts with existing order ${order.externalReference}`);
+      }
+      return { order: normalized, created: false };
+    }
+
+    if (options.syncSheet !== false) {
+      throw new Error("Recovery order creation must defer Sheets synchronization");
+    }
+    const candidate = ensureOrderDefaults({
+      ...order,
+      inventoryStatus: order.inventoryStatus ?? "pending",
+      salesSheetDeferredUntilApprovedAt:
+        order.salesSheetDeferredUntilApprovedAt ?? order.createdAt,
+    });
+    const created = await setJsonIfNotExists(
+      orderKey(candidate.externalReference),
+      candidate,
+      privacyPolicy.ttlSecondsForStatus(candidate.status),
+    );
+    if (!created) {
+      const winner = await getJson<StoredOrder>(orderKey(candidate.externalReference));
+      if (!winner) throw new Error("Recovery order claim could not be recovered");
+      const normalized = ensureOrderDefaults(winner);
+      if (!recoveryOrderIdentityMatches(normalized, candidate)) {
+        throw new Error(`Recovery order conflicts with existing order ${candidate.externalReference}`);
+      }
+      return { order: normalized, created: false };
+    }
+    logEvent("info", "recovery.order_reconstructed", {
+      orderId: candidate.externalReference,
+    });
+    return { order: candidate, created: true };
+  });
+}
+
 async function appendApprovedOrderToSalesSheet(order: Order): Promise<{ order: Order; synced: boolean }> {
   if (!order.salesSheetDeferredUntilApprovedAt || order.salesSheetSyncedAt) {
     return { order, synced: true };
@@ -151,10 +206,23 @@ async function appendApprovedOrderToSalesSheet(order: Order): Promise<{ order: O
   const lockAcquired = await setJsonIfNotExists(
     salesSheetSyncKey(order.externalReference),
     "syncing",
-    WEBHOOK_DEDUPE_TTL_SECONDS
+    ORDER_WRITE_LOCK_TTL_SECONDS
   );
 
   if (!lockAcquired) {
+    const marker = await getJson<string>(salesSheetSyncKey(order.externalReference));
+    if (marker === "synced") {
+      const salesSheetSyncedAt = Date.now();
+      const updated = await updateOrder(
+        order.externalReference,
+        { salesSheetSyncedAt },
+        { syncSheet: false },
+      );
+      return {
+        order: updated ?? { ...order, salesSheetSyncedAt },
+        synced: true,
+      };
+    }
     logEvent("info", "orders.sales_sheet_sync_already_running", {
       externalReference: order.externalReference,
     });
@@ -246,6 +314,42 @@ async function appendApprovedOrderToSalesSheet(order: Order): Promise<{ order: O
       synced: false,
     };
   }
+}
+
+export async function ensureOrderDurableInSalesSheet(
+  order: Order,
+): Promise<{ order: Order; synced: boolean }> {
+  const eligible =
+    order.paymentStatus === "confirmed" ||
+    order.paymentStatus === "refunded" ||
+    order.paymentStatus === "charged_back";
+  if (!eligible) return { order, synced: false };
+
+  const candidate = order.salesSheetDeferredUntilApprovedAt
+    ? order
+    : { ...order, salesSheetDeferredUntilApprovedAt: order.updatedAt || Date.now() };
+  const appendResult = await appendApprovedOrderToSalesSheet(candidate);
+  if (!appendResult.synced) return appendResult;
+
+  const projected = appendResult.order;
+  await updateOrderRowInSalesSheet(projected.externalReference, {
+    paymentStatus: projected.paymentStatus,
+    shippingStatus: projected.shippingStatus,
+    orderStatus: projected.status,
+    mpStatus: projected.mpStatus,
+    mpPaymentId: projected.mpPaymentId,
+    mpPreferenceId: projected.mpPreferenceId,
+    inventoryStatus: projected.inventoryStatus ?? null,
+    inventoryIssueCode: projected.inventoryIssueCode ?? null,
+    inventoryIssueAt: projected.inventoryIssueAt ?? null,
+    stockDeductedAt: projected.stockDeductedAt ?? null,
+    updatedAt: projected.updatedAt,
+  });
+  logEvent("info", "recovery.sales_row_ensured", {
+    orderId: projected.externalReference,
+    paymentStatus: projected.paymentStatus,
+  });
+  return { order: projected, synced: true };
 }
 
 export async function getOrder(externalReference: string): Promise<Order | null> {

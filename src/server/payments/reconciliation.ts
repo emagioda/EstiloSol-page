@@ -4,6 +4,8 @@ import { logEvent } from "@/src/server/observability/log";
 import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import {
   claimReceiptEmailDelivery,
+  ensureOrderDurableInSalesSheet,
+  ensureOrderExists,
   getOrder,
   reconcileMercadoPagoPaymentObservation,
   reconcileMercadoPagoPaymentObservationBatch,
@@ -14,9 +16,28 @@ import type { Order } from "@/src/server/orders/types";
 import type { MercadoPagoPaymentObservation } from "./ledger";
 import type { MpPaymentResponse, MpSearchPayment } from "./shared";
 import { amountMatches } from "./shared";
+import {
+  completeRecoveryEvent,
+  markRecoveryEventRetryableSafely,
+  prepareProtectedPaymentDurability,
+} from "@/src/server/recovery/service";
+import {
+  getRecoverySnapshot,
+  markRecoveryEventState,
+} from "@/src/server/recovery/repository";
+import {
+  parseStoredRecoverySnapshot,
+  recoverySnapshotToOrder,
+} from "@/src/server/recovery/snapshot";
+import type { RecoveryPaymentEvent } from "@/src/server/recovery/types";
+import { updateOrderRowInSalesSheet } from "@/src/server/sheets/repository";
 
 type MercadoPagoPaymentLike = MpPaymentResponse | MpSearchPayment;
-type ReconciliationSource = "webhook" | "verify_payment_id" | "verify_search";
+type ReconciliationSource =
+  | "webhook"
+  | "verify_payment_id"
+  | "verify_search"
+  | "snapshot_scan";
 
 type MercadoPagoObservationInput = {
   payment: MercadoPagoPaymentLike;
@@ -27,6 +48,12 @@ type MercadoPagoObservationInput = {
 
 export type MercadoPagoReconciliationResult =
   | { outcome: "order_not_found" }
+  | {
+      outcome: "recovery_attention";
+      paymentId: string;
+      status: string;
+      order: Order | null;
+    }
   | {
       outcome: "ignored";
       reason:
@@ -50,6 +77,11 @@ export type MercadoPagoReconciliationResult =
 
 export type MercadoPagoBatchReconciliationResult =
   | { outcome: "order_not_found" }
+  | {
+      outcome: "recovery_attention";
+      order: Order | null;
+      observationResults: MercadoPagoReconciliationResult[];
+    }
   | {
       outcome: "reconciled";
       order: Order;
@@ -217,19 +249,67 @@ export async function reconcileMercadoPagoPayment(input: {
   fallbackPaymentId?: string;
   observedAt?: number;
 }): Promise<MercadoPagoReconciliationResult> {
-  const order = await getOrder(input.externalReference);
+  const durable = await prepareProtectedPaymentDurability({
+    payment: input.payment,
+    source: input.source,
+    fallbackPaymentId: input.fallbackPaymentId,
+    observedAt: input.observedAt,
+  });
+  if (durable.protected && durable.outcome !== "ready") {
+    return {
+      outcome: "recovery_attention",
+      paymentId: durable.event.paymentId,
+      status: durable.event.financialStatus,
+      order: durable.order,
+    };
+  }
+
+  const order = durable.protected ? durable.order : await getOrder(input.externalReference);
   if (!order) return { outcome: "order_not_found" };
 
   const validated = validateObservation(order, input);
-  if (!validated.ok) return ignored(validated.reason, order, input.source);
+  if (!validated.ok) {
+    if (durable.protected) {
+      await markRecoveryEventState({
+        eventKey: durable.event.eventKey,
+        state: "attention",
+        errorCode: `RECOVERY_${validated.reason.toUpperCase()}`,
+      });
+    }
+    return ignored(validated.reason, order, input.source);
+  }
   const { paymentId, status, observation } = validated.value;
 
-  const result = await reconcileMercadoPagoPaymentObservation(
-    order.externalReference,
-    observation
-  );
+  let result: Awaited<ReturnType<typeof reconcileMercadoPagoPaymentObservation>>;
+  try {
+    result = await reconcileMercadoPagoPaymentObservation(
+      order.externalReference,
+      observation,
+    );
+    if (result.order && durable.protected && !result.omittedForCapacity) {
+      const sales = await ensureOrderDurableInSalesSheet(result.order);
+      if (!sales.synced) throw new Error("RECOVERY_SALES_ROW_NOT_DURABLE");
+      result.order = sales.order;
+      await completeRecoveryEvent(durable.event);
+    }
+  } catch (error) {
+    if (durable.protected) {
+      await markRecoveryEventRetryableSafely(
+        durable.event,
+        error instanceof Error ? error.message.slice(0, 120) : "RECOVERY_RECONCILIATION_FAILED",
+      );
+    }
+    throw error;
+  }
   if (!result.order) return { outcome: "order_not_found" };
   if (result.omittedForCapacity) {
+    if (durable.protected) {
+      await markRecoveryEventState({
+        eventKey: durable.event.eventKey,
+        state: "attention",
+        errorCode: "RECOVERY_LEDGER_CAPACITY",
+      });
+    }
     return ignored("ledger_capacity", result.order, input.source);
   }
 
@@ -256,19 +336,85 @@ export async function reconcileMercadoPagoPaymentObservations(input: {
   observations: MercadoPagoObservationInput[];
   validationOrder?: Order;
 }): Promise<MercadoPagoBatchReconciliationResult> {
-  const validationOrder = input.validationOrder ?? (await getOrder(input.externalReference));
-  if (!validationOrder) return { outcome: "order_not_found" };
+  const durability = [] as Array<{
+    input: MercadoPagoObservationInput;
+    event?: RecoveryPaymentEvent;
+    attentionResult?: MercadoPagoReconciliationResult;
+    order?: Order;
+  }>;
+  let recoveredOrder: Order | undefined;
+  for (const observationInput of input.observations) {
+    const preparedDurability = await prepareProtectedPaymentDurability({
+      payment: observationInput.payment,
+      source: observationInput.source,
+      fallbackPaymentId: observationInput.fallbackPaymentId,
+      observedAt: observationInput.observedAt,
+    });
+    if (preparedDurability.protected && preparedDurability.outcome !== "ready") {
+      durability.push({
+        input: observationInput,
+        event: preparedDurability.event,
+        order: preparedDurability.order ?? undefined,
+        attentionResult: {
+          outcome: "recovery_attention",
+          paymentId: preparedDurability.event.paymentId,
+          status: preparedDurability.event.financialStatus,
+          order: preparedDurability.order,
+        },
+      });
+      continue;
+    }
+    if (preparedDurability.protected) {
+      recoveredOrder = preparedDurability.order;
+      durability.push({
+        input: observationInput,
+        event: preparedDurability.event,
+        order: preparedDurability.order,
+      });
+    } else {
+      durability.push({ input: observationInput });
+    }
+  }
 
-  const prepared = input.observations.map((observationInput) => {
-    const validation = validateObservation(validationOrder, observationInput);
-    if (!validation.ok) {
+  const validationOrder =
+    input.validationOrder ?? recoveredOrder ?? (await getOrder(input.externalReference));
+  if (!validationOrder) {
+    const attentionResults = durability
+      .map((entry) => entry.attentionResult)
+      .filter((entry): entry is MercadoPagoReconciliationResult => Boolean(entry));
+    if (attentionResults.length > 0) {
       return {
-        ok: false as const,
-        result: ignored(validation.reason, validationOrder, observationInput.source),
+        outcome: "recovery_attention",
+        order: null,
+        observationResults: attentionResults,
       };
     }
-    return { ok: true as const, value: validation.value };
-  });
+    return { outcome: "order_not_found" };
+  }
+
+  const prepared = await Promise.all(
+    durability.map(async (entry) => {
+      if (entry.attentionResult) {
+        return { ok: false as const, result: entry.attentionResult, event: entry.event };
+      }
+      const validation = validateObservation(validationOrder, entry.input);
+      if (!validation.ok) {
+        if (entry.event) {
+          await markRecoveryEventState({
+            eventKey: entry.event.eventKey,
+            state: "attention",
+            errorCode: `RECOVERY_${validation.reason.toUpperCase()}`,
+          });
+        }
+        return {
+          ok: false as const,
+          result: ignored(validation.reason, validationOrder, entry.input.source),
+          event: entry.event,
+        };
+      }
+      return { ok: true as const, value: validation.value, event: entry.event };
+    }),
+  );
   const validated = prepared.filter(
     (entry): entry is Extract<(typeof prepared)[number], { ok: true }> => entry.ok
   );
@@ -279,6 +425,16 @@ export async function reconcileMercadoPagoPaymentObservations(input: {
         (entry): entry is Extract<(typeof prepared)[number], { ok: false }> => !entry.ok
       )
       .map((entry) => entry.result);
+    const hasRecoveryAttention = ignoredResults.some(
+      (entry) => entry.outcome === "recovery_attention",
+    );
+    if (hasRecoveryAttention) {
+      return {
+        outcome: "recovery_attention",
+        order: validationOrder,
+        observationResults: ignoredResults,
+      };
+    }
     return {
       outcome: "reconciled",
       order: validationOrder,
@@ -288,19 +444,42 @@ export async function reconcileMercadoPagoPaymentObservations(input: {
     };
   }
 
-  const result = await reconcileMercadoPagoPaymentObservationBatch(
-    input.externalReference,
-    validated.map((entry) => entry.value.observation)
-  );
+  let result: Awaited<ReturnType<typeof reconcileMercadoPagoPaymentObservationBatch>>;
+  try {
+    result = await reconcileMercadoPagoPaymentObservationBatch(
+      input.externalReference,
+      validated.map((entry) => entry.value.observation),
+    );
+  } catch (error) {
+    await Promise.all(
+      validated
+        .filter((entry) => entry.event)
+        .map((entry) =>
+          markRecoveryEventRetryableSafely(
+            entry.event!,
+            error instanceof Error
+              ? error.message.slice(0, 120)
+              : "RECOVERY_RECONCILIATION_FAILED",
+          ),
+        ),
+    );
+    throw error;
+  }
   if (!result.order) return { outcome: "order_not_found" };
 
   let appliedIndex = 0;
+  const completedEvents: RecoveryPaymentEvent[] = [];
+  const ledgerCapacityEvents: RecoveryPaymentEvent[] = [];
   const observationResults = prepared.map((entry): MercadoPagoReconciliationResult => {
     if (!entry.ok) return entry.result;
     const application = result.observationResults[appliedIndex++];
     if (!application || application.omittedForCapacity) {
+      if (entry.event) {
+        ledgerCapacityEvents.push(entry.event);
+      }
       return ignored("ledger_capacity", result.order!, entry.value.source);
     }
+    if (entry.event) completedEvents.push(entry.event);
     return reconciledObservationResult({
       order: result.order!,
       paymentId: entry.value.paymentId,
@@ -312,6 +491,38 @@ export async function reconcileMercadoPagoPaymentObservations(input: {
       evictedPaymentIds: application.evictedPaymentIds,
     });
   });
+
+  for (const event of ledgerCapacityEvents) {
+    await markRecoveryEventState({
+      eventKey: event.eventKey,
+      state: "attention",
+      errorCode: "RECOVERY_LEDGER_CAPACITY",
+    });
+  }
+
+  let projectedOrder = result.order;
+  if (completedEvents.length > 0) {
+    try {
+      const sales = await ensureOrderDurableInSalesSheet(projectedOrder);
+      if (!sales.synced) throw new Error("RECOVERY_SALES_ROW_NOT_DURABLE");
+      projectedOrder = sales.order;
+      for (const event of completedEvents) {
+        await completeRecoveryEvent(event);
+      }
+    } catch (error) {
+      await Promise.all(
+        completedEvents.map((event) =>
+          markRecoveryEventRetryableSafely(
+            event,
+            error instanceof Error
+              ? error.message.slice(0, 120)
+              : "RECOVERY_SALES_SYNC_FAILED",
+          ),
+        ),
+      );
+      throw error;
+    }
+  }
 
   if (result.firstEffectiveApproval && result.receiptOrder) {
     const paymentId =
@@ -329,9 +540,122 @@ export async function reconcileMercadoPagoPaymentObservations(input: {
 
   return {
     outcome: "reconciled",
-    order: result.order,
+    order: projectedOrder,
     observationResults,
     firstEffectiveApproval: result.firstEffectiveApproval,
     activeApprovedPaymentIds: result.activeApprovedPaymentIds,
   };
+}
+
+export type RecoveryEventReconciliationOutcome =
+  | { outcome: "completed"; order: Order | null }
+  | { outcome: "attention"; order: Order | null };
+
+export async function reconcileRecoveryPaymentEvent(
+  event: RecoveryPaymentEvent,
+  leaseOwner: string,
+): Promise<RecoveryEventReconciliationOutcome> {
+  if (event.validationState !== "validated") {
+    await markRecoveryEventState({
+      eventKey: event.eventKey,
+      state: "attention",
+      leaseOwner,
+      errorCode: event.lastErrorCode || "RECOVERY_EVENT_NOT_VALIDATED",
+    });
+    return { outcome: "attention", order: null };
+  }
+
+  try {
+    let order = await getOrder(event.externalReference);
+    if (!order) {
+      const storedSnapshot = await getRecoverySnapshot(event.externalReference);
+      if (storedSnapshot?.snapshotJson) {
+        const snapshot = parseStoredRecoverySnapshot(storedSnapshot);
+        order = (
+          await ensureOrderExists(recoverySnapshotToOrder(snapshot), { syncSheet: false })
+        ).order;
+      } else if (
+        event.financialStatus === "refunded" ||
+        event.financialStatus === "charged_back"
+      ) {
+        await updateOrderRowInSalesSheet(event.externalReference, {
+          paymentStatus: event.financialStatus,
+          orderStatus: event.financialStatus,
+          mpStatus: event.financialStatus,
+          mpPaymentId: event.paymentId,
+          updatedAt: Date.parse(event.observedAt),
+        });
+        await completeRecoveryEvent(event, leaseOwner);
+        return { outcome: "completed", order: null };
+      } else {
+        await markRecoveryEventState({
+          eventKey: event.eventKey,
+          state: "attention",
+          leaseOwner,
+          errorCode: "RECOVERY_ORDER_RECONSTRUCTION_UNAVAILABLE",
+        });
+        return { outcome: "attention", order: null };
+      }
+    }
+
+    const payment: MpPaymentResponse = {
+      id: event.paymentId,
+      status: event.financialStatus,
+      external_reference: event.externalReference,
+      transaction_amount: event.amount,
+      currency_id: event.currency,
+      status_detail: event.statusDetail,
+      date_last_updated: event.mpUpdatedAt,
+    };
+    const validated = validateObservation(order, {
+      payment,
+      source: event.source,
+      observedAt: Date.parse(event.observedAt),
+    });
+    if (!validated.ok) {
+      await markRecoveryEventState({
+        eventKey: event.eventKey,
+        state: "attention",
+        leaseOwner,
+        errorCode: `RECOVERY_${validated.reason.toUpperCase()}`,
+      });
+      return { outcome: "attention", order };
+    }
+
+    const result = await reconcileMercadoPagoPaymentObservation(
+      order.externalReference,
+      validated.value.observation,
+    );
+    if (!result.order || result.omittedForCapacity) {
+      await markRecoveryEventState({
+        eventKey: event.eventKey,
+        state: "attention",
+        leaseOwner,
+        errorCode: result.omittedForCapacity
+          ? "RECOVERY_LEDGER_CAPACITY"
+          : "RECOVERY_ORDER_NOT_FOUND",
+      });
+      return { outcome: "attention", order: result.order };
+    }
+    const sales = await ensureOrderDurableInSalesSheet(result.order);
+    if (!sales.synced) throw new Error("RECOVERY_SALES_ROW_NOT_DURABLE");
+    await completeRecoveryEvent(event, leaseOwner);
+
+    if (result.firstEffectiveApproval && result.receiptOrder) {
+      const approvedAt =
+        result.receiptOrder.mpPaymentLedger?.[event.paymentId]?.approvedAt ??
+        Date.parse(event.observedAt);
+      scheduleAfterResponse(() =>
+        trySendReceiptEmail(result.receiptOrder!, event.paymentId, approvedAt),
+      );
+    }
+    return { outcome: "completed", order: sales.order };
+  } catch (error) {
+    await markRecoveryEventRetryableSafely(
+      event,
+      error instanceof Error ? error.message.slice(0, 120) : "RECOVERY_WORKER_FAILED",
+      leaseOwner,
+    );
+    throw error;
+  }
 }

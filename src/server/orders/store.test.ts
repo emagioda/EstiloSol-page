@@ -20,6 +20,7 @@ vi.mock("@/src/server/observability/metrics", () => ({
 
 import {
   createOrder,
+  ensureOrderDurableInSalesSheet,
   getOrder,
   markApproved,
   markCancelled,
@@ -350,9 +351,97 @@ describe("AUD3 Mercado Pago bulk order-store reconciliation", () => {
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
     expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
   });
+
+  it("AUD3-H06-02 replays an applied inventory journal after final KV failure with one effective deduction", async () => {
+    const order = makeOrder();
+    await createOrder(order, { syncSheet: false });
+    let effectiveDeductions = 0;
+    vi.mocked(decrementProductsStockInSheet)
+      .mockImplementationOnce(async () => {
+        effectiveDeductions += 1;
+        return { deduped: false, updated: [{ productId: "p1", previousQty: 2, nextQty: 1 }] };
+      })
+      .mockResolvedValueOnce({ deduped: true, updated: [] });
+
+    await expect(
+      reconcileMercadoPagoPaymentObservationBatch(
+        order.externalReference,
+        [observation("A", "approved", 30)],
+        { persistOrder: async () => { throw new Error("KV unavailable after inventory"); } },
+      ),
+    ).rejects.toThrow("KV unavailable after inventory");
+
+    const recovered = await reconcileMercadoPagoPaymentObservationBatch(
+      order.externalReference,
+      [observation("A", "approved", 30)],
+    );
+
+    expect(recovered.order).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(2);
+    expect(effectiveDeductions).toBe(1);
+    expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-H06-19 recovers a failed second approval while preserving both IDs and one stock deduction", async () => {
+    const order = makeOrder();
+    await createOrder(order, { syncSheet: false });
+    await reconcileMercadoPagoPaymentObservationBatch(
+      order.externalReference,
+      [observation("A", "approved", 10)],
+    );
+
+    await expect(
+      reconcileMercadoPagoPaymentObservationBatch(
+        order.externalReference,
+        [observation("B", "approved", 20)],
+        { persistOrder: async () => { throw new Error("KV unavailable for payment B"); } },
+      ),
+    ).rejects.toThrow("KV unavailable for payment B");
+
+    const recovered = await reconcileMercadoPagoPaymentObservationBatch(
+      order.externalReference,
+      [observation("B", "approved", 20)],
+    );
+    expect(Object.keys(recovered.order?.mpPaymentLedger ?? {})).toEqual(["A", "B"]);
+    expect(recovered.order).toMatchObject({
+      paymentStatus: "confirmed",
+      mpPaymentAttentionCode: "MULTIPLE_APPROVED_MP_PAYMENTS",
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("PR 2 recoverable Sheets synchronization", () => {
+  it("AUD3-H06-04 a durable append marker repairs KV after response loss without a second append", async () => {
+    const order = makeOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      salesSheetDeferredUntilApprovedAt: Date.now(),
+    });
+    await createOrder(order, { syncSheet: false });
+    await setJson(
+      `es:order:sales-sheet-sync:${order.externalReference}`,
+      "synced",
+      60,
+    );
+
+    const result = await ensureOrderDurableInSalesSheet(order);
+
+    expect(result).toMatchObject({
+      synced: true,
+      order: { salesSheetSyncedAt: expect.any(Number) },
+    });
+    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledTimes(1);
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      salesSheetSyncedAt: expect.any(Number),
+    });
+  });
+
   it("PR2-SYNC-01 KV keeps confirmed payment and inventory error when Sheets sync fails", async () => {
     const order = makeOrder();
     await createOrder(order);

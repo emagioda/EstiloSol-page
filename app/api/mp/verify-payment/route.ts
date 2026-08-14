@@ -18,6 +18,11 @@ import {
 import type { MpPaymentResponse, MpSearchPayment } from "@/src/server/payments/shared";
 import { checkRateLimit, checkRateLimitByKey } from "@/src/server/security/rateLimit";
 import { parseExternalReference } from "@/src/server/validation/payments";
+import { getRecoverySnapshot } from "@/src/server/recovery/repository";
+import {
+  parseStoredRecoverySnapshot,
+  recoverySnapshotToOrder,
+} from "@/src/server/recovery/snapshot";
 
 export const runtime = "nodejs";
 
@@ -159,11 +164,17 @@ type StagedPaymentObservation = {
 
 const confirmPayment = async (ref: string, paymentId: string | null, accessToken: string) => {
   let order = await getOrder(ref);
-  if (!order) {
-    await trackBusinessEvent("payment.verify.not_found", { externalReference: ref });
-    return NextResponse.json({ approved: false, message: "Pago no encontrado" }, { status: 200 });
+  let validationOrder = order;
+  if (!validationOrder) {
+    const storedSnapshot = await getRecoverySnapshot(ref);
+    if (storedSnapshot?.snapshotJson) {
+      validationOrder = recoverySnapshotToOrder(parseStoredRecoverySnapshot(storedSnapshot));
+    }
+    if (!storedSnapshot) {
+      await trackBusinessEvent("payment.verify.not_found", { externalReference: ref });
+      return NextResponse.json({ approved: false, message: "Pago no encontrado" }, { status: 200 });
+    }
   }
-
   let stagedDirectPayment: StagedPaymentObservation | null = null;
   if (paymentId) {
     let paymentById: Awaited<ReturnType<typeof fetchPaymentByIdFromMp>> | null = null;
@@ -177,7 +188,10 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
       });
     }
     if (paymentById?.response.ok && paymentById.data) {
-      if (isProtectedDirectPaymentObservation(order, paymentById.data, paymentId)) {
+      if (
+        !validationOrder ||
+        isProtectedDirectPaymentObservation(validationOrder, paymentById.data, paymentId)
+      ) {
         const reconciliation = await reconcileMercadoPagoPayment({
           externalReference: ref,
           payment: paymentById.data,
@@ -186,6 +200,10 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
         });
         if (reconciliation.outcome === "reconciled") {
           order = reconciliation.order;
+          validationOrder = reconciliation.order;
+        } else if (reconciliation.outcome === "recovery_attention" && reconciliation.order) {
+          order = reconciliation.order;
+          validationOrder = reconciliation.order;
         }
       } else {
         stagedDirectPayment = {
@@ -215,7 +233,7 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
           externalReference: ref,
           reason: error.reason,
         });
-        if (latestOrder.paymentStatus === "confirmed") {
+        if (latestOrder?.paymentStatus === "confirmed") {
           return buildOrderResponse(latestOrder);
         }
         return NextResponse.json(
@@ -236,7 +254,11 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
         externalReference: ref,
         reason: "network_error",
       });
-      return buildIncompleteSearchResponse(ref, order);
+      if (order) return buildIncompleteSearchResponse(ref, order);
+      return NextResponse.json(
+        { error: "No se pudo completar la busqueda de pagos", code: "MP_PAYMENT_SEARCH_INCOMPLETE" },
+        { status: 503 },
+      );
     }
 
     if (nextPage.done) break;
@@ -255,7 +277,11 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
         reason: "non_ok",
         status: search.response.status,
       });
-      return buildIncompleteSearchResponse(ref, order);
+      if (order) return buildIncompleteSearchResponse(ref, order);
+      return NextResponse.json(
+        { error: "No se pudo completar la busqueda de pagos", code: "MP_PAYMENT_SEARCH_INCOMPLETE" },
+        { status: 503 },
+      );
     }
 
     for (const payment of search.data?.results ?? []) {
@@ -279,14 +305,16 @@ const confirmPayment = async (ref: string, paymentId: string | null, accessToken
 
   const reconciliation = await reconcileMercadoPagoPaymentObservations({
     externalReference: ref,
-    validationOrder: order,
+    ...(validationOrder ? { validationOrder } : {}),
     observations: Array.from(stagedPayments.values()),
   });
   if (reconciliation.outcome === "reconciled") {
     order = reconciliation.order;
+  } else if (reconciliation.outcome === "recovery_attention" && reconciliation.order) {
+    order = reconciliation.order;
   }
 
-  return buildOrderResponse(order);
+  return order ? buildOrderResponse(order) : buildPendingResponse();
 };
 
 export async function GET(request: NextRequest) {
@@ -299,6 +327,8 @@ export async function GET(request: NextRequest) {
   }
   const order = await getOrder(parsedRef.value);
   if (!order) {
+    const snapshot = await getRecoverySnapshot(parsedRef.value);
+    if (snapshot) return buildPendingResponse();
     await trackBusinessEvent("payment.verify.not_found", { externalReference: parsedRef.value });
     return NextResponse.json({ approved: false, message: "Pago no encontrado" }, { status: 200 });
   }

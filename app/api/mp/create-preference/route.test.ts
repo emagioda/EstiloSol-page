@@ -4,9 +4,22 @@ import { POST } from "@/app/api/mp/create-preference/route";
 import { kv } from "@/src/server/kv";
 import * as orderStore from "@/src/server/orders/store";
 import * as metrics from "@/src/server/observability/metrics";
+import { persistCheckoutRecoverySnapshot } from "@/src/server/recovery/service";
 
 vi.mock("@/src/server/security/rateLimit", () => ({
   checkRateLimit: vi.fn(async () => true),
+}));
+vi.mock("@/src/server/recovery/service", () => ({
+  persistCheckoutRecoverySnapshot: vi.fn(async ({ order, checkoutAttemptId, preferenceValidFrom, preferenceExpiresAt }) => ({
+    outcome: "stored",
+    snapshot: {},
+    recoverySnapshot: {
+      externalReference: order.externalReference,
+      checkoutAttemptId,
+      preferenceValidFrom,
+      preferenceExpiresAt,
+    },
+  })),
 }));
 
 type FetchMockOptions = {
@@ -119,6 +132,7 @@ const expectExactPreferenceWindow = (body: Record<string, unknown>) => {
 describe("create-preference local development flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.mocked(persistCheckoutRecoverySnapshot).mockClear();
     fingerprintNonce = newAttemptId("fingerprint");
     process.env.MP_ACCESS_TOKEN = "test-token";
     process.env.SHEETS_ENDPOINT = "https://sheets.example.test/catalog";
@@ -201,6 +215,46 @@ describe("create-preference local development flow", () => {
     fetchMock.mockRestore();
   });
 
+  it("AUD3-H06-SNAP-01 stores the immutable snapshot before calling Mercado Pago", async () => {
+    const { fetchMock, mpBodies } = installPreferenceFetchMock();
+    const response = await POST(createRequest(buildCheckoutBody({
+      checkoutAttemptId: newAttemptId("recovery-ordering"),
+    })));
+    const mpCallIndex = fetchMock.mock.calls.findIndex(
+      ([input]) => String(input) === "https://api.mercadopago.com/checkout/preferences",
+    );
+
+    expect(response.status).toBe(200);
+    expect(persistCheckoutRecoverySnapshot).toHaveBeenCalledTimes(1);
+    expect(mpBodies).toHaveLength(1);
+    expect(vi.mocked(persistCheckoutRecoverySnapshot).mock.invocationCallOrder[0]).toBeLessThan(
+      fetchMock.mock.invocationCallOrder[mpCallIndex],
+    );
+    const snapshotInput = vi.mocked(persistCheckoutRecoverySnapshot).mock.calls[0]?.[0];
+    expect(snapshotInput?.preferenceExpiresAt - snapshotInput?.preferenceValidFrom).toBe(
+      48 * 60 * 60 * 1000,
+    );
+    fetchMock.mockRestore();
+  });
+
+  it("AUD3-H06-SNAP-02 never calls Mercado Pago when snapshot storage fails", async () => {
+    const { fetchMock, mpBodies } = installPreferenceFetchMock();
+    vi.mocked(persistCheckoutRecoverySnapshot).mockRejectedValueOnce(
+      new Error("recovery snapshot unavailable"),
+    );
+
+    const response = await POST(createRequest(buildCheckoutBody({
+      checkoutAttemptId: newAttemptId("recovery-failure"),
+    })));
+
+    expect(response.status).toBe(502);
+    expect(mpBodies).toHaveLength(0);
+    expect(fetchMock.mock.calls.some(
+      ([input]) => String(input) === "https://api.mercadopago.com/checkout/preferences",
+    )).toBe(false);
+    fetchMock.mockRestore();
+  });
+
   it("reuses the same preference for duplicate checkout attempts", async () => {
     const { fetchMock, mpBodies, sheetPostBodies } = installPreferenceFetchMock();
     const checkoutAttemptId = `attempt-${Date.now()}-same`;
@@ -229,7 +283,7 @@ describe("create-preference local development flow", () => {
     fetchMock.mockRestore();
   });
 
-  it("AUD3-IDM-006 allows an intentional identical purchase after completion", async () => {
+  it("AUD3-H06-SNAP-06 / AUD3-IDM-006 gives a new snapshot to an intentional purchase after completion", async () => {
     const { fetchMock, mpBodies, sheetPostBodies } = installPreferenceFetchMock();
 
     const firstResponse = await POST(createRequest(buildCheckoutBody({
@@ -514,7 +568,7 @@ describe("create-preference local development flow", () => {
     fetchMock.mockRestore();
   });
 
-  it("AUD3-IDM-006 canonicalizes concurrent cross-tab MP attempts with different IDs", async () => {
+  it("AUD3-H06-SNAP-05 / AUD3-IDM-006 canonicalizes concurrent cross-tab MP attempts with different IDs", async () => {
     let releasePreference!: () => void;
     let signalPreferenceEntered!: () => void;
     const preferenceEntered = new Promise<void>((resolve) => {
@@ -581,7 +635,7 @@ describe("create-preference local development flow", () => {
     fetchMock.mockRestore();
   });
 
-  it("AUD3-MP-IDEM-03/04 recovers network uncertainty with the same ref and idempotency key", async () => {
+  it("AUD3-H06-SNAP-03 / AUD3-MP-IDEM-03/04 reuses snapshot, ref, window and idempotency after uncertainty", async () => {
     const { fetchMock, mpBodies, mpIdempotencyKeys } = installPreferenceFetchMock({
       mpHandler: async (callNumber) => {
         if (callNumber <= 2) throw new TypeError("response lost");
