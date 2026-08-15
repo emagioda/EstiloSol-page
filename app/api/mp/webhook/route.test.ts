@@ -7,7 +7,10 @@ vi.mock("@/src/server/sheets/repository", () => ({
   decrementProductsStockInSheet: vi.fn(),
   updateOrderRowInSalesSheet: vi.fn(),
 }));
-vi.mock("@/src/server/notifications/orderReceipt", () => ({ sendOrderReceiptEmail: vi.fn() }));
+vi.mock("@/src/server/emailOutbox/service", () => ({
+  ensurePurchaseReceiptEventSafely: vi.fn(async () => null),
+  nudgePurchaseReceiptEvent: vi.fn(),
+}));
 vi.mock("@/src/server/recovery/service", () => ({
   prepareProtectedPaymentDurability: vi.fn(async () => ({ protected: false })),
   completeRecoveryEvent: vi.fn(async () => undefined),
@@ -21,7 +24,7 @@ import {
   decrementProductsStockInSheet,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
-import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
+import { ensurePurchaseReceiptEventSafely } from "@/src/server/emailOutbox/service";
 import { InventoryOperationError } from "@/src/server/inventory/errors";
 import { prepareProtectedPaymentDurability } from "@/src/server/recovery/service";
 
@@ -59,7 +62,6 @@ describe("mercado pago webhook route", () => {
     vi.mocked(appendOrderToSalesSheet).mockResolvedValue(undefined);
     vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
     vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: false, updated: [] });
-    vi.mocked(sendOrderReceiptEmail).mockResolvedValue({ sent: true });
     vi.mocked(prepareProtectedPaymentDurability).mockResolvedValue({ protected: false });
   });
 
@@ -162,7 +164,7 @@ describe("mercado pago webhook route", () => {
     expect(stored).toMatchObject({ status: "created", paymentStatus: "pending" });
     expect(stored?.mpPaymentLedger).toBeUndefined();
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
-    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it("does not dedupe webhook events when Mercado Pago lookup fails", async () => {
@@ -211,7 +213,7 @@ describe("mercado pago webhook route", () => {
     const { ref, paymentId } = await setupApprovedWebhook();
     expect((await POST(signedWebhookRequest(paymentId))).status).toBe(200);
     expect(await getOrder(ref)).toMatchObject({ paymentStatus: "confirmed", inventoryStatus: "deducted" });
-    await vi.waitFor(() => expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1));
   });
 
   it("PR2-WEBHOOK-02 approved plus conflict confirms payment and schedules email", async () => {
@@ -221,14 +223,14 @@ describe("mercado pago webhook route", () => {
     }));
     await POST(signedWebhookRequest(paymentId));
     expect(await getOrder(ref)).toMatchObject({ paymentStatus: "confirmed", inventoryStatus: "conflict" });
-    await vi.waitFor(() => expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1));
   });
 
   it("PR2-WEBHOOK-03 approved plus technical error confirms payment and schedules email", async () => {
     const { ref, paymentId } = await setupApprovedWebhook(new Error("network down"));
     await POST(signedWebhookRequest(paymentId));
     expect(await getOrder(ref)).toMatchObject({ paymentStatus: "confirmed", inventoryStatus: "error" });
-    await vi.waitFor(() => expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1));
   });
 
   it.each([
@@ -245,7 +247,7 @@ describe("mercado pago webhook route", () => {
     const { paymentId } = await setupApprovedWebhook();
     await POST(signedWebhookRequest(paymentId));
     await POST(signedWebhookRequest(paymentId));
-    await vi.waitFor(() => expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1));
   });
 
   it("AUD3-H06-REF-04 keeps a signed matching webhook on the normal durable path", async () => {

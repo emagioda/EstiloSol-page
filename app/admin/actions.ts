@@ -7,14 +7,12 @@ import { env } from "@/src/config/env";
 import { isAdminEmail } from "@/src/server/auth/adminEmail";
 import { authOptions } from "@/src/server/auth/options";
 import { invalidateProductsCatalogCache } from "@/src/server/catalog/getProducts";
-import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
+import { ensurePurchaseReceiptEventSafely } from "@/src/server/emailOutbox/service";
 import { logEvent } from "@/src/server/observability/log";
 import {
-  claimReceiptEmailDelivery,
   getOrder,
   markApproved,
   markTerminalPaymentState,
-  releaseReceiptEmailDelivery,
   retryPaidOrderInventory,
   updateOrder,
 } from "@/src/server/orders/store";
@@ -267,29 +265,6 @@ type AdminOrderUpdateResult = {
   shippingBlocked: boolean;
 };
 
-const sendReceiptOnce = async ({
-  order,
-  paymentId,
-  approvedAt,
-  persistSentAt,
-}: {
-  order: Order;
-  paymentId: string;
-  approvedAt: number;
-  persistSentAt: (sentAt: number) => Promise<unknown>;
-}) => {
-  if (order.receiptEmailSentAt || !order.customer?.email) return;
-  const claimed = await claimReceiptEmailDelivery(order.externalReference);
-  if (!claimed) return;
-
-  const result = await sendOrderReceiptEmail({ order, paymentId, approvedAt });
-  if (result.sent) {
-    await persistSentAt(Date.now());
-    return;
-  }
-  await releaseReceiptEmailDelivery(order.externalReference);
-};
-
 const inventoryPatchFromAttempt = async (order: Order) => {
   const result = await attemptInventoryForPaidOrder(order);
   logEvent(result.status === "deducted" ? "info" : "warn", `inventory.${result.status}`, {
@@ -358,12 +333,14 @@ const applyOrderStatusesUpdate = async ({
       shippingStatus === "completed" && isInventoryBlockingShipping(resolvedFallbackOrder);
     const resolvedShippingStatus = shippingBlocked ? "in_process" : shippingStatus;
 
+    const approvedAt = paymentStatus === "confirmed" && !wasConfirmed ? Date.now() : null;
     await updateOrderRowInSalesSheet(orderId, {
       paymentStatus,
       shippingStatus: resolvedShippingStatus,
       orderStatus: orderStatusFromPaymentStatus(paymentStatus),
       ...(verifiedMpStatus ? { mpStatus: verifiedMpStatus } : {}),
       ...(verifiedPaymentId ? { mpPaymentId: verifiedPaymentId } : {}),
+      ...(approvedAt ? { approvedAt } : {}),
       ...(inventoryAttempt
         ? {
             inventoryStatus: inventoryPatch.inventoryStatus ?? null,
@@ -376,22 +353,21 @@ const applyOrderStatusesUpdate = async ({
     });
 
     if (paymentStatus === "confirmed" && !wasConfirmed && !sheetOrder.receiptEmailSentAt) {
-      const approvedAt = Date.now();
       const paymentId =
         fallbackOrder.paymentMethod === "mercadopago"
           ? verifiedPaymentId
-          : verifiedPaymentId || `manual-${approvedAt}`;
-      if (paymentId) {
-        await sendReceiptOnce({
+          : verifiedPaymentId || `manual-${approvedAt!}`;
+      if (paymentId && approvedAt) {
+        await ensurePurchaseReceiptEventSafely({
           order: {
             ...resolvedFallbackOrder,
             paymentStatus: "confirmed",
             shippingStatus: resolvedShippingStatus,
+            approvedAt,
+            mpPaymentId: paymentId,
           },
           paymentId,
           approvedAt,
-          persistSentAt: (sentAt) =>
-            updateOrderRowInSalesSheet(orderId, { receiptEmailSentAt: sentAt }),
         });
       }
     }
@@ -413,7 +389,7 @@ const applyOrderStatusesUpdate = async ({
   }
 
   if (paymentStatus === "confirmed") {
-    const approvedAt = currentOrder.approvedAt ?? Date.now();
+    const approvedAt = wasConfirmed ? currentOrder.approvedAt ?? Date.now() : Date.now();
     let paymentId = currentOrder.mpPaymentId || `manual-${approvedAt}`;
     let mpStatus = currentOrder.mpStatus || "manual_confirmed";
 
@@ -450,11 +426,15 @@ const applyOrderStatusesUpdate = async ({
     }
 
     if (!wasConfirmed && !currentOrder.receiptEmailSentAt) {
-      await sendReceiptOnce({
-        order: currentOrder,
+      await ensurePurchaseReceiptEventSafely({
+        order: {
+          ...currentOrder,
+          paymentStatus: "confirmed",
+          approvedAt,
+          mpPaymentId: paymentId,
+        },
         paymentId,
         approvedAt,
-        persistSentAt: (sentAt) => updateOrder(orderId, { receiptEmailSentAt: sentAt }),
       });
     }
     return {

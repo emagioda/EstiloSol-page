@@ -22,7 +22,10 @@ const INVENTORY_TRANSACTION_HEADERS = ["order_id", "demand_fingerprint", "applie
 const INVENTORY_TRANSACTION_STATE_APPLIED = "APPLIED";
 const SHEET_ORDER_RECOVERY_SNAPSHOTS = "_order_recovery_snapshots";
 const SHEET_PAYMENT_RECOVERY_EVENTS = "_payment_recovery_events";
+const SHEET_EMAIL_OUTBOX_EVENTS = "_email_outbox_events";
 const RECOVERY_SCHEMA_VERSION = 1;
+const EMAIL_OUTBOX_SCHEMA_VERSION = 1;
+const EMAIL_OUTBOX_ROLLOUT_AT_PROPERTY = "EMAIL_OUTBOX_ROLLOUT_AT";
 const ORDER_RECOVERY_SNAPSHOT_HEADERS = [
   "external_reference",
   "checkout_attempt_id",
@@ -61,9 +64,34 @@ const PAYMENT_RECOVERY_EVENT_HEADERS = [
   "updated_at",
   "completed_at"
 ];
+const EMAIL_OUTBOX_EVENT_HEADERS = [
+  "event_key",
+  "external_reference",
+  "notification_type",
+  "schema_version",
+  "template_version",
+  "payload_hash",
+  "payload_json",
+  "idempotency_key",
+  "state",
+  "attempt_count",
+  "lease_owner",
+  "lease_expires_at",
+  "next_attempt_at",
+  "provider_first_attempt_at",
+  "last_attempt_at",
+  "last_error_code",
+  "provider_message_id",
+  "accepted_at",
+  "created_at",
+  "updated_at",
+  "completed_at"
+];
 const RECOVERY_SNAPSHOT_STATES = ["pending_payment", "payment_observed", "attention", "completed", "expired_unpaid"];
 const RECOVERY_EVENT_STATES = ["pending", "processing", "retryable", "attention", "completed"];
 const RECOVERY_FINANCIAL_STATUSES = ["approved", "refunded", "charged_back"];
+const EMAIL_OUTBOX_STATES = ["pending", "processing", "retryable", "accepted", "attention", "skipped"];
+const EMAIL_OUTBOX_MAX_ATTEMPTS = 5;
 const CACHE_PRODUCTS_KEY = "catalog:products:active:v4";
 const CACHE_PRODUCTS_TTL_SECONDS = 180;
 const ALLOWED_SHEETS = [SHEET_PRODUCTS, SHEET_SALES, SHEET_FULFILLMENT];
@@ -290,7 +318,16 @@ function getPostScope_(payload, action) {
     "mark_recovery_snapshot_checked",
     "mark_recovery_snapshot_completed",
     "mark_recovery_snapshot_expired_unpaid",
-    "list_recovery_attention"
+    "list_recovery_attention",
+    "upsert_email_outbox_event",
+    "get_email_outbox_event",
+    "claim_email_outbox_work",
+    "mark_email_outbox_accepted",
+    "mark_email_outbox_retryable",
+    "mark_email_outbox_attention",
+    "mark_email_outbox_skipped",
+    "list_email_outbox_attention",
+    "list_missing_receipt_candidates"
   ].indexOf(action) !== -1) return "admin";
 
   if (action === "decrement_stock" || action === "decrementstock") return "write";
@@ -1224,7 +1261,7 @@ function ensureRecoverySheet_(spreadsheet, sheetName, expectedHeaders) {
   return sheet;
 }
 
-function ensureRecoverySchema_() {
+function ensureRecoverySchema_(includeEmailOutbox) {
   const spreadsheet = getSpreadsheet_();
   const snapshotSheet = ensureRecoverySheet_(
     spreadsheet,
@@ -1236,7 +1273,42 @@ function ensureRecoverySchema_() {
     SHEET_PAYMENT_RECOVERY_EVENTS,
     PAYMENT_RECOVERY_EVENT_HEADERS
   );
-  return { snapshotSheet: snapshotSheet, eventSheet: eventSheet };
+  const schema = { snapshotSheet: snapshotSheet, eventSheet: eventSheet };
+  if (includeEmailOutbox === true) {
+    schema.emailOutboxSheet = ensureRecoverySheet_(
+      spreadsheet,
+      SHEET_EMAIL_OUTBOX_EVENTS,
+      EMAIL_OUTBOX_EVENT_HEADERS
+    );
+    const properties = PropertiesService.getScriptProperties();
+    let rolloutAt = String(properties.getProperty(EMAIL_OUTBOX_ROLLOUT_AT_PROPERTY) || "").trim();
+    if (!rolloutAt) {
+      rolloutAt = new Date().toISOString();
+      properties.setProperty(EMAIL_OUTBOX_ROLLOUT_AT_PROPERTY, rolloutAt);
+    }
+    if (isNaN(Date.parse(rolloutAt))) {
+      throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Email outbox rollout boundary is invalid");
+    }
+    schema.emailOutboxRolloutAt = new Date(Date.parse(rolloutAt)).toISOString();
+  }
+  return schema;
+}
+
+function getEmailOutboxSchema_() {
+  const spreadsheet = getSpreadsheet_();
+  const sheet = spreadsheet.getSheetByName(SHEET_EMAIL_OUTBOX_EVENTS);
+  if (!sheet) {
+    throw recoveryError_("EMAIL_OUTBOX_SCHEMA_NOT_READY", "Email outbox schema has not been bootstrapped");
+  }
+  assertRecoveryHeaders_(sheet, EMAIL_OUTBOX_EVENT_HEADERS);
+  if (typeof sheet.isSheetHidden === "function" && !sheet.isSheetHidden()) sheet.hideSheet();
+  const rolloutAt = String(
+    PropertiesService.getScriptProperties().getProperty(EMAIL_OUTBOX_ROLLOUT_AT_PROPERTY) || ""
+  ).trim();
+  if (!rolloutAt || isNaN(Date.parse(rolloutAt))) {
+    throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Email outbox rollout boundary is missing or invalid");
+  }
+  return { sheet: sheet, rolloutAt: new Date(Date.parse(rolloutAt)).toISOString() };
 }
 
 function assertExactObjectKeys_(input, headers, code) {
@@ -1718,6 +1790,395 @@ function handleListRecoveryAttention_(payload) {
   return { ok: true, result: "RECOVERY_ATTENTION_LISTED", items: items.slice(0, limit) };
 }
 
+function safeEmailErrorCode_(value) {
+  const code = String(value || "").trim();
+  if (!code) return "EMAIL_OUTBOX_TECHNICAL_FAILURE";
+  return /^[A-Z0-9_]{3,120}$/.test(code) ? code : "EMAIL_OUTBOX_TECHNICAL_FAILURE";
+}
+
+function readEmailOutboxRows_() {
+  const schema = getEmailOutboxSchema_();
+  return {
+    schema: schema,
+    rows: readRecoveryRows_(
+      schema.sheet,
+      EMAIL_OUTBOX_EVENT_HEADERS,
+      "event_key",
+      "EMAIL_OUTBOX_SCHEMA_INVALID"
+    )
+  };
+}
+
+function findEmailOutboxEvent_(eventKey) {
+  const data = readEmailOutboxRows_();
+  const key = String(eventKey || "").trim();
+  const rows = data.rows.filter(function(row) { return String(row.object.event_key) === key; });
+  if (rows.length > 1) throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Duplicate email event keys");
+  return { schema: data.schema, row: rows.length === 1 ? rows[0] : null };
+}
+
+function validateEmailOutboxEventInput_(input) {
+  assertExactObjectKeys_(input, EMAIL_OUTBOX_EVENT_HEADERS, "EMAIL_OUTBOX_SCHEMA_INVALID");
+  const eventKey = String(input.event_key || "").trim();
+  const externalReference = String(input.external_reference || "").trim();
+  const payloadHash = String(input.payload_hash || "").trim();
+  const payloadJson = String(input.payload_json || "");
+  const idempotencyKey = String(input.idempotency_key || "").trim();
+  if (
+    !/^purchase-receipt\/es-[a-z0-9-]{6,80}\/v1$/i.test(eventKey) ||
+    !/^es-[a-z0-9-]{6,80}$/i.test(externalReference) ||
+    eventKey !== "purchase-receipt/" + externalReference + "/v1" ||
+    idempotencyKey !== eventKey ||
+    idempotencyKey.length > 256
+  ) {
+    throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Invalid email event identity");
+  }
+  if (
+    String(input.notification_type) !== "purchase_receipt" ||
+    Number(input.schema_version) !== EMAIL_OUTBOX_SCHEMA_VERSION ||
+    Number(input.template_version) !== 1 ||
+    !/^[a-f0-9]{64}$/.test(payloadHash) ||
+    sha256Hex_(payloadJson) !== payloadHash
+  ) {
+    throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Invalid email event schema or hash");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(payloadJson);
+  } catch (error) {
+    throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Email payload JSON is malformed");
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    parsed.externalReference !== externalReference ||
+    Number(parsed.templateVersion) !== 1 ||
+    !Array.isArray(parsed.items) ||
+    parsed.currency !== "ARS"
+  ) {
+    throw recoveryError_("EMAIL_OUTBOX_EVENT_CONFLICT", "Email payload identity mismatch");
+  }
+  if (
+    String(input.state) !== "pending" ||
+    Number(input.attempt_count) !== 0 ||
+    String(input.lease_owner || "") ||
+    String(input.lease_expires_at || "") ||
+    String(input.next_attempt_at || "") ||
+    String(input.provider_first_attempt_at || "") ||
+    String(input.last_attempt_at || "") ||
+    String(input.provider_message_id || "") ||
+    String(input.accepted_at || "") ||
+    String(input.completed_at || "")
+  ) {
+    throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Invalid initial email event state");
+  }
+  assertRecoveryIsoDate_(input.created_at, "email created_at", false);
+  assertRecoveryIsoDate_(input.updated_at, "email updated_at", false);
+  return EMAIL_OUTBOX_EVENT_HEADERS.map(function(header) { return input[header]; });
+}
+
+function emailOutboxImmutableMatches_(existing, candidate) {
+  const immutableHeaders = [
+    "event_key",
+    "external_reference",
+    "notification_type",
+    "schema_version",
+    "template_version",
+    "payload_hash",
+    "idempotency_key"
+  ];
+  const coreMatches = immutableHeaders.every(function(header) {
+    return String(existing[header]) === String(candidate[header]);
+  });
+  if (!coreMatches) return false;
+  if (String(existing.payload_json || "")) {
+    return String(existing.payload_json) === String(candidate.payload_json);
+  }
+  return String(existing.state) === "accepted";
+}
+
+function handleUpsertEmailOutboxEvent_(payload) {
+  const rowValues = validateEmailOutboxEventInput_(payload.event);
+  const data = readEmailOutboxRows_();
+  const eventKey = String(payload.event.event_key);
+  const existing = data.rows.filter(function(row) { return String(row.object.event_key) === eventKey; });
+  if (existing.length > 1) throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Duplicate email events");
+  if (existing.length === 1) {
+    if (!emailOutboxImmutableMatches_(existing[0].object, payload.event)) {
+      if (["accepted", "skipped"].indexOf(String(existing[0].object.state)) === -1) {
+        const now = new Date().toISOString();
+        setRecoveryCell_(data.schema.sheet, existing[0].rowNumber, EMAIL_OUTBOX_EVENT_HEADERS, "state", "attention");
+        setRecoveryCell_(data.schema.sheet, existing[0].rowNumber, EMAIL_OUTBOX_EVENT_HEADERS, "last_error_code", "EMAIL_OUTBOX_EVENT_CONFLICT");
+        setRecoveryCell_(data.schema.sheet, existing[0].rowNumber, EMAIL_OUTBOX_EVENT_HEADERS, "updated_at", now);
+      }
+      console.info(JSON.stringify({ event: "email.outbox.conflict", orderId: payload.event.external_reference }));
+      throw recoveryError_("EMAIL_OUTBOX_EVENT_CONFLICT", "Email event already exists with different content");
+    }
+    console.info(JSON.stringify({ event: "email.outbox.replayed", orderId: existing[0].object.external_reference }));
+    return { ok: true, result: "EMAIL_EVENT_ALREADY_EXISTS", event: existing[0].object };
+  }
+  data.schema.sheet.appendRow(rowValues);
+  const stored = recoveryRowToObject_(EMAIL_OUTBOX_EVENT_HEADERS, rowValues);
+  console.info(JSON.stringify({ event: "email.outbox.created", orderId: stored.external_reference, state: stored.state }));
+  return { ok: true, result: "EMAIL_EVENT_STORED", event: stored };
+}
+
+function handleGetEmailOutboxEvent_(payload) {
+  const found = findEmailOutboxEvent_(payload.eventKey);
+  if (!found.row) return { ok: true, result: "EMAIL_EVENT_NOT_FOUND" };
+  return { ok: true, result: "EMAIL_EVENT_FOUND", event: found.row.object };
+}
+
+function handleClaimEmailOutboxWork_(payload) {
+  const data = readEmailOutboxRows_();
+  const leaseOwner = String(payload.leaseOwner || "").trim();
+  const claimedAt = assertRecoveryIsoDate_(payload.claimedAt, "email claimedAt", false);
+  const leaseExpiresAt = assertRecoveryIsoDate_(payload.leaseExpiresAt, "email leaseExpiresAt", false);
+  const claimedAtMs = Date.parse(claimedAt);
+  if (!/^[A-Za-z0-9._:-]{8,160}$/.test(leaseOwner) || Date.parse(leaseExpiresAt) <= claimedAtMs) {
+    throw recoveryError_("EMAIL_OUTBOX_LEASE_CONFLICT", "Invalid email work lease");
+  }
+  const requestedEventKey = String(payload.eventKey || "").trim();
+  const maxEvents = boundedRecoveryLimit_(payload.maxEvents, 20);
+  const responseReplays = [];
+  const eligible = [];
+  data.rows.forEach(function(row) {
+    if (requestedEventKey && String(row.object.event_key) !== requestedEventKey) return;
+    const state = String(row.object.state);
+    const currentOwner = String(row.object.lease_owner || "");
+    const currentExpiry = Date.parse(String(row.object.lease_expires_at || ""));
+    const nextAttemptAt = Date.parse(String(row.object.next_attempt_at || ""));
+    const attemptCount = Number(row.object.attempt_count || 0);
+    const expiredProcessing =
+      state === "processing" && (!isFinite(currentExpiry) || currentExpiry <= claimedAtMs);
+    if (attemptCount >= EMAIL_OUTBOX_MAX_ATTEMPTS && (state === "retryable" || expiredProcessing)) {
+      completeEmailOutboxState_(
+        { schema: data.schema, row: row },
+        "attention",
+        "EMAIL_OUTBOX_ATTEMPTS_EXHAUSTED",
+        claimedAt
+      );
+      return;
+    }
+    const responseReplay =
+      state === "processing" &&
+      currentOwner === leaseOwner &&
+      String(row.object.last_attempt_at || "") === claimedAt &&
+      currentExpiry > claimedAtMs;
+    const due = !isFinite(nextAttemptAt) || nextAttemptAt <= claimedAtMs;
+    const canClaim =
+      state === "pending" ||
+      (state === "retryable" && due) ||
+      expiredProcessing;
+    if (responseReplay) responseReplays.push(row);
+    else if (canClaim) eligible.push(row);
+  });
+  eligible.sort(function(left, right) {
+    const leftNext = Date.parse(String(left.object.next_attempt_at || left.object.created_at || ""));
+    const rightNext = Date.parse(String(right.object.next_attempt_at || right.object.created_at || ""));
+    return (isFinite(leftNext) ? leftNext : 0) - (isFinite(rightNext) ? rightNext : 0) || left.rowNumber - right.rowNumber;
+  });
+  const claimed = [];
+  responseReplays.concat(eligible).slice(0, maxEvents).forEach(function(row) {
+    const replay =
+      String(row.object.state) === "processing" &&
+      String(row.object.lease_owner || "") === leaseOwner &&
+      String(row.object.last_attempt_at || "") === claimedAt;
+    if (!replay) {
+      const attemptCount = Number(row.object.attempt_count || 0) + 1;
+      setRecoveryCell_(data.schema.sheet, row.rowNumber, EMAIL_OUTBOX_EVENT_HEADERS, "state", "processing");
+      setRecoveryCell_(data.schema.sheet, row.rowNumber, EMAIL_OUTBOX_EVENT_HEADERS, "attempt_count", attemptCount);
+      setRecoveryCell_(data.schema.sheet, row.rowNumber, EMAIL_OUTBOX_EVENT_HEADERS, "lease_owner", leaseOwner);
+      setRecoveryCell_(data.schema.sheet, row.rowNumber, EMAIL_OUTBOX_EVENT_HEADERS, "lease_expires_at", leaseExpiresAt);
+      setRecoveryCell_(data.schema.sheet, row.rowNumber, EMAIL_OUTBOX_EVENT_HEADERS, "next_attempt_at", "");
+      if (!String(row.object.provider_first_attempt_at || "")) {
+        setRecoveryCell_(data.schema.sheet, row.rowNumber, EMAIL_OUTBOX_EVENT_HEADERS, "provider_first_attempt_at", claimedAt);
+        row.object.provider_first_attempt_at = claimedAt;
+      }
+      setRecoveryCell_(data.schema.sheet, row.rowNumber, EMAIL_OUTBOX_EVENT_HEADERS, "last_attempt_at", claimedAt);
+      setRecoveryCell_(data.schema.sheet, row.rowNumber, EMAIL_OUTBOX_EVENT_HEADERS, "updated_at", claimedAt);
+      row.object.state = "processing";
+      row.object.attempt_count = attemptCount;
+      row.object.lease_owner = leaseOwner;
+      row.object.lease_expires_at = leaseExpiresAt;
+      row.object.next_attempt_at = "";
+      row.object.last_attempt_at = claimedAt;
+      row.object.updated_at = claimedAt;
+    }
+    claimed.push(row.object);
+  });
+  return { ok: true, result: "EMAIL_WORK_CLAIMED", events: claimed };
+}
+
+function assertEmailLeaseOwner_(found, leaseOwner) {
+  if (!found.row) throw recoveryError_("EMAIL_OUTBOX_EVENT_NOT_FOUND", "Email event not found");
+  if (String(found.row.object.state) !== "processing" || String(found.row.object.lease_owner || "") !== leaseOwner) {
+    throw recoveryError_("EMAIL_OUTBOX_LEASE_CONFLICT", "Email work lease owner mismatch");
+  }
+}
+
+function writeEmailOutboxRow_(found) {
+  found.schema.sheet
+    .getRange(found.row.rowNumber, 1, 1, EMAIL_OUTBOX_EVENT_HEADERS.length)
+    .setValues([EMAIL_OUTBOX_EVENT_HEADERS.map(function(header) { return found.row.object[header]; })]);
+}
+
+function completeEmailOutboxState_(found, targetState, errorCode, completedAt, nextAttemptAt) {
+  const now = new Date().toISOString();
+  found.row.object.state = targetState;
+  found.row.object.lease_owner = "";
+  found.row.object.lease_expires_at = "";
+  found.row.object.next_attempt_at = nextAttemptAt || "";
+  found.row.object.last_error_code = errorCode || "";
+  found.row.object.updated_at = now;
+  if (completedAt) found.row.object.completed_at = completedAt;
+  writeEmailOutboxRow_(found);
+}
+
+function handleMarkEmailOutboxAccepted_(payload) {
+  const found = findEmailOutboxEvent_(payload.eventKey);
+  const providerMessageId = String(payload.providerMessageId || "").trim();
+  const acceptedAt = assertRecoveryIsoDate_(payload.acceptedAt, "email acceptedAt", false);
+  if (!/^[A-Za-z0-9_-]{8,160}$/.test(providerMessageId)) {
+    throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Invalid provider message id");
+  }
+  if (found.row && String(found.row.object.state) === "accepted") {
+    if (String(found.row.object.provider_message_id) !== providerMessageId) {
+      throw recoveryError_("EMAIL_OUTBOX_EVENT_CONFLICT", "Accepted provider id is immutable");
+    }
+    return { ok: true, result: "EMAIL_EVENT_ACCEPTED", event: found.row.object };
+  }
+  assertEmailLeaseOwner_(found, String(payload.leaseOwner || "").trim());
+  const now = new Date().toISOString();
+  found.row.object.state = "accepted";
+  found.row.object.lease_owner = "";
+  found.row.object.lease_expires_at = "";
+  found.row.object.next_attempt_at = "";
+  found.row.object.last_error_code = "";
+  found.row.object.provider_message_id = providerMessageId;
+  found.row.object.accepted_at = acceptedAt;
+  found.row.object.completed_at = acceptedAt;
+  found.row.object.updated_at = now;
+  found.row.object.payload_json = "";
+  writeEmailOutboxRow_(found);
+  console.info(JSON.stringify({ event: "email.outbox.accepted", orderId: found.row.object.external_reference, providerMessageId: providerMessageId, attemptCount: found.row.object.attempt_count, state: "accepted" }));
+  return { ok: true, result: "EMAIL_EVENT_ACCEPTED", event: found.row.object };
+}
+
+function handleMarkEmailOutboxRetryable_(payload) {
+  const found = findEmailOutboxEvent_(payload.eventKey);
+  assertEmailLeaseOwner_(found, String(payload.leaseOwner || "").trim());
+  const nextAttemptAt = assertRecoveryIsoDate_(payload.nextAttemptAt, "email nextAttemptAt", false);
+  const errorCode = safeEmailErrorCode_(payload.errorCode);
+  completeEmailOutboxState_(found, "retryable", errorCode, "", nextAttemptAt);
+  return { ok: true, result: "EMAIL_EVENT_RETRYABLE", event: found.row.object };
+}
+
+function handleMarkEmailOutboxAttention_(payload) {
+  const found = findEmailOutboxEvent_(payload.eventKey);
+  if (found.row && String(found.row.object.state) === "accepted") {
+    throw recoveryError_("EMAIL_OUTBOX_LEASE_CONFLICT", "Accepted email event is terminal");
+  }
+  assertEmailLeaseOwner_(found, String(payload.leaseOwner || "").trim());
+  completeEmailOutboxState_(found, "attention", safeEmailErrorCode_(payload.errorCode), new Date().toISOString());
+  return { ok: true, result: "EMAIL_EVENT_ATTENTION", event: found.row.object };
+}
+
+function handleMarkEmailOutboxSkipped_(payload) {
+  const found = findEmailOutboxEvent_(payload.eventKey);
+  assertEmailLeaseOwner_(found, String(payload.leaseOwner || "").trim());
+  const errorCode = String(payload.errorCode || "");
+  if (errorCode !== "MISSING_CUSTOMER_EMAIL") {
+    throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Invalid email skip reason");
+  }
+  completeEmailOutboxState_(found, "skipped", errorCode, new Date().toISOString());
+  return { ok: true, result: "EMAIL_EVENT_SKIPPED", event: found.row.object };
+}
+
+function handleListEmailOutboxAttention_(payload) {
+  const data = readEmailOutboxRows_();
+  const limit = boundedRecoveryLimit_(payload.limit, 50);
+  const items = data.rows
+    .filter(function(row) { return ["retryable", "attention"].indexOf(String(row.object.state)) !== -1; })
+    .map(function(row) {
+      return {
+        external_reference: row.object.external_reference,
+        state: row.object.state,
+        attempt_count: Number(row.object.attempt_count || 0),
+        last_error_code: row.object.last_error_code,
+        updated_at: row.object.updated_at
+      };
+    })
+    .sort(function(left, right) { return Date.parse(String(right.updated_at || "")) - Date.parse(String(left.updated_at || "")); });
+  return { ok: true, result: "EMAIL_ATTENTION_LISTED", items: items.slice(0, limit) };
+}
+
+function firstSalesValue_(row, names) {
+  for (let i = 0; i < names.length; i++) {
+    const value = row[normalizeKey(names[i])];
+    if (value !== "" && value !== null && value !== undefined) return value;
+  }
+  return "";
+}
+
+function isConfirmedSalesPayment_(value) {
+  return ["confirmed", "confirmado", "approved", "aprobado", "paid", "pagado"].indexOf(normalizeKey(value)) !== -1;
+}
+
+function handleListMissingReceiptCandidates_(payload) {
+  const data = readEmailOutboxRows_();
+  const limit = boundedRecoveryLimit_(payload.limit, 20);
+  const rolloutAtMs = Date.parse(data.schema.rolloutAt);
+  const eventsByKey = {};
+  data.rows.forEach(function(row) { eventsByKey[String(row.object.event_key)] = row.object; });
+  const candidates = [];
+  const markerRepairs = [];
+  const seenOrders = {};
+  readSheetAsObjects(SHEET_SALES).forEach(function(row) {
+    const externalReference = String(firstSalesValue_(row, ORDER_ID_KEYS) || "").trim();
+    if (!externalReference) return;
+    if (seenOrders[externalReference]) {
+      throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Duplicate ventas order identity during email scan");
+    }
+    seenOrders[externalReference] = true;
+    const eventKey = "purchase-receipt/" + externalReference + "/v1";
+    const event = eventsByKey[eventKey];
+    const sentMarker = firstSalesValue_(row, ["receipt_email_sent_at", "email_enviado_en", "email_sent_at"]);
+    if (event && String(event.state) === "accepted" && !sentMarker && event.accepted_at) {
+      markerRepairs.push({ external_reference: externalReference, accepted_at: event.accepted_at });
+      return;
+    }
+    if (event || sentMarker || candidates.length >= limit) return;
+    const paymentStatus = firstSalesValue_(row, ["estado_de_pago", "payment_status", "estado_pago", "payment_state"]);
+    if (!isConfirmedSalesPayment_(paymentStatus)) return;
+    const approvedAtRaw = firstSalesValue_(row, ["approved_at", "fecha_pago"]);
+    const approvedAtMs = Date.parse(String(approvedAtRaw || ""));
+    if (!isFinite(approvedAtMs) || approvedAtMs < rolloutAtMs) return;
+    const itemsJson = String(firstSalesValue_(row, ["items_json"]) || "");
+    const total = Number(firstSalesValue_(row, ["total", "total_amount", "amount"]));
+    if (!itemsJson || !isFinite(total) || total < 0) return;
+    const paymentId = String(firstSalesValue_(row, ["mp_payment_id", "id_pago_mp", "mercadopago_payment_id"]) || ("manual-" + externalReference)).trim();
+    candidates.push({
+      external_reference: externalReference,
+      recipient_email: String(firstSalesValue_(row, ["customer_email", "email"]) || ""),
+      customer_name: String(firstSalesValue_(row, ["customer_name", "cliente", "nombre_cliente"]) || ""),
+      payment_id: paymentId,
+      approved_at: new Date(approvedAtMs).toISOString(),
+      items_json: itemsJson,
+      total: total,
+      currency: String(firstSalesValue_(row, ["currency"]) || "ARS").toUpperCase()
+    });
+  });
+  return {
+    ok: true,
+    result: "EMAIL_CANDIDATES_LISTED",
+    rollout_at: data.schema.rolloutAt,
+    candidates: candidates,
+    marker_repairs: markerRepairs.slice(0, limit)
+  };
+}
+
 function logInternalError_(context, err) {
   const detail = err && err.stack ? err.stack : String(err && err.message ? err.message : err);
   console.error(context + ": " + detail);
@@ -1816,8 +2277,8 @@ function doPost(e) {
     if (action === "decrement_stock" || action === "decrementstock") return jsonOutput(handleDecrementStock(payload));
     if (action === "append_order_and_decrement_stock" || action === "appendorderanddecrementstock") return jsonOutput(handleAppendOrderAndDecrementStock(payload));
     if (action === "ensure_recovery_schema") {
-      ensureRecoverySchema_();
-      return jsonOutput({ ok: true, result: "RECOVERY_SCHEMA_READY" });
+      const schema = ensureRecoverySchema_(true);
+      return jsonOutput({ ok: true, result: "RECOVERY_SCHEMA_READY", email_outbox_rollout_at: schema.emailOutboxRolloutAt });
     }
     if (action === "upsert_recovery_snapshot") return jsonOutput(handleUpsertRecoverySnapshot_(payload));
     if (action === "get_recovery_snapshot") return jsonOutput(handleGetRecoverySnapshot_(payload));
@@ -1833,6 +2294,15 @@ function doPost(e) {
     if (action === "mark_recovery_snapshot_completed") return jsonOutput(handleMarkRecoverySnapshot_(payload, "completed"));
     if (action === "mark_recovery_snapshot_expired_unpaid") return jsonOutput(handleMarkRecoverySnapshot_(payload, "expired_unpaid"));
     if (action === "list_recovery_attention") return jsonOutput(handleListRecoveryAttention_(payload));
+    if (action === "upsert_email_outbox_event") return jsonOutput(handleUpsertEmailOutboxEvent_(payload));
+    if (action === "get_email_outbox_event") return jsonOutput(handleGetEmailOutboxEvent_(payload));
+    if (action === "claim_email_outbox_work") return jsonOutput(handleClaimEmailOutboxWork_(payload));
+    if (action === "mark_email_outbox_accepted") return jsonOutput(handleMarkEmailOutboxAccepted_(payload));
+    if (action === "mark_email_outbox_retryable") return jsonOutput(handleMarkEmailOutboxRetryable_(payload));
+    if (action === "mark_email_outbox_attention") return jsonOutput(handleMarkEmailOutboxAttention_(payload));
+    if (action === "mark_email_outbox_skipped") return jsonOutput(handleMarkEmailOutboxSkipped_(payload));
+    if (action === "list_email_outbox_attention") return jsonOutput(handleListEmailOutboxAttention_(payload));
+    if (action === "list_missing_receipt_candidates") return jsonOutput(handleListMissingReceiptCandidates_(payload));
     throw new Error("Unsupported action");
   } catch (err) {
     logInternalError_("doPost", err);

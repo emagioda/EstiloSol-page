@@ -1,5 +1,6 @@
 import VentasTable from "@/app/admin/ventas/VentasTable";
 import {
+  getEmailOutboxAttentionForAdmin,
   getOrdersForAdminWithKvState,
   getRecoveryAttentionForAdmin,
 } from "@/src/server/orders/admin";
@@ -7,9 +8,10 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function AdminVentasPage() {
-  const [orders, recoveryAttention] = await Promise.all([
+  const [orders, recoveryAttention, emailAttention] = await Promise.all([
     getOrdersForAdminWithKvState(),
     getRecoveryAttentionForAdmin(),
+    getEmailOutboxAttentionForAdmin(),
   ]);
 
   return (
@@ -26,6 +28,23 @@ export default async function AdminVentasPage() {
                 {item.paymentId ? ` · pago ${item.paymentId}` : ""}
                 {item.financialStatus ? ` · ${item.financialStatus}` : ""}
                 {` · ${item.state}`}
+                {item.lastErrorCode ? ` · ${item.lastErrorCode}` : ""}
+              </li>
+            ))}
+          </ul>
+        </aside>
+      ) : null}
+      {emailAttention.length > 0 ? (
+        <aside className="mb-4 rounded-xl border border-amber-300/50 bg-amber-100 px-4 py-3 text-sm text-amber-950">
+          <p className="font-bold">
+            Emails de recibo: {emailAttention.length} evento(s) requieren seguimiento
+          </p>
+          <ul className="mt-2 space-y-1 text-xs">
+            {emailAttention.slice(0, 10).map((item, index) => (
+              <li key={`${item.externalReference}-${item.state}-${index}`}>
+                {item.externalReference}
+                {` · ${item.state}`}
+                {` · ${item.attemptCount} intento(s)`}
                 {item.lastErrorCode ? ` · ${item.lastErrorCode}` : ""}
               </li>
             ))}

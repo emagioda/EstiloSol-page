@@ -13,9 +13,25 @@ vi.mock("@/src/server/recovery/worker", () => ({
     durationMs: 25,
   })),
 }));
+vi.mock("@/src/server/emailOutbox/worker", () => ({
+  runEmailOutboxWorker: vi.fn(async () => ({
+    ok: true,
+    rolloutAt: "2026-08-15T00:00:00.000Z",
+    candidatesFound: 1,
+    eventsCreated: 1,
+    markerRepairs: 0,
+    claimed: 1,
+    accepted: 1,
+    retryable: 0,
+    attention: 0,
+    skipped: 0,
+    durationMs: 15,
+  })),
+}));
 
 import { GET } from "./route";
 import { runPaymentRecoveryWorker } from "@/src/server/recovery/worker";
+import { runEmailOutboxWorker } from "@/src/server/emailOutbox/worker";
 
 const request = (authorization?: string) => new NextRequest(
   "http://localhost:3000/api/internal/payment-recovery",
@@ -37,6 +53,7 @@ describe("AUD3-H06 protected payment recovery cron route", () => {
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ ok: false });
     expect(runPaymentRecoveryWorker).not.toHaveBeenCalled();
+    expect(runEmailOutboxWorker).not.toHaveBeenCalled();
   });
 
   it("fails closed when CRON_SECRET is not configured", async () => {
@@ -44,6 +61,7 @@ describe("AUD3-H06 protected payment recovery cron route", () => {
     const response = await GET(request("Bearer anything"));
     expect(response.status).toBe(401);
     expect(runPaymentRecoveryWorker).not.toHaveBeenCalled();
+    expect(runEmailOutboxWorker).not.toHaveBeenCalled();
   });
 
   it("returns operational counters only for the exact bearer secret", async () => {
@@ -51,21 +69,49 @@ describe("AUD3-H06 protected payment recovery cron route", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       ok: true,
-      claimed: 2,
-      completed: 1,
-      retryable: 1,
-      attention: 0,
-      snapshotsScanned: 1,
-      eventsCreated: 1,
-      durationMs: 25,
+      financial: {
+        ok: true,
+        claimed: 2,
+        completed: 1,
+        retryable: 1,
+        attention: 0,
+        snapshotsScanned: 1,
+        eventsCreated: 1,
+        durationMs: 25,
+      },
+      email: {
+        ok: true,
+        rolloutAt: "2026-08-15T00:00:00.000Z",
+        candidatesFound: 1,
+        eventsCreated: 1,
+        markerRepairs: 0,
+        claimed: 1,
+        accepted: 1,
+        retryable: 0,
+        attention: 0,
+        skipped: 0,
+        durationMs: 15,
+      },
     });
     expect(runPaymentRecoveryWorker).toHaveBeenCalledTimes(1);
+    expect(runEmailOutboxWorker).toHaveBeenCalledTimes(1);
   });
 
   it("returns a safe retryable 503 when the worker fails", async () => {
     vi.mocked(runPaymentRecoveryWorker).mockRejectedValueOnce(new Error("sensitive detail"));
     const response = await GET(request("Bearer cron-secret"));
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ ok: false });
+    expect(await response.json()).toMatchObject({ ok: false, financial: null });
+    expect(runEmailOutboxWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps financial convergence successful when the email worker fails", async () => {
+    vi.mocked(runEmailOutboxWorker).mockRejectedValueOnce(new Error("sensitive email detail"));
+    const response = await GET(request("Bearer cron-secret"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      email: { ok: false },
+    });
   });
 });

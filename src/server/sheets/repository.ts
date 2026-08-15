@@ -790,6 +790,7 @@ export async function updateOrderRowInSalesSheet(
     mpStatus: string;
     mpPaymentId: string;
     mpPreferenceId: string;
+    approvedAt: number | null;
     receiptEmailSentAt: number;
     stockDeductedAt: number | null;
     inventoryStatus: OrderInventoryStatus | null;
@@ -824,6 +825,11 @@ export async function updateOrderRowInSalesSheet(
   if (updates.mpStatus) payload.mp_status = updates.mpStatus;
   if (updates.mpPaymentId) payload.mp_payment_id = updates.mpPaymentId;
   if (updates.mpPreferenceId) payload.mp_preference_id = updates.mpPreferenceId;
+  if ("approvedAt" in updates) {
+    const approvedAt = toIsoString(updates.approvedAt ?? undefined);
+    payload.approved_at = approvedAt;
+    payload.fecha_pago = approvedAt;
+  }
   if (updates.receiptEmailSentAt) {
     payload.receipt_email_sent_at = toIsoString(updates.receiptEmailSentAt);
   }

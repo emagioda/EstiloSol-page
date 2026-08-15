@@ -31,7 +31,6 @@ export const WEBHOOK_DEDUPE_TTL_SECONDS = 7 * 24 * 3600;
 const orderKey = (externalReference: string) => `es:order:${externalReference}`;
 const orderWriteLockKey = (externalReference: string) => `es:order:write-lock:${externalReference}`;
 const salesSheetSyncKey = (externalReference: string) => `es:order:sales-sheet-sync:${externalReference}`;
-const receiptEmailSyncKey = (externalReference: string) => `es:order:receipt-email-sync:${externalReference}`;
 
 export const ORDER_WRITE_LOCK_TTL_SECONDS = 75;
 export const ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS = 20_000;
@@ -339,6 +338,7 @@ export async function ensureOrderDurableInSalesSheet(
     mpStatus: projected.mpStatus,
     mpPaymentId: projected.mpPaymentId,
     mpPreferenceId: projected.mpPreferenceId,
+    approvedAt: projected.approvedAt ?? null,
     inventoryStatus: projected.inventoryStatus ?? null,
     inventoryIssueCode: projected.inventoryIssueCode ?? null,
     inventoryIssueAt: projected.inventoryIssueAt ?? null,
@@ -447,6 +447,7 @@ export async function updateOrder(
           mpStatus: updated.mpStatus,
           mpPaymentId: updated.mpPaymentId,
           mpPreferenceId: updated.mpPreferenceId,
+          approvedAt: updated.approvedAt ?? null,
           receiptEmailSentAt: updated.receiptEmailSentAt,
           updatedAt: updated.updatedAt,
         };
@@ -773,18 +774,6 @@ export async function retryPaidOrderInventory(externalReference: string): Promis
   const inventoryResult = await attemptInventoryForPaidOrder(current);
   await reportInventoryAttempt(externalReference, inventoryResult, "admin_retry");
   return updateOrder(externalReference, inventoryResultToOrderPatch(inventoryResult));
-}
-
-export async function claimReceiptEmailDelivery(externalReference: string): Promise<boolean> {
-  return setJsonIfNotExists(
-    receiptEmailSyncKey(externalReference),
-    "sending",
-    WEBHOOK_DEDUPE_TTL_SECONDS
-  );
-}
-
-export async function releaseReceiptEmailDelivery(externalReference: string): Promise<void> {
-  await del(receiptEmailSyncKey(externalReference));
 }
 
 export async function markRejected(

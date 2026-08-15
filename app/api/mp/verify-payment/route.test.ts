@@ -14,7 +14,10 @@ vi.mock("@/src/server/sheets/repository", () => ({
 }));
 vi.mock("@/src/server/notifications/orderReceipt", () => ({
   formatDateTime24h: vi.fn(() => "01/01/2026 12:00"),
-  sendOrderReceiptEmail: vi.fn(async () => ({ sent: true })),
+}));
+vi.mock("@/src/server/emailOutbox/service", () => ({
+  ensurePurchaseReceiptEventSafely: vi.fn(async () => null),
+  nudgePurchaseReceiptEvent: vi.fn(),
 }));
 vi.mock("@/src/server/http/afterResponse", () => ({
   scheduleAfterResponse: vi.fn((task: () => Promise<void> | void) => {
@@ -32,7 +35,7 @@ vi.mock("@/src/server/recovery/repository", () => ({
 }));
 
 import { GET, POST } from "@/app/api/mp/verify-payment/route";
-import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
+import { ensurePurchaseReceiptEventSafely } from "@/src/server/emailOutbox/service";
 import { createOrder, getOrder } from "@/src/server/orders/store";
 import { appendOrderToSalesSheet, decrementProductsStockInSheet } from "@/src/server/sheets/repository";
 import { prepareProtectedPaymentDurability } from "@/src/server/recovery/service";
@@ -48,7 +51,6 @@ describe("verify-payment confirmation flow", () => {
     process.env.MP_ACCESS_TOKEN = "test-token";
     vi.mocked(appendOrderToSalesSheet).mockResolvedValue(undefined);
     vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: false, updated: [] });
-    vi.mocked(sendOrderReceiptEmail).mockResolvedValue({ sent: true });
     vi.mocked(prepareProtectedPaymentDurability)
       .mockReset()
       .mockResolvedValue({ protected: false });
@@ -619,7 +621,7 @@ describe("verify-payment confirmation flow", () => {
     }));
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
     expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
-    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it("AUD3-H06-REF-02 does not let snapshot A authorize direct protected payment B", async () => {
@@ -650,7 +652,7 @@ describe("verify-payment confirmation flow", () => {
     }));
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
     expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
-    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it("AUD3-H06-REF-05 keeps the normal direct payment flow for matching references", async () => {
@@ -672,7 +674,7 @@ describe("verify-payment confirmation flow", () => {
       payment: expect.objectContaining({ external_reference: ref }),
     }));
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 
   it("AUD3-PAY-03 verify reconciles every search result instead of choosing one", async () => {
@@ -865,7 +867,7 @@ describe("verify-payment confirmation flow", () => {
     expect(stored).toMatchObject({ status: "created", paymentStatus: "pending" });
     expect(stored?.mpPaymentLedger).toBeUndefined();
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
-    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it("AUD3-PAY-PAGE-06 does not persist a cancelled prefix before invalid paging", async () => {
@@ -889,7 +891,7 @@ describe("verify-payment confirmation flow", () => {
     expect(stored).toMatchObject({ status: "created", paymentStatus: "pending" });
     expect(stored?.mpPaymentLedger).toBeUndefined();
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
-    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it("AUD3-PAY-PAGE-07 stages a rejected direct payment until broad search completes", async () => {
@@ -908,7 +910,7 @@ describe("verify-payment confirmation flow", () => {
     expect(stored).toMatchObject({ status: "created", paymentStatus: "pending" });
     expect(stored?.mpPaymentLedger).toBeUndefined();
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
-    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it("AUD3-PAY-PAGE-08 preserves a direct approval when the broad search later fails", async () => {
@@ -934,7 +936,7 @@ describe("verify-payment confirmation flow", () => {
     expect(stored).toMatchObject({ paymentStatus: "confirmed", mpPaymentId: directPaymentId });
     expect(stored?.mpPaymentLedger).not.toHaveProperty("B");
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 
   it("AUD3-PAY-PAGE-09 reconciles rejected and approved observations after full search", async () => {
@@ -961,7 +963,7 @@ describe("verify-payment confirmation flow", () => {
     expect(stored?.paymentStatus).toBe("confirmed");
     expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["B", "A"]);
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 
   it("AUD3-PAY-PAGE-10 persists terminal evidence after a complete rejected-only search", async () => {
@@ -985,7 +987,7 @@ describe("verify-payment confirmation flow", () => {
     expect(stored).toMatchObject({ status: "cancelled", paymentStatus: "cancelled" });
     expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["B", "C"]);
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
-    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it("AUD3-PAY-15 MP timeout does not degrade a legacy confirmed order", async () => {

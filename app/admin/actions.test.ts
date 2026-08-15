@@ -8,14 +8,14 @@ vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 vi.mock("next-auth", () => ({ getServerSession: vi.fn(async () => ({ user: { email: "admin@test.com" } })) }));
 vi.mock("@/src/server/auth/adminEmail", () => ({ isAdminEmail: vi.fn(() => true) }));
 vi.mock("@/src/server/catalog/getProducts", () => ({ invalidateProductsCatalogCache: vi.fn() }));
-vi.mock("@/src/server/notifications/orderReceipt", () => ({ sendOrderReceiptEmail: vi.fn() }));
+vi.mock("@/src/server/emailOutbox/service", () => ({
+  ensurePurchaseReceiptEventSafely: vi.fn(async () => null),
+}));
 
 vi.mock("@/src/server/orders/store", () => ({
-  claimReceiptEmailDelivery: vi.fn(),
   getOrder: vi.fn(),
   markApproved: vi.fn(),
   markTerminalPaymentState: vi.fn(),
-  releaseReceiptEmailDelivery: vi.fn(),
   retryPaidOrderInventory: vi.fn(),
   updateOrder: vi.fn(),
 }));
@@ -37,13 +37,12 @@ import {
   saveOrderStatusesBatchAction,
 } from "@/app/admin/actions";
 import {
-  claimReceiptEmailDelivery,
   getOrder,
   markApproved,
   retryPaidOrderInventory,
   updateOrder,
 } from "@/src/server/orders/store";
-import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
+import { ensurePurchaseReceiptEventSafely } from "@/src/server/emailOutbox/service";
 import {
   decrementProductsStockInSheet,
   getOrderRowById,
@@ -102,8 +101,6 @@ const save = (orderId: string, paymentStatus = "confirmed", shippingStatus = "in
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.MP_ACCESS_TOKEN = "test-token";
-  vi.mocked(claimReceiptEmailDelivery).mockResolvedValue(true);
-  vi.mocked(sendOrderReceiptEmail).mockResolvedValue({ sent: true });
   vi.mocked(updateOrder).mockImplementation(async (_id, patch) => baseOrder(patch));
   vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
   vi.mocked(decrementProductsStockInSheet).mockResolvedValue({
@@ -155,7 +152,7 @@ describe("PR 2 cash and transfer confirmation", () => {
       inventoryStatus: "conflict",
     }));
     await save("order-admin-1");
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -243,6 +240,7 @@ describe("PR 2 shipping guard", () => {
     const result = await save("order-admin-1", "confirmed", "completed");
     expect(result.results[0]).toMatchObject({ shippingStatus: "completed", shippingBlocked: false });
     expect(updateOrder).toHaveBeenCalledWith("order-admin-1", { shippingStatus: "completed" });
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it.each([
