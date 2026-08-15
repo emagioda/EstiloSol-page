@@ -16,6 +16,8 @@ import {
 } from "./salesSheetSync";
 import { getOrder } from "./store";
 import type { Order } from "./types";
+import { listRecoveryAttention } from "@/src/server/recovery/repository";
+import type { RecoveryAttentionItem } from "@/src/server/recovery/types";
 
 type SheetStateUpdates = Parameters<typeof updateOrderRowInSalesSheet>[1];
 
@@ -45,6 +47,58 @@ const toTimestamp = (value: string): number | undefined => {
 
 const timestampsMatch = (sheetValue: string, kvValue: number | undefined): boolean =>
   toTimestamp(sheetValue) === kvValue;
+
+const isStrongFinancialStatus = (status: AdminOrderSheetRow["paymentStatus"]) =>
+  status === "confirmed" || status === "refunded" || status === "charged_back";
+
+const hasLedgerEvidenceFor = (
+  order: Order,
+  status: Extract<AdminOrderSheetRow["paymentStatus"], "refunded" | "charged_back">,
+) => Object.values(order.mpPaymentLedger ?? {}).some((entry) => entry.status === status);
+
+const resolveMonotonicPaymentStatus = (
+  sheetStatus: AdminOrderSheetRow["paymentStatus"],
+  kvOrder: Order,
+): {
+  status: AdminOrderSheetRow["paymentStatus"];
+  mayWriteKvProjection: boolean;
+  attentionCode?: string;
+} => {
+  const kvStatus = kvOrder.paymentStatus;
+  if (sheetStatus === kvStatus) {
+    return { status: sheetStatus, mayWriteKvProjection: true };
+  }
+  if (isStrongFinancialStatus(sheetStatus) && !isStrongFinancialStatus(kvStatus)) {
+    return { status: sheetStatus, mayWriteKvProjection: false };
+  }
+  if (!isStrongFinancialStatus(sheetStatus) && kvStatus === "confirmed") {
+    return { status: kvStatus, mayWriteKvProjection: true };
+  }
+  if (kvStatus === "refunded" || kvStatus === "charged_back") {
+    if (!hasLedgerEvidenceFor(kvOrder, kvStatus)) {
+      return {
+        status: sheetStatus,
+        mayWriteKvProjection: false,
+        attentionCode: "FINANCIAL_LEDGER_EVIDENCE_MISSING",
+      };
+    }
+    if (
+      (sheetStatus === "refunded" || sheetStatus === "charged_back") &&
+      sheetStatus !== kvStatus
+    ) {
+      return {
+        status: sheetStatus,
+        mayWriteKvProjection: false,
+        attentionCode: "FINANCIAL_EVIDENCE_CONFLICT",
+      };
+    }
+    return { status: kvStatus, mayWriteKvProjection: true };
+  }
+  if (isStrongFinancialStatus(sheetStatus)) {
+    return { status: sheetStatus, mayWriteKvProjection: false };
+  }
+  return { status: kvStatus, mayWriteKvProjection: true };
+};
 
 export const resolveAdminOrderState = (
   sheetOrder: AdminOrderSheetRow,
@@ -86,15 +140,19 @@ export const resolveAdminOrderState = (
       ? toIsoString(effectiveStockDeductedAt)
       : ""
     : sheetOrder.stockDeductedAt;
+  const financial = resolveMonotonicPaymentStatus(sheetOrder.paymentStatus, kvOrder);
 
   const order: AdminOrderSheetRow = {
     ...sheetOrder,
-    paymentStatus: kvOrder.paymentStatus,
+    paymentStatus: financial.status,
     shippingStatus: kvOrder.shippingStatus,
     inventoryStatus,
     inventoryIssueCode,
     inventoryIssueAt,
     stockDeductedAt,
+    ...(financial.attentionCode
+      ? { financialAttentionCode: financial.attentionCode }
+      : {}),
   };
 
   const paymentChanged = sheetOrder.paymentStatus !== order.paymentStatus;
@@ -111,11 +169,14 @@ export const resolveAdminOrderState = (
   }
 
   const syncUpdates: SheetStateUpdates = {
-    paymentStatus: kvOrder.paymentStatus,
     shippingStatus: kvOrder.shippingStatus,
-    orderStatus: kvOrder.status,
     updatedAt,
   };
+
+  if (financial.mayWriteKvProjection) {
+    syncUpdates.paymentStatus = financial.status;
+    syncUpdates.orderStatus = kvOrder.status;
+  }
 
   if (kvCanSupplyInventoryState) {
     syncUpdates.inventoryStatus = inventoryStatus ?? null;
@@ -313,4 +374,15 @@ export async function getOrdersForAdminWithKvState(
   return [...sheetResults, ...missingResults.filter((order) => order !== null)].sort(
     (left, right) => right.createdAtMs - left.createdAtMs
   );
+}
+
+export async function getRecoveryAttentionForAdmin(): Promise<RecoveryAttentionItem[]> {
+  try {
+    return await listRecoveryAttention(100);
+  } catch (error) {
+    logEvent("warn", "recovery.admin_attention_unavailable", {
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    return [];
+  }
 }

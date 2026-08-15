@@ -20,6 +20,7 @@ import {
   isOrderReadyForShipping,
   orderRequiresAttention,
 } from "./inventoryUi";
+import FinancialAttentionFlag from "./FinancialAttentionFlag";
 
 type VentasTableProps = {
   orders: AdminOrderSheetRow[];
@@ -1057,6 +1058,7 @@ export default function VentasTable({ orders }: VentasTableProps) {
                     ⚠ Registro en ventas pendiente
                   </span>
                 ) : null}
+                <FinancialAttentionFlag code={order.financialAttentionCode} />
               </div>
 
               <div className="mt-3 grid grid-cols-2 gap-2">
@@ -1160,40 +1162,43 @@ export default function VentasTable({ orders }: VentasTableProps) {
                     {formatMoney(order.total)}
                   </td>
                   <td className="px-3 py-3.5 text-center">
-                    <div className="relative mx-auto w-[124px]">
-                      <select
-                        form={formId}
-                        name="paymentStatus"
-                        value={draft.paymentStatus}
-                        onChange={(event) =>
-                          updateDraft(order.orderId, {
-                            paymentStatus: event.target.value as PaymentStatus,
-                          })
-                        }
-                        className={`block h-8 w-full appearance-none rounded-lg border px-2 pr-6 text-xs font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.32)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] ${paymentBadgeClass[draft.paymentStatus]}`}
-                      >
-                        <option value="pending" className={paymentOptionClass.pending}>
-                          Pendiente
-                        </option>
-                        <option value="confirmed" className={paymentOptionClass.confirmed}>
-                          Confirmado
-                        </option>
-                        <option value="cancelled" className={paymentOptionClass.cancelled}>
-                          Cancelado
-                        </option>
-                        <option value="refunded" className={paymentOptionClass.refunded}>
-                          Reintegrado
-                        </option>
-                        <option value="charged_back" className={paymentOptionClass.charged_back}>
-                          Contracargo
-                        </option>
-                      </select>
-                      <span
-                        className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[11px] text-[var(--brand-violet-950)]/70"
-                        aria-hidden
-                      >
-                        ▾
-                      </span>
+                    <div className="flex flex-col items-center gap-1.5">
+                      <div className="relative mx-auto w-[124px]">
+                        <select
+                          form={formId}
+                          name="paymentStatus"
+                          value={draft.paymentStatus}
+                          onChange={(event) =>
+                            updateDraft(order.orderId, {
+                              paymentStatus: event.target.value as PaymentStatus,
+                            })
+                          }
+                          className={`block h-8 w-full appearance-none rounded-lg border px-2 pr-6 text-xs font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.32)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] ${paymentBadgeClass[draft.paymentStatus]}`}
+                        >
+                          <option value="pending" className={paymentOptionClass.pending}>
+                            Pendiente
+                          </option>
+                          <option value="confirmed" className={paymentOptionClass.confirmed}>
+                            Confirmado
+                          </option>
+                          <option value="cancelled" className={paymentOptionClass.cancelled}>
+                            Cancelado
+                          </option>
+                          <option value="refunded" className={paymentOptionClass.refunded}>
+                            Reintegrado
+                          </option>
+                          <option value="charged_back" className={paymentOptionClass.charged_back}>
+                            Contracargo
+                          </option>
+                        </select>
+                        <span
+                          className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[11px] text-[var(--brand-violet-950)]/70"
+                          aria-hidden
+                        >
+                          ▾
+                        </span>
+                      </div>
+                      <FinancialAttentionFlag code={order.financialAttentionCode} />
                     </div>
                   </td>
                   <td className="px-3 py-3.5 text-center">
@@ -1567,6 +1572,10 @@ export default function VentasTable({ orders }: VentasTableProps) {
             </div>
 
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 md:px-5">
+              <FinancialAttentionFlag
+                code={selectedOrder.financialAttentionCode}
+                className="w-full px-3 py-2"
+              />
               {selectedOrder.salesSheetSyncPending ? (
                 <section className="rounded-2xl border border-amber-300/55 bg-amber-950/35 p-3 text-amber-50 md:p-4">
                   <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-amber-200">

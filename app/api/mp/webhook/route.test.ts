@@ -8,6 +8,11 @@ vi.mock("@/src/server/sheets/repository", () => ({
   updateOrderRowInSalesSheet: vi.fn(),
 }));
 vi.mock("@/src/server/notifications/orderReceipt", () => ({ sendOrderReceiptEmail: vi.fn() }));
+vi.mock("@/src/server/recovery/service", () => ({
+  prepareProtectedPaymentDurability: vi.fn(async () => ({ protected: false })),
+  completeRecoveryEvent: vi.fn(async () => undefined),
+  markRecoveryEventRetryableSafely: vi.fn(async () => undefined),
+}));
 
 import { POST } from "@/app/api/mp/webhook/route";
 import { createOrder, getOrder } from "@/src/server/orders/store";
@@ -18,6 +23,7 @@ import {
 } from "@/src/server/sheets/repository";
 import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
 import { InventoryOperationError } from "@/src/server/inventory/errors";
+import { prepareProtectedPaymentDurability } from "@/src/server/recovery/service";
 
 const signedWebhookRequest = (
   paymentId: string,
@@ -54,6 +60,7 @@ describe("mercado pago webhook route", () => {
     vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
     vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: false, updated: [] });
     vi.mocked(sendOrderReceiptEmail).mockResolvedValue({ sent: true });
+    vi.mocked(prepareProtectedPaymentDurability).mockResolvedValue({ protected: false });
   });
 
   it("rejects invalid signatures before calling Mercado Pago", async () => {
@@ -239,5 +246,38 @@ describe("mercado pago webhook route", () => {
     await POST(signedWebhookRequest(paymentId));
     await POST(signedWebhookRequest(paymentId));
     await vi.waitFor(() => expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1));
+  });
+
+  it("AUD3-H06-REF-04 keeps a signed matching webhook on the normal durable path", async () => {
+    const { ref, paymentId } = await setupApprovedWebhook();
+
+    const response = await POST(signedWebhookRequest(paymentId));
+
+    expect(response.status).toBe(200);
+    expect(prepareProtectedPaymentDurability).toHaveBeenCalledWith(expect.objectContaining({
+      expectedExternalReference: ref,
+      source: "webhook",
+      payment: expect.objectContaining({ external_reference: ref }),
+    }));
+    expect(await getOrder(ref)).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+    });
+  });
+
+  it("AUD3-H06-EVT-02 returns 503 and does no inventory/KV effect when inbox durability fails", async () => {
+    const { ref, paymentId } = await setupApprovedWebhook();
+    vi.mocked(prepareProtectedPaymentDurability).mockRejectedValueOnce(
+      new Error("recovery inbox unavailable"),
+    );
+
+    const response = await POST(signedWebhookRequest(paymentId));
+
+    expect(response.status).toBe(503);
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(await getOrder(ref)).toMatchObject({
+      paymentStatus: "pending",
+      inventoryStatus: "pending",
+    });
   });
 });

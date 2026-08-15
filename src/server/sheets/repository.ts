@@ -105,6 +105,7 @@ export type AdminOrderSheetRow = {
   notes: string;
   receiptEmailSentAt: string;
   salesSheetSyncPending?: boolean;
+  financialAttentionCode?: string;
   raw: SheetRow;
 };
 

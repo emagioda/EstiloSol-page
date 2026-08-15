@@ -15,6 +15,7 @@ export type MpSearchPayment = {
   transaction_amount?: number;
   currency_id?: string;
   status_detail?: string;
+  date_last_updated?: string;
 };
 
 export type MpSearchResponse = {
@@ -33,6 +34,7 @@ export type MpPaymentResponse = {
   transaction_amount?: number;
   currency_id?: string;
   status_detail?: string;
+  date_last_updated?: string;
 };
 
 export const CANCELLED_PAYMENT_STATUSES = new Set(["cancelled", "canceled"]);

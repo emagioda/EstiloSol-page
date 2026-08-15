@@ -117,7 +117,6 @@ export async function POST(request: NextRequest) {
   const externalReference = String(paymentResult.data.external_reference ?? "");
   if (!externalReference) {
     await trackBusinessEvent("payment.webhook.no_external_reference", { paymentId: requestedPaymentId });
-    return NextResponse.json({ received: true }, { status: 200 });
   }
 
   try {
@@ -150,6 +149,12 @@ export async function POST(request: NextRequest) {
           });
         }
       }
+    } else if (reconciliation.outcome === "recovery_attention") {
+      await trackBusinessEvent("payment.webhook.order_not_found", {
+        externalReference,
+        paymentId: reconciliation.paymentId,
+        recoveryDurable: true,
+      });
     } else if (reconciliation.outcome === "order_not_found") {
       await trackBusinessEvent("payment.webhook.order_not_found", { externalReference });
     }

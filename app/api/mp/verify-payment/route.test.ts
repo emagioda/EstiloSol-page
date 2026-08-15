@@ -21,11 +21,24 @@ vi.mock("@/src/server/http/afterResponse", () => ({
     scheduledTasks.push(task);
   }),
 }));
+vi.mock("@/src/server/recovery/service", () => ({
+  prepareProtectedPaymentDurability: vi.fn(async () => ({ protected: false })),
+  completeRecoveryEvent: vi.fn(async () => undefined),
+  markRecoveryEventRetryableSafely: vi.fn(async () => undefined),
+}));
+vi.mock("@/src/server/recovery/repository", () => ({
+  getRecoverySnapshot: vi.fn(async () => null),
+  markRecoveryEventState: vi.fn(async () => undefined),
+}));
 
 import { GET, POST } from "@/app/api/mp/verify-payment/route";
 import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
 import { createOrder, getOrder } from "@/src/server/orders/store";
 import { appendOrderToSalesSheet, decrementProductsStockInSheet } from "@/src/server/sheets/repository";
+import { prepareProtectedPaymentDurability } from "@/src/server/recovery/service";
+import { getRecoverySnapshot } from "@/src/server/recovery/repository";
+import { buildRecoveryOrderSnapshot, serializeRecoverySnapshot } from "@/src/server/recovery/snapshot";
+import type { Order } from "@/src/server/orders/types";
 
 describe("verify-payment confirmation flow", () => {
   beforeEach(() => {
@@ -36,6 +49,10 @@ describe("verify-payment confirmation flow", () => {
     vi.mocked(appendOrderToSalesSheet).mockResolvedValue(undefined);
     vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: false, updated: [] });
     vi.mocked(sendOrderReceiptEmail).mockResolvedValue({ sent: true });
+    vi.mocked(prepareProtectedPaymentDurability)
+      .mockReset()
+      .mockResolvedValue({ protected: false });
+    vi.mocked(getRecoverySnapshot).mockReset().mockResolvedValue(null);
   });
 
   const flushScheduledTasks = async () => {
@@ -536,6 +553,127 @@ describe("verify-payment confirmation flow", () => {
       status,
       headers: { "Content-Type": "application/json" },
     });
+
+  const recoverySnapshotFor = (externalReference: string) => {
+    const now = Date.now();
+    const order: Order = {
+      externalReference,
+      status: "preference_created",
+      paymentStatus: "pending",
+      shippingStatus: "in_process",
+      inventoryStatus: "pending",
+      paymentMethod: "mercadopago",
+      deliveryMethod: "pickup",
+      items: [{ productId: "p1", title: "Producto", unitPrice: 1000, qty: 1, currency: "ARS" }],
+      total: 1000,
+      currency: "ARS",
+      createdAt: now - 60_000,
+      updatedAt: now - 60_000,
+    };
+    const snapshot = buildRecoveryOrderSnapshot({
+      order,
+      checkoutAttemptId: `attempt-${externalReference}`,
+      preferenceValidFrom: now - 60_000,
+      preferenceExpiresAt: now + 48 * 60 * 60 * 1000,
+    });
+    const serialized = serializeRecoverySnapshot(snapshot);
+    return {
+      externalReference,
+      checkoutAttemptId: snapshot.checkoutAttemptId,
+      schemaVersion: 1 as const,
+      snapshotHash: serialized.snapshotHash,
+      snapshotJson: serialized.snapshotJson,
+      createdAt: new Date(snapshot.createdAt).toISOString(),
+      preferenceValidFrom: new Date(snapshot.preferenceValidFrom).toISOString(),
+      preferenceExpiresAt: new Date(snapshot.preferenceExpiresAt).toISOString(),
+      recoveryState: "pending_payment" as const,
+      updatedAt: new Date(now).toISOString(),
+    };
+  };
+
+  it("AUD3-H06-REF-01 rejects POST order A plus direct protected payment B with zero mutation", async () => {
+    const refA = await createPr2Order("expected-reference-a");
+    const refB = await createPr2Order("other-reference-b");
+    const beforeA = await getOrder(refA);
+    const beforeB = await getOrder(refB);
+    const paymentIdB = "61001";
+    vi.mocked(prepareProtectedPaymentDurability).mockResolvedValueOnce({
+      protected: true,
+      outcome: "reference_mismatch",
+    });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(mpPayment(refB, paymentIdB, "approved")))
+      .mockResolvedValueOnce(jsonResponse({ results: [] }));
+
+    const response = await postVerify(refA, paymentIdB);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(await getOrder(refA)).toEqual(beforeA);
+    expect(await getOrder(refB)).toEqual(beforeB);
+    expect(JSON.stringify(body)).not.toContain(refB);
+    expect(prepareProtectedPaymentDurability).toHaveBeenCalledWith(expect.objectContaining({
+      expectedExternalReference: refA,
+      source: "verify_payment_id",
+      payment: expect.objectContaining({ external_reference: refB }),
+    }));
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
+    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H06-REF-02 does not let snapshot A authorize direct protected payment B", async () => {
+    const refA = `es-${Date.now()}-snapshot-expected-a`;
+    const refB = await createPr2Order("snapshot-other-reference-b");
+    const beforeB = await getOrder(refB);
+    const paymentIdB = "61003";
+    vi.mocked(getRecoverySnapshot).mockResolvedValueOnce(recoverySnapshotFor(refA));
+    vi.mocked(prepareProtectedPaymentDurability).mockResolvedValueOnce({
+      protected: true,
+      outcome: "reference_mismatch",
+    });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(mpPayment(refB, paymentIdB, "approved")))
+      .mockResolvedValueOnce(jsonResponse({ results: [] }));
+
+    const response = await postVerify(refA, paymentIdB);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(await getOrder(refA)).toBeNull();
+    expect(await getOrder(refB)).toEqual(beforeB);
+    expect(JSON.stringify(body)).not.toContain(refB);
+    expect(prepareProtectedPaymentDurability).toHaveBeenCalledWith(expect.objectContaining({
+      expectedExternalReference: refA,
+      source: "verify_payment_id",
+      payment: expect.objectContaining({ external_reference: refB }),
+    }));
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
+    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H06-REF-05 keeps the normal direct payment flow for matching references", async () => {
+    const ref = await createPr2Order("matching-direct-reference");
+    const paymentId = "61002";
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(mpPayment(ref, paymentId, "approved")))
+      .mockResolvedValueOnce(jsonResponse({ results: [] }));
+
+    const response = await postVerify(ref, paymentId);
+    await flushScheduledTasks();
+    const stored = await getOrder(ref);
+
+    expect(response.status).toBe(200);
+    expect(stored).toMatchObject({ paymentStatus: "confirmed", mpPaymentId: paymentId });
+    expect(prepareProtectedPaymentDurability).toHaveBeenCalledWith(expect.objectContaining({
+      expectedExternalReference: ref,
+      source: "verify_payment_id",
+      payment: expect.objectContaining({ external_reference: ref }),
+    }));
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+  });
 
   it("AUD3-PAY-03 verify reconciles every search result instead of choosing one", async () => {
     const ref = await createPr2Order("multiple-payments");
