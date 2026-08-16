@@ -109,8 +109,34 @@ describe("PR 2 order store inventory state", () => {
     const order = makeOrder();
     await createOrder(order);
     const updated = await approve(order);
-    expect(updated).toMatchObject({ paymentStatus: "confirmed", inventoryStatus: "deducted" });
+    expect(updated).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      receiptOutboxVersion: 1,
+    });
     expect(updated?.stockDeductedAt).toEqual(expect.any(Number));
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      order.externalReference,
+      expect.objectContaining({ receiptOutboxVersion: 1 }),
+    );
+  });
+
+  it("does not enroll an already-confirmed legacy order during later approval processing", async () => {
+    const order = makeOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "pending",
+    });
+    await createOrder(order);
+    const updated = await markApproved(order.externalReference, {
+      paymentId: "legacy-payment",
+      mpStatus: "approved",
+    });
+    expect(updated?.receiptOutboxVersion).toBeUndefined();
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      order.externalReference,
+      expect.not.objectContaining({ receiptOutboxVersion: 1 }),
+    );
   });
 
   it("PR2-STORE-03 insufficient stock keeps payment confirmed and records conflict", async () => {

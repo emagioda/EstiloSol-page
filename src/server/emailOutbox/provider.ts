@@ -87,7 +87,7 @@ export const sendPurchaseReceiptToResend = async (input: {
       accepted: false,
       disposition: "retryable",
       errorCode: "RESEND_CONCURRENT_IDEMPOTENT_REQUEST",
-      outcomeUnknown: false,
+      outcomeUnknown: true,
     };
   }
   if (response.status === 429) {

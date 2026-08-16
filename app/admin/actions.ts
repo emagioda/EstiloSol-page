@@ -341,6 +341,7 @@ const applyOrderStatusesUpdate = async ({
       ...(verifiedMpStatus ? { mpStatus: verifiedMpStatus } : {}),
       ...(verifiedPaymentId ? { mpPaymentId: verifiedPaymentId } : {}),
       ...(approvedAt ? { approvedAt } : {}),
+      ...(approvedAt ? { receiptOutboxVersion: 1 as const } : {}),
       ...(inventoryAttempt
         ? {
             inventoryStatus: inventoryPatch.inventoryStatus ?? null,

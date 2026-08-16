@@ -47,6 +47,12 @@ export type PurchaseReceiptPayloadV1 = {
   total: number;
   currency: "ARS";
   fromEmail: string;
+  brandName: string;
+  supportEmail: string;
+  supportWhatsappLabel: string;
+  logoUrl: string;
+  logoAlt: string;
+  orderDetailUrl: string;
   templateVersion: typeof PURCHASE_RECEIPT_TEMPLATE_VERSION;
 };
 export type EmailOutboxEvent = {

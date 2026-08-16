@@ -283,6 +283,23 @@ describe("PR 2 Sheets fallback", () => {
     vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder());
     const result = await save("sheet-order-1");
     expect(result.results[0]).toMatchObject({ inventoryStatus: "deducted" });
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({ receiptOutboxVersion: 1 }),
+    );
+    expect(vi.mocked(updateOrderRowInSalesSheet).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(ensurePurchaseReceiptEventSafely).mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not enroll an already-confirmed legacy Sheets order on Admin resave", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({ paymentStatus: "confirmed" }));
+    await save("sheet-order-1");
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.not.objectContaining({ receiptOutboxVersion: 1 }),
+    );
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it("PR2-FALLBACK-02 Mercado Pago fallback verifies payment before stock", async () => {

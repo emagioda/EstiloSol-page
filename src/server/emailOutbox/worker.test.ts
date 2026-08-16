@@ -71,15 +71,21 @@ describe("AUD3-H06-E autonomous receipt discovery worker", () => {
       projectMarker,
     })).resolves.toEqual({
       ok: true,
-      rolloutAt: "2026-08-15T00:00:00.000Z",
-      candidatesFound: 1,
-      eventsCreated: 1,
-      markerRepairs: 1,
-      claimed: 4,
-      accepted: 1,
-      retryable: 1,
-      attention: 1,
-      skipped: 1,
+      existingWork: {
+        ok: true,
+        claimed: 4,
+        accepted: 1,
+        retryable: 1,
+        attention: 1,
+        skipped: 1,
+      },
+      discovery: {
+        ok: true,
+        rolloutAt: "2026-08-15T00:00:00.000Z",
+        candidatesFound: 1,
+        eventsCreated: 1,
+        markerRepairs: 1,
+      },
       durationMs: 0,
     });
     expect(discover).toHaveBeenCalledWith(MAX_MISSING_RECEIPT_CANDIDATES_PER_RUN);
@@ -106,7 +112,11 @@ describe("AUD3-H06-E autonomous receipt discovery worker", () => {
       processClaimed: vi.fn(),
       projectMarker: vi.fn(),
     });
-    expect(result).toMatchObject({ ok: true, candidatesFound: 1, eventsCreated: 0, claimed: 0 });
+    expect(result).toMatchObject({
+      ok: true,
+      existingWork: { ok: true, claimed: 0 },
+      discovery: { ok: true, candidatesFound: 1, eventsCreated: 0 },
+    });
     expect(upsert).not.toHaveBeenCalled();
   });
 
@@ -128,7 +138,174 @@ describe("AUD3-H06-E autonomous receipt discovery worker", () => {
       processClaimed,
       projectMarker: vi.fn(),
     });
-    expect(result).toMatchObject({ claimed: 2, accepted: 1, retryable: 1 });
+    expect(result).toMatchObject({
+      existingWork: { ok: true, claimed: 2, accepted: 1, retryable: 1 },
+      discovery: { ok: true },
+    });
     expect(processClaimed).toHaveBeenCalledTimes(2);
+  });
+
+  it("AUD3-H06E-WORKER-04 processes existing work when discovery throws", async () => {
+    const claim = vi.fn(async () => [event("es-worker-existing-000001")]);
+    const processClaimed = vi.fn(async () => "accepted" as const);
+    const discover = vi.fn(async () => {
+      throw new Error("ventas unavailable with sensitive detail");
+    });
+    const result = await runEmailOutboxWorker({
+      now: () => now,
+      owner: () => "email-worker-one",
+      claim,
+      processClaimed,
+      discover,
+      upsert: vi.fn(),
+      projectMarker: vi.fn(),
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      existingWork: { ok: true, claimed: 1, accepted: 1 },
+      discovery: { ok: false, errorCode: "EMAIL_OUTBOX_DISCOVERY_FAILED" },
+    });
+    expect(processClaimed).toHaveBeenCalledTimes(1);
+    expect(claim.mock.invocationCallOrder[0]).toBeLessThan(discover.mock.invocationCallOrder[0]);
+  });
+
+  it("AUD3-H06E-WORKER-05 accepts existing work despite duplicate ventas discovery failure", async () => {
+    const processClaimed = vi.fn(async () => "accepted" as const);
+    const result = await runEmailOutboxWorker({
+      now: () => now,
+      owner: () => "email-worker-one",
+      claim: vi.fn(async () => [event("es-worker-existing-duplicate-000001")]),
+      processClaimed,
+      discover: vi.fn(async () => {
+        throw new Error("duplicate ventas identity for customer@example.test");
+      }),
+      upsert: vi.fn(),
+      projectMarker: vi.fn(),
+    });
+    expect(result.existingWork).toMatchObject({ ok: true, accepted: 1 });
+    expect(result.discovery).toEqual({
+      ok: false,
+      candidatesFound: 0,
+      eventsCreated: 0,
+      markerRepairs: 0,
+      errorCode: "EMAIL_OUTBOX_DISCOVERY_FAILED",
+    });
+    expect(JSON.stringify(result)).not.toContain("customer@example.test");
+  });
+
+  it("AUD3-H06E-WORKER-06 still performs discovery when the existing-event phase fails", async () => {
+    const discover = vi.fn(async () => ({
+      rolloutAt: "2026-08-15T00:00:00.000Z",
+      candidates: [candidate("es-worker-recovery-000001")],
+      markerRepairs: [],
+    }));
+    const upsert = vi.fn(async () => ({
+      outcome: "stored" as const,
+      event: event("es-worker-recovery-000001"),
+    }));
+    const result = await runEmailOutboxWorker({
+      now: () => now,
+      owner: () => "email-worker-one",
+      claim: vi.fn(async () => {
+        throw new Error("outbox read failed");
+      }),
+      processClaimed: vi.fn(),
+      discover,
+      upsert,
+      projectMarker: vi.fn(),
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      existingWork: { ok: false, errorCode: "EMAIL_OUTBOX_EXISTING_WORK_FAILED" },
+      discovery: { ok: true, candidatesFound: 1, eventsCreated: 1 },
+    });
+    expect(discover).toHaveBeenCalledTimes(1);
+    expect(upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-H06E-ROLLOUT-03 recovers a marked order after the initial outbox upsert failed", async () => {
+    const recovered = event("es-worker-marked-000001");
+    const claim = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([recovered]);
+    const discover = vi.fn()
+      .mockResolvedValueOnce({
+        rolloutAt: "2026-08-15T00:00:00.000Z",
+        candidates: [candidate("es-worker-marked-000001")],
+        markerRepairs: [],
+      })
+      .mockResolvedValueOnce({
+        rolloutAt: "2026-08-15T00:00:00.000Z",
+        candidates: [],
+        markerRepairs: [],
+      });
+    const upsert = vi.fn(async () => ({ outcome: "stored" as const, event: recovered }));
+    const processClaimed = vi.fn(async () => "accepted" as const);
+
+    const creationRun = await runEmailOutboxWorker({
+      now: () => now,
+      owner: () => "email-worker-one",
+      claim,
+      processClaimed,
+      discover,
+      upsert,
+      projectMarker: vi.fn(),
+    });
+    const processingRun = await runEmailOutboxWorker({
+      now: () => now,
+      owner: () => "email-worker-two",
+      claim,
+      processClaimed,
+      discover,
+      upsert,
+      projectMarker: vi.fn(),
+    });
+
+    expect(creationRun).toMatchObject({
+      existingWork: { claimed: 0 },
+      discovery: { candidatesFound: 1, eventsCreated: 1 },
+    });
+    expect(processingRun).toMatchObject({
+      existingWork: { claimed: 1, accepted: 1 },
+      discovery: { candidatesFound: 0 },
+    });
+    expect(processClaimed).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-H06E-WORKER-07 reports bounded safe state when both phases fail", async () => {
+    const result = await runEmailOutboxWorker({
+      now: () => now,
+      owner: () => "email-worker-one",
+      claim: vi.fn(async () => {
+        throw new Error("raw outbox token secret-one");
+      }),
+      processClaimed: vi.fn(),
+      discover: vi.fn(async () => {
+        throw new Error("customer@example.test secret-two");
+      }),
+      upsert: vi.fn(),
+      projectMarker: vi.fn(),
+    });
+    expect(result).toEqual({
+      ok: false,
+      existingWork: {
+        ok: false,
+        claimed: 0,
+        accepted: 0,
+        retryable: 0,
+        attention: 0,
+        skipped: 0,
+        errorCode: "EMAIL_OUTBOX_EXISTING_WORK_FAILED",
+      },
+      discovery: {
+        ok: false,
+        candidatesFound: 0,
+        eventsCreated: 0,
+        markerRepairs: 0,
+        errorCode: "EMAIL_OUTBOX_DISCOVERY_FAILED",
+      },
+      durationMs: 0,
+    });
+    expect(JSON.stringify(result)).not.toMatch(/secret|customer@/);
   });
 });

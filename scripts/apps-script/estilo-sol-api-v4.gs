@@ -26,6 +26,8 @@ const SHEET_EMAIL_OUTBOX_EVENTS = "_email_outbox_events";
 const RECOVERY_SCHEMA_VERSION = 1;
 const EMAIL_OUTBOX_SCHEMA_VERSION = 1;
 const EMAIL_OUTBOX_ROLLOUT_AT_PROPERTY = "EMAIL_OUTBOX_ROLLOUT_AT";
+const EMAIL_OUTBOX_VENTAS_ELIGIBILITY_HEADER = "receipt_outbox_version";
+const EMAIL_OUTBOX_PROVIDER_IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const ORDER_RECOVERY_SNAPSHOT_HEADERS = [
   "external_reference",
   "checkout_attempt_id",
@@ -1261,6 +1263,50 @@ function ensureRecoverySheet_(spreadsheet, sheetName, expectedHeaders) {
   return sheet;
 }
 
+function emailOutboxEligibilityColumns_(headers) {
+  const supported = [
+    EMAIL_OUTBOX_VENTAS_ELIGIBILITY_HEADER,
+    "receipt_email_outbox_version",
+    "email_outbox_version"
+  ].map(function(header) { return compactKey(header); });
+  return headers.map(function(header, index) {
+    return { header: String(header || "").trim(), index: index };
+  }).filter(function(entry) {
+    return supported.indexOf(compactKey(entry.header)) !== -1;
+  });
+}
+
+function assertEmailOutboxEligibilityColumn_(sheet) {
+  const matches = emailOutboxEligibilityColumns_(getHeaders(sheet));
+  if (
+    matches.length !== 1 ||
+    matches[0].header !== EMAIL_OUTBOX_VENTAS_ELIGIBILITY_HEADER
+  ) {
+    throw recoveryError_(
+      "EMAIL_OUTBOX_SCHEMA_INVALID",
+      "Ventas email outbox eligibility column is missing or ambiguous"
+    );
+  }
+  return matches[0].index;
+}
+
+function ensureEmailOutboxEligibilityColumn_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName(SHEET_SALES);
+  if (!sheet) {
+    throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Ventas sheet is missing");
+  }
+  const headers = getHeaders(sheet);
+  const matches = emailOutboxEligibilityColumns_(headers);
+  if (matches.length > 1 || (matches.length === 1 && matches[0].header !== EMAIL_OUTBOX_VENTAS_ELIGIBILITY_HEADER)) {
+    throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Ventas email outbox eligibility column is ambiguous");
+  }
+  if (matches.length === 0) {
+    sheet.getRange(1, headers.length + 1).setValue(EMAIL_OUTBOX_VENTAS_ELIGIBILITY_HEADER);
+  }
+  assertEmailOutboxEligibilityColumn_(sheet);
+  return sheet;
+}
+
 function ensureRecoverySchema_(includeEmailOutbox) {
   const spreadsheet = getSpreadsheet_();
   const snapshotSheet = ensureRecoverySheet_(
@@ -1280,6 +1326,7 @@ function ensureRecoverySchema_(includeEmailOutbox) {
       SHEET_EMAIL_OUTBOX_EVENTS,
       EMAIL_OUTBOX_EVENT_HEADERS
     );
+    schema.salesSheet = ensureEmailOutboxEligibilityColumn_(spreadsheet);
     const properties = PropertiesService.getScriptProperties();
     let rolloutAt = String(properties.getProperty(EMAIL_OUTBOX_ROLLOUT_AT_PROPERTY) || "").trim();
     if (!rolloutAt) {
@@ -1302,6 +1349,9 @@ function getEmailOutboxSchema_() {
   }
   assertRecoveryHeaders_(sheet, EMAIL_OUTBOX_EVENT_HEADERS);
   if (typeof sheet.isSheetHidden === "function" && !sheet.isSheetHidden()) sheet.hideSheet();
+  const salesSheet = spreadsheet.getSheetByName(SHEET_SALES);
+  if (!salesSheet) throw recoveryError_("EMAIL_OUTBOX_SCHEMA_INVALID", "Ventas sheet is missing");
+  assertEmailOutboxEligibilityColumn_(salesSheet);
   const rolloutAt = String(
     PropertiesService.getScriptProperties().getProperty(EMAIL_OUTBOX_ROLLOUT_AT_PROPERTY) || ""
   ).trim();
@@ -1952,6 +2002,20 @@ function handleClaimEmailOutboxWork_(payload) {
     const attemptCount = Number(row.object.attempt_count || 0);
     const expiredProcessing =
       state === "processing" && (!isFinite(currentExpiry) || currentExpiry <= claimedAtMs);
+    const providerFirstAttemptAt = Date.parse(String(row.object.provider_first_attempt_at || ""));
+    if (
+      expiredProcessing &&
+      isFinite(providerFirstAttemptAt) &&
+      claimedAtMs - providerFirstAttemptAt >= EMAIL_OUTBOX_PROVIDER_IDEMPOTENCY_WINDOW_MS
+    ) {
+      completeEmailOutboxState_(
+        { schema: data.schema, row: row },
+        "attention",
+        "RESEND_OUTCOME_UNKNOWN",
+        claimedAt
+      );
+      return;
+    }
     if (attemptCount >= EMAIL_OUTBOX_MAX_ATTEMPTS && (state === "retryable" || expiredProcessing)) {
       completeEmailOutboxState_(
         { schema: data.schema, row: row },
@@ -2129,7 +2193,6 @@ function isConfirmedSalesPayment_(value) {
 function handleListMissingReceiptCandidates_(payload) {
   const data = readEmailOutboxRows_();
   const limit = boundedRecoveryLimit_(payload.limit, 20);
-  const rolloutAtMs = Date.parse(data.schema.rolloutAt);
   const eventsByKey = {};
   data.rows.forEach(function(row) { eventsByKey[String(row.object.event_key)] = row.object; });
   const candidates = [];
@@ -2150,11 +2213,13 @@ function handleListMissingReceiptCandidates_(payload) {
       return;
     }
     if (event || sentMarker || candidates.length >= limit) return;
+    const eligibilityVersion = firstSalesValue_(row, [EMAIL_OUTBOX_VENTAS_ELIGIBILITY_HEADER]);
+    if (String(eligibilityVersion || "").trim() !== "1") return;
     const paymentStatus = firstSalesValue_(row, ["estado_de_pago", "payment_status", "estado_pago", "payment_state"]);
     if (!isConfirmedSalesPayment_(paymentStatus)) return;
     const approvedAtRaw = firstSalesValue_(row, ["approved_at", "fecha_pago"]);
     const approvedAtMs = Date.parse(String(approvedAtRaw || ""));
-    if (!isFinite(approvedAtMs) || approvedAtMs < rolloutAtMs) return;
+    if (!isFinite(approvedAtMs)) return;
     const itemsJson = String(firstSalesValue_(row, ["items_json"]) || "");
     const total = Number(firstSalesValue_(row, ["total", "total_amount", "amount"]));
     if (!itemsJson || !isFinite(total) || total < 0) return;

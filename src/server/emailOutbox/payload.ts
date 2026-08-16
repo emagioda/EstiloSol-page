@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
+import brandConfig from "@/src/config/brand";
 import { env } from "@/src/config/env";
 import type { Order } from "@/src/server/orders/types";
 import {
@@ -34,6 +35,24 @@ export const buildPurchaseReceiptEventKey = (externalReference: string): string 
   return key;
 };
 
+const receiptBrandFields = (externalReference: string) => {
+  const appBaseUrl = env.getOptionalServer("APP_BASE_URL")?.replace(/\/$/, "") ?? "";
+  return {
+    brandName: brandConfig.brandName,
+    supportEmail: brandConfig.contactInfo.email,
+    supportWhatsappLabel:
+      brandConfig.contactInfo.socialNetworks.find((network) => network.icon === "whatsapp")?.label ?? "",
+    logoUrl:
+      appBaseUrl && brandConfig.logo.isAvailable
+        ? `${appBaseUrl}${brandConfig.logo.src}`
+        : "",
+    logoAlt: brandConfig.logo.alt || brandConfig.brandName,
+    orderDetailUrl: appBaseUrl
+      ? `${appBaseUrl}/tienda/success?ref=${encodeURIComponent(externalReference)}`
+      : "",
+  };
+};
+
 export const buildPurchaseReceiptPayload = (input: {
   order: Order;
   paymentId: string;
@@ -54,6 +73,7 @@ export const buildPurchaseReceiptPayload = (input: {
   currency: input.order.currency,
   fromEmail:
     env.getOptionalServer("CONTACT_FROM_EMAIL") || "Estilo Sol <onboarding@resend.dev>",
+  ...receiptBrandFields(input.order.externalReference),
   templateVersion: PURCHASE_RECEIPT_TEMPLATE_VERSION,
 });
 
@@ -91,6 +111,7 @@ export const buildPurchaseReceiptPayloadFromCandidate = (
     currency: candidate.currency,
     fromEmail:
       env.getOptionalServer("CONTACT_FROM_EMAIL") || "Estilo Sol <onboarding@resend.dev>",
+    ...receiptBrandFields(candidate.externalReference),
     templateVersion: PURCHASE_RECEIPT_TEMPLATE_VERSION,
   };
 };
@@ -139,6 +160,15 @@ export const parsePurchaseReceiptPayload = (
     payload.currency !== "ARS" ||
     typeof payload.fromEmail !== "string" ||
     !payload.fromEmail ||
+    typeof payload.brandName !== "string" ||
+    !payload.brandName ||
+    typeof payload.supportEmail !== "string" ||
+    !payload.supportEmail ||
+    typeof payload.supportWhatsappLabel !== "string" ||
+    typeof payload.logoUrl !== "string" ||
+    typeof payload.logoAlt !== "string" ||
+    !payload.logoAlt ||
+    typeof payload.orderDetailUrl !== "string" ||
     payload.templateVersion !== PURCHASE_RECEIPT_TEMPLATE_VERSION
   ) {
     throw new Error("EMAIL_OUTBOX_EVENT_CONFLICT");
@@ -188,18 +218,35 @@ export const renderPurchaseReceiptV1 = (
   const itemsText = payload.items
     .map((item) => `- ${item.qty} x ${item.title} (${formatMoney(item.unitPrice)} c/u)`)
     .join("\n");
-  const itemRows = payload.items
-    .map(
-      (item) => `<tr><td style="padding:10px 12px;border-bottom:1px solid #ece1f5">${escapeHtml(
-        item.title,
-      )}</td><td style="padding:10px 12px;border-bottom:1px solid #ece1f5;text-align:center">${
-        item.qty
-      }</td><td style="padding:10px 12px;border-bottom:1px solid #ece1f5;text-align:right">${escapeHtml(
-        formatMoney(item.unitPrice * item.qty),
-      )}</td></tr>`,
-    )
-    .join("");
-  const subject = `Comprobante de compra Estilo Sol - ${payload.externalReference}`;
+  const itemRows = payload.items.map((item) => {
+    const qtyText = String(item.qty);
+    const unitPriceText = formatMoney(item.unitPrice);
+    const lineTotalText = formatMoney(item.unitPrice * item.qty);
+    return `
+        <tr>
+          <td style="padding: 10px 12px; border-bottom: 1px solid #ece1f5; color: #2f1f45; font-size: 14px;">
+            ${escapeHtml(item.title)}
+          </td>
+          <td style="padding: 10px 12px; border-bottom: 1px solid #ece1f5; color: #5f4a78; font-size: 13px; text-align: center;">
+            ${escapeHtml(qtyText)}
+          </td>
+          <td style="padding: 10px 12px; border-bottom: 1px solid #ece1f5; color: #5f4a78; font-size: 13px; text-align: right;">
+            ${escapeHtml(unitPriceText)}
+          </td>
+          <td style="padding: 10px 12px; border-bottom: 1px solid #ece1f5; color: #2f1f45; font-size: 13px; font-weight: 600; text-align: right;">
+            ${escapeHtml(lineTotalText)}
+          </td>
+        </tr>
+      `;
+  }).join("");
+  const logoOrBrandHtml = payload.logoUrl
+    ? `<img src="${escapeHtml(payload.logoUrl)}" alt="${escapeHtml(
+        payload.logoAlt,
+      )}" width="124" style="display: block; border: 0; max-width: 124px;" />`
+    : `<span style="display: inline-block; color: #f8e3b0; font-size: 28px; font-weight: 700; letter-spacing: 0.4px;">${escapeHtml(
+        payload.brandName,
+      )}</span>`;
+  const subject = `Comprobante de compra ${payload.brandName} - ${payload.externalReference}`;
   const text = [
     `Hola ${customerName},`,
     "",
@@ -211,20 +258,72 @@ export const renderPurchaseReceiptV1 = (
     `Total: ${formatMoney(payload.total)}`,
     "",
     "Resumen del pedido:",
-    itemsText,
+    itemsText || "- Sin items",
     "",
     "Conserva este email como comprobante de compra.",
   ].join("\n");
-  const html = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff8eb;padding:24px 0;font-family:Arial,sans-serif;color:#2f1f45"><tr><td align="center"><table role="presentation" width="620" cellpadding="0" cellspacing="0" style="width:620px;max-width:620px;background:#ffffff;border:1px solid #e5d6ef;border-radius:16px;overflow:hidden"><tr><td style="background:#603d82;padding:26px 30px;color:#fff8eb"><div style="font-size:27px;font-weight:700;color:#f1c65a">Estilo Sol</div><p style="margin:8px 0 0;font-size:13px">Comprobante de compra</p></td></tr><tr><td style="padding:26px 30px"><p style="margin:0 0 8px;font-size:17px;font-weight:700">Hola ${escapeHtml(
-    customerName,
-  )}, tu pago fue confirmado.</p><p style="margin:0 0 20px;color:#6c5a84">Gracias por elegir Estilo Sol. Conserva este email como comprobante.</p><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fbf8ff;border:1px solid #ece1f5;border-radius:12px"><tr><td style="padding:10px 12px"><b>Referencia</b><br>${escapeHtml(
-    payload.externalReference,
-  )}</td><td style="padding:10px 12px"><b>ID de pago</b><br>${escapeHtml(
-    payload.paymentId,
-  )}</td></tr><tr><td style="padding:10px 12px"><b>Fecha</b><br>${escapeHtml(
-    formatDateTime(payload.approvedAt),
-  )}</td><td style="padding:10px 12px"><b>Total</b><br>${escapeHtml(
-    formatMoney(payload.total),
-  )}</td></tr></table><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:20px;border-collapse:collapse"><thead><tr><th align="left" style="padding:10px 12px;background:#f3ecf8">Producto</th><th style="padding:10px 12px;background:#f3ecf8">Cant.</th><th align="right" style="padding:10px 12px;background:#f3ecf8">Subtotal</th></tr></thead><tbody>${itemRows}</tbody></table></td></tr></table></td></tr></table>`;
+  const html = `
+    <div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: transparent;">
+      Pago confirmado en ${escapeHtml(payload.brandName)}. Referencia ${escapeHtml(payload.externalReference)}.
+    </div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background: #f8f1ff; padding: 20px 0; font-family: Arial, sans-serif;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="620" cellpadding="0" cellspacing="0" style="width: 620px; max-width: 620px; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e0d5f0;">
+            <tr>
+              <td style="background: linear-gradient(135deg, #6b4fa5 0%, #b8a3d8 100%); padding: 28px 30px 24px;">
+                ${logoOrBrandHtml}
+                <p style="margin: 14px 0 0; color: #f8f1ff; font-size: 13px; letter-spacing: 0.4px;">Comprobante de compra</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 26px 30px 12px;">
+                <p style="margin: 0 0 10px; color: #2f1f45; font-size: 16px; font-weight: 700;">
+                  Hola ${escapeHtml(customerName)}, tu pago fue confirmado.
+                </p>
+                <p style="margin: 0; color: #6c5a84; font-size: 14px; line-height: 1.55;">
+                  Gracias por elegir ${escapeHtml(payload.brandName)}. Te compartimos el comprobante y el resumen de tu compra.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 12px 30px 0;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background: #fbf8ff; border: 1px solid #e0d5f0; border-radius: 12px;">
+                  <tr><td style="padding: 14px 16px; color: #5f4a78; font-size: 12px; width: 42%;">Referencia</td><td style="padding: 14px 16px; color: #2f1f45; font-size: 13px; font-weight: 700;">${escapeHtml(payload.externalReference)}</td></tr>
+                  <tr><td style="padding: 14px 16px; color: #5f4a78; font-size: 12px; border-top: 1px solid #e0d5f0;">ID de pago</td><td style="padding: 14px 16px; color: #2f1f45; font-size: 13px; border-top: 1px solid #e0d5f0;">${escapeHtml(payload.paymentId)}</td></tr>
+                  <tr><td style="padding: 14px 16px; color: #5f4a78; font-size: 12px; border-top: 1px solid #e0d5f0;">Fecha</td><td style="padding: 14px 16px; color: #2f1f45; font-size: 13px; border-top: 1px solid #e0d5f0;">${escapeHtml(formatDateTime(payload.approvedAt))}</td></tr>
+                  <tr><td style="padding: 14px 16px; color: #5f4a78; font-size: 12px; border-top: 1px solid #e0d5f0;">Total</td><td style="padding: 14px 16px; color: #6b4fa5; font-size: 18px; font-weight: 800; border-top: 1px solid #e0d5f0;">${escapeHtml(formatMoney(payload.total))}</td></tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 20px 30px 8px;">
+                <p style="margin: 0 0 10px; color: #6b4fa5; font-size: 14px; font-weight: 700;">Resumen del pedido</p>
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border: 1px solid #ece1f5; border-radius: 10px; overflow: hidden;">
+                  <tr style="background: #fbf8ff;">
+                    <th align="left" style="padding: 10px 12px; color: #5f4a78; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;">Producto</th>
+                    <th align="center" style="padding: 10px 12px; color: #5f4a78; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;">Cant.</th>
+                    <th align="right" style="padding: 10px 12px; color: #5f4a78; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;">Unitario</th>
+                    <th align="right" style="padding: 10px 12px; color: #5f4a78; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;">Subtotal</th>
+                  </tr>
+                  ${itemRows || '<tr><td colspan="4" style="padding: 12px; color: #6c5a84; font-size: 13px;">Sin items</td></tr>'}
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 18px 30px 28px;">
+                ${payload.orderDetailUrl ? `<a href="${escapeHtml(payload.orderDetailUrl)}" style="display: inline-block; background: #d6a64b; color: #24172f; text-decoration: none; font-weight: 700; font-size: 13px; padding: 11px 16px; border-radius: 10px;">Ver detalle en la tienda</a>` : ""}
+                <p style="margin: 14px 0 0; color: #6c5a84; font-size: 12px; line-height: 1.5;">
+                  Soporte: <strong>${escapeHtml(payload.supportEmail)}</strong>
+                  ${payload.supportWhatsappLabel ? `<br />WhatsApp: <strong>${escapeHtml(payload.supportWhatsappLabel)}</strong>` : ""}
+                </p>
+                <p style="margin: 10px 0 0; color: #8a7aa1; font-size: 11px;">Conserva este email como comprobante de compra.</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  `;
   return { from: payload.fromEmail, to: [payload.recipientEmail], subject, text, html };
 };

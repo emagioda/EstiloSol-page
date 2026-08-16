@@ -20,6 +20,12 @@ const payload = (recipientEmail = "customer@example.test"): PurchaseReceiptPaylo
   total: 1000,
   currency: "ARS",
   fromEmail: "Estilo Sol <ventas@example.test>",
+  brandName: "Estilo Sol",
+  supportEmail: "estilosol.ms@gmail.com",
+  supportWhatsappLabel: "+54 9 341 688-8926",
+  logoUrl: "",
+  logoAlt: "Logo Estilo Sol",
+  orderDetailUrl: "https://estilosol.example.test/tienda/success?ref=es-email-process-000001",
   templateVersion: 1,
 });
 
@@ -213,6 +219,102 @@ describe("AUD3-H06-E durable receipt processor", () => {
     const deps = dependencies(event);
     await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("accepted");
     expect(deps.send).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: event.eventKey }));
+  });
+
+  it("AUD3-H06E-CRASH-06 reclaims blank-error ambiguous processing inside 24h with the same request", async () => {
+    const event = processingEvent({
+      attemptCount: 2,
+      providerFirstAttemptAt: new Date(now - 60 * 60 * 1000).toISOString(),
+      lastErrorCode: undefined,
+    });
+    const deps = dependencies(event);
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("accepted");
+    expect(deps.send).toHaveBeenCalledWith({
+      payload: payload(),
+      idempotencyKey: event.idempotencyKey,
+    });
+  });
+
+  it("AUD3-H06E-CRASH-07 moves blank-error ambiguous processing at 24h to unknown attention", async () => {
+    const event = processingEvent({
+      attemptCount: 2,
+      providerFirstAttemptAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      lastErrorCode: undefined,
+    });
+    const deps = dependencies(event);
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("attention");
+    expect(deps.markAttention).toHaveBeenCalledWith({
+      eventKey: event.eventKey,
+      leaseOwner: "email-worker-one",
+      errorCode: "RESEND_OUTCOME_UNKNOWN",
+    });
+    expect(deps.send).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H06E-CRASH-08 accepts an inside-window idempotent replay with the original provider id", async () => {
+    const event = processingEvent({
+      attemptCount: 2,
+      providerFirstAttemptAt: new Date(now - 60 * 60 * 1000).toISOString(),
+      lastErrorCode: undefined,
+    });
+    const deps = dependencies(event);
+    deps.send.mockResolvedValueOnce({
+      accepted: true,
+      providerMessageId: "provider-message-original",
+    });
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("accepted");
+    expect(deps.markAccepted).toHaveBeenCalledWith(expect.objectContaining({
+      providerMessageId: "provider-message-original",
+    }));
+    expect(deps.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-H06E-CRASH-09 bounds concurrent idempotent uncertainty by the same 24h window", async () => {
+    const inside = processingEvent({
+      attemptCount: 2,
+      providerFirstAttemptAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS + 1).toISOString(),
+      lastErrorCode: "RESEND_CONCURRENT_IDEMPOTENT_REQUEST",
+    });
+    const insideDeps = dependencies(inside);
+    insideDeps.send.mockResolvedValueOnce({
+      accepted: false,
+      disposition: "retryable",
+      errorCode: "RESEND_CONCURRENT_IDEMPOTENT_REQUEST",
+      outcomeUnknown: true,
+    });
+    await expect(processClaimedEmailOutboxEvent(inside, "email-worker-one", insideDeps)).resolves.toBe("retryable");
+    expect(insideDeps.send).toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: inside.idempotencyKey,
+    }));
+
+    const outside = processingEvent({
+      attemptCount: 3,
+      providerFirstAttemptAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      lastErrorCode: "RESEND_CONCURRENT_IDEMPOTENT_REQUEST",
+    });
+    const outsideDeps = dependencies(outside);
+    await expect(processClaimedEmailOutboxEvent(outside, "email-worker-one", outsideDeps)).resolves.toBe("attention");
+    expect(outsideDeps.markAttention).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: "RESEND_OUTCOME_UNKNOWN",
+    }));
+    expect(outsideDeps.send).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H06E-CRASH-10 never reclaims accepted work with expired-looking timestamps", async () => {
+    const event = processingEvent({
+      state: "accepted",
+      leaseOwner: undefined,
+      leaseExpiresAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      providerFirstAttemptAt: new Date(now - 2 * RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      acceptedAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      completedAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      providerMessageId: "provider-message-123",
+      payloadJson: "",
+    });
+    const deps = dependencies(event);
+    await expect(processEmailOutboxEvent(event.eventKey, deps)).resolves.toBe("marker_repaired");
+    expect(deps.claim).not.toHaveBeenCalled();
+    expect(deps.send).not.toHaveBeenCalled();
   });
 
   it("does not process a lease owned by another worker", async () => {

@@ -12,6 +12,12 @@ const payload: PurchaseReceiptPayloadV1 = {
   total: 1000,
   currency: "ARS",
   fromEmail: "Estilo Sol <ventas@example.test>",
+  brandName: "Estilo Sol",
+  supportEmail: "estilosol.ms@gmail.com",
+  supportWhatsappLabel: "+54 9 341 688-8926",
+  logoUrl: "",
+  logoAlt: "Logo Estilo Sol",
+  orderDetailUrl: "https://estilosol.example.test/tienda/success?ref=es-email-provider-000001",
   templateVersion: 1,
 };
 
@@ -77,6 +83,18 @@ describe("AUD3-H06-E Resend provider adapter", () => {
       accepted: false,
       disposition: "retryable",
       errorCode: "RESEND_NETWORK_ERROR",
+      outcomeUnknown: true,
+    });
+  });
+
+  it("treats concurrent same-key requests as provider-outcome uncertainty", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ name: "concurrent_idempotent_requests" }), { status: 409 }),
+    );
+    await expect(sendPurchaseReceiptToResend({ payload, idempotencyKey: "stable-key" })).resolves.toEqual({
+      accepted: false,
+      disposition: "retryable",
+      errorCode: "RESEND_CONCURRENT_IDEMPOTENT_REQUEST",
       outcomeUnknown: true,
     });
   });

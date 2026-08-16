@@ -90,5 +90,6 @@ export type Order = {
   customer?: { name?: string; phone?: string; email?: string };
   notes?: string;
   fulfillment?: OrderFulfillment;
+  receiptOutboxVersion?: 1;
   receiptEmailSentAt?: number;
 };

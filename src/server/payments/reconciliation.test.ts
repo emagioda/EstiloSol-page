@@ -344,9 +344,17 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     const stored = await getOrder(order.externalReference);
 
     expect(stored?.paymentStatus).toBe("confirmed");
+    expect(stored?.receiptOutboxVersion).toBe(1);
     expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["A"]);
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
     expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
+    const markerCallIndex = vi.mocked(appendOrderToSalesSheet).mock.calls.findIndex(
+      ([projected]) => projected.receiptOutboxVersion === 1,
+    );
+    expect(markerCallIndex).toBeGreaterThanOrEqual(0);
+    expect(vi.mocked(appendOrderToSalesSheet).mock.invocationCallOrder[markerCallIndex]).toBeLessThan(
+      vi.mocked(ensurePurchaseReceiptEventSafely).mock.invocationCallOrder[0],
+    );
   });
 
   it("AUD3-PAY-02 webhook and verify concurrency for one ID has one logical effect", async () => {

@@ -28,10 +28,6 @@ export const EMAIL_RETRY_BACKOFF_MS = [
 ] as const;
 
 const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-const OUTCOME_UNKNOWN_ERROR_CODES = new Set([
-  "RESEND_NETWORK_ERROR",
-  "RESEND_RESPONSE_INVALID",
-]);
 
 type ProcessorDependencies = {
   now: () => number;
@@ -175,8 +171,6 @@ export const processClaimedEmailOutboxEvent = async (
 
   const firstAttemptAt = Date.parse(event.providerFirstAttemptAt ?? "");
   if (
-    event.lastErrorCode &&
-    OUTCOME_UNKNOWN_ERROR_CODES.has(event.lastErrorCode) &&
     Number.isFinite(firstAttemptAt) &&
     dependencies.now() - firstAttemptAt >= RESEND_IDEMPOTENCY_WINDOW_MS
   ) {

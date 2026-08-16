@@ -750,6 +750,7 @@ export const buildSalesSheetRow = (order: Order): Record<string, unknown> => {
     inventory_issue_code: order.inventoryIssueCode || "",
     inventory_issue_at: toIsoString(order.inventoryIssueAt),
     stock_deducted_at: toIsoString(order.stockDeductedAt),
+    receipt_outbox_version: order.receiptOutboxVersion === 1 ? 1 : "",
     receipt_email_sent_at: toIsoString(order.receiptEmailSentAt),
   };
 };
@@ -791,6 +792,7 @@ export async function updateOrderRowInSalesSheet(
     mpPaymentId: string;
     mpPreferenceId: string;
     approvedAt: number | null;
+    receiptOutboxVersion: 1;
     receiptEmailSentAt: number;
     stockDeductedAt: number | null;
     inventoryStatus: OrderInventoryStatus | null;
@@ -829,6 +831,9 @@ export async function updateOrderRowInSalesSheet(
     const approvedAt = toIsoString(updates.approvedAt ?? undefined);
     payload.approved_at = approvedAt;
     payload.fecha_pago = approvedAt;
+  }
+  if (updates.receiptOutboxVersion === 1) {
+    payload.receipt_outbox_version = 1;
   }
   if (updates.receiptEmailSentAt) {
     payload.receipt_email_sent_at = toIsoString(updates.receiptEmailSentAt);

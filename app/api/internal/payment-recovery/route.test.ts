@@ -16,15 +16,21 @@ vi.mock("@/src/server/recovery/worker", () => ({
 vi.mock("@/src/server/emailOutbox/worker", () => ({
   runEmailOutboxWorker: vi.fn(async () => ({
     ok: true,
-    rolloutAt: "2026-08-15T00:00:00.000Z",
-    candidatesFound: 1,
-    eventsCreated: 1,
-    markerRepairs: 0,
-    claimed: 1,
-    accepted: 1,
-    retryable: 0,
-    attention: 0,
-    skipped: 0,
+    existingWork: {
+      ok: true,
+      claimed: 1,
+      accepted: 1,
+      retryable: 0,
+      attention: 0,
+      skipped: 0,
+    },
+    discovery: {
+      ok: true,
+      rolloutAt: "2026-08-15T00:00:00.000Z",
+      candidatesFound: 1,
+      eventsCreated: 1,
+      markerRepairs: 0,
+    },
     durationMs: 15,
   })),
 }));
@@ -81,15 +87,21 @@ describe("AUD3-H06 protected payment recovery cron route", () => {
       },
       email: {
         ok: true,
-        rolloutAt: "2026-08-15T00:00:00.000Z",
-        candidatesFound: 1,
-        eventsCreated: 1,
-        markerRepairs: 0,
-        claimed: 1,
-        accepted: 1,
-        retryable: 0,
-        attention: 0,
-        skipped: 0,
+        existingWork: {
+          ok: true,
+          claimed: 1,
+          accepted: 1,
+          retryable: 0,
+          attention: 0,
+          skipped: 0,
+        },
+        discovery: {
+          ok: true,
+          rolloutAt: "2026-08-15T00:00:00.000Z",
+          candidatesFound: 1,
+          eventsCreated: 1,
+          markerRepairs: 0,
+        },
         durationMs: 15,
       },
     });
@@ -112,6 +124,39 @@ describe("AUD3-H06 protected payment recovery cron route", () => {
     expect(await response.json()).toMatchObject({
       ok: true,
       email: { ok: false },
+    });
+  });
+
+  it("keeps financial convergence successful when both email phases report safe failure", async () => {
+    vi.mocked(runEmailOutboxWorker).mockResolvedValueOnce({
+      ok: false,
+      existingWork: {
+        ok: false,
+        claimed: 0,
+        accepted: 0,
+        retryable: 0,
+        attention: 0,
+        skipped: 0,
+        errorCode: "EMAIL_OUTBOX_EXISTING_WORK_FAILED",
+      },
+      discovery: {
+        ok: false,
+        candidatesFound: 0,
+        eventsCreated: 0,
+        markerRepairs: 0,
+        errorCode: "EMAIL_OUTBOX_DISCOVERY_FAILED",
+      },
+      durationMs: 15,
+    });
+    const response = await GET(request("Bearer cron-secret"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      email: {
+        ok: false,
+        existingWork: { errorCode: "EMAIL_OUTBOX_EXISTING_WORK_FAILED" },
+        discovery: { errorCode: "EMAIL_OUTBOX_DISCOVERY_FAILED" },
+      },
     });
   });
 });

@@ -339,6 +339,7 @@ export async function ensureOrderDurableInSalesSheet(
     mpPaymentId: projected.mpPaymentId,
     mpPreferenceId: projected.mpPreferenceId,
     approvedAt: projected.approvedAt ?? null,
+    receiptOutboxVersion: projected.receiptOutboxVersion,
     inventoryStatus: projected.inventoryStatus ?? null,
     inventoryIssueCode: projected.inventoryIssueCode ?? null,
     inventoryIssueAt: projected.inventoryIssueAt ?? null,
@@ -448,6 +449,7 @@ export async function updateOrder(
           mpPaymentId: updated.mpPaymentId,
           mpPreferenceId: updated.mpPreferenceId,
           approvedAt: updated.approvedAt ?? null,
+          receiptOutboxVersion: updated.receiptOutboxVersion,
           receiptEmailSentAt: updated.receiptEmailSentAt,
           updatedAt: updated.updatedAt,
         };
@@ -530,6 +532,7 @@ export async function markApproved(
       mpPaymentId: input.paymentId,
       mpStatus: input.mpStatus,
       approvedAt: input.approvedAt ?? Date.now(),
+      ...(current.paymentStatus !== "confirmed" ? { receiptOutboxVersion: 1 as const } : {}),
       ...inventoryPatch,
     },
     { syncSheet: current?.salesSheetDeferredUntilApprovedAt ? false : undefined }
@@ -592,6 +595,7 @@ const paymentProjectionChanged = (before: Order, after: Order) =>
   before.paymentStatus !== after.paymentStatus ||
   before.mpPaymentId !== after.mpPaymentId ||
   before.mpStatus !== after.mpStatus ||
+  before.receiptOutboxVersion !== after.receiptOutboxVersion ||
   before.inventoryStatus !== after.inventoryStatus ||
   before.inventoryIssueCode !== after.inventoryIssueCode ||
   before.inventoryIssueAt !== after.inventoryIssueAt ||
@@ -655,6 +659,7 @@ export async function reconcileMercadoPagoPaymentObservationBatch(
       mpPaymentLedger: aggregate.mpPaymentLedger,
       mpPaymentAttentionCode: aggregate.mpPaymentAttentionCode,
       approvedAt: aggregate.approvedAt,
+      ...(firstEffectiveApproval ? { receiptOutboxVersion: 1 as const } : {}),
       ...inventoryPatch,
     });
     // This is the batch's only durable financial order write.

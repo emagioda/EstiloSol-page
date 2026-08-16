@@ -263,6 +263,31 @@ describe("inventory mutation contract", () => {
 });
 
 describe("PR 2 ventas inventory persistence", () => {
+  it("AUD3-H06E-ROLLOUT-02 writes eligibility only for explicitly enrolled orders", () => {
+    expect(buildSalesSheetRow(baseOrder).receipt_outbox_version).toBe("");
+    expect(buildSalesSheetRow({
+      ...baseOrder,
+      status: "approved",
+      paymentStatus: "confirmed",
+      receiptOutboxVersion: 1,
+    }).receipt_outbox_version).toBe(1);
+  });
+
+  it("writes the ventas eligibility marker only when explicitly requested", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    await updateOrderRowInSalesSheet("order-enrolled", { receiptOutboxVersion: 1 });
+    const enrolledBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(enrolledBody.updates.receipt_outbox_version).toBe(1);
+
+    await updateOrderRowInSalesSheet("order-legacy", { paymentStatus: "confirmed" });
+    const legacyBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(legacyBody.updates).not.toHaveProperty("receipt_outbox_version");
+  });
+
   it("PR2-SHEET-01 buildSalesSheetRow writes pending", () => {
     expect(buildSalesSheetRow({ ...baseOrder, inventoryStatus: "pending" }).inventory_status).toBe("pending");
   });

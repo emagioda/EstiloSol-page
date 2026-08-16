@@ -52,6 +52,7 @@ const buildOperationalSheetUpdates = (order: Order, updatedAt: number) => ({
   mpStatus: order.mpStatus,
   mpPaymentId: order.mpPaymentId,
   mpPreferenceId: order.mpPreferenceId,
+  receiptOutboxVersion: order.receiptOutboxVersion,
   receiptEmailSentAt: order.receiptEmailSentAt,
   inventoryStatus: resolveOrderInventoryStatus(order) ?? null,
   inventoryIssueCode: order.inventoryIssueCode ?? null,

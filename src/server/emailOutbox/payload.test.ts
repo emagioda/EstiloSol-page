@@ -31,6 +31,7 @@ const order = (patch: Partial<Order> = {}): Order => ({
 describe("AUD3-H06-E purchase receipt payload v1", () => {
   beforeEach(() => {
     process.env.CONTACT_FROM_EMAIL = "Estilo Sol <ventas@example.test>";
+    process.env.APP_BASE_URL = "https://estilosol.example.test";
   });
 
   it("uses one stable order-level event and provider idempotency identity", () => {
@@ -62,6 +63,12 @@ describe("AUD3-H06-E purchase receipt payload v1", () => {
       total: 3000,
       currency: "ARS",
       fromEmail: "Estilo Sol <ventas@example.test>",
+      brandName: "Estilo Sol",
+      supportEmail: "estilosol.ms@gmail.com",
+      supportWhatsappLabel: "+54 9 341 688-8926",
+      logoUrl: "",
+      logoAlt: "Logo Estilo Sol",
+      orderDetailUrl: "https://estilosol.example.test/tienda/success?ref=es-email-payload-000001",
       templateVersion: 1,
     });
     expect(JSON.stringify(payload)).not.toContain("private-product-id");
@@ -93,6 +100,21 @@ describe("AUD3-H06-E purchase receipt payload v1", () => {
     expect(rendered.subject).toContain("es-email-payload-000001");
     expect(rendered.html).toContain("Ana &amp; Luz");
     expect(rendered.html).toContain("Aro &lt;Sol&gt;");
+    expect(rendered.html).toContain("Unitario");
+    expect(rendered.html).toContain("Ver detalle en la tienda");
+    expect(rendered.html).toContain("Soporte: <strong>estilosol.ms@gmail.com</strong>");
+    expect(rendered.html).toContain("WhatsApp: <strong>+54 9 341 688-8926</strong>");
+    expect(rendered.html).toContain("display: none; max-height: 0");
     expect(rendered.html).not.toContain("private-product-id");
+  });
+
+  it("preserves the existing empty-item fallback in both receipt formats", () => {
+    const rendered = renderPurchaseReceiptV1(buildPurchaseReceiptPayload({
+      order: order({ items: [] }),
+      paymentId: "payment-1",
+      approvedAt: Date.UTC(2026, 7, 15, 12, 30, 0),
+    }));
+    expect(rendered.text).toContain("- Sin items");
+    expect(rendered.html).toContain("Sin items");
   });
 });

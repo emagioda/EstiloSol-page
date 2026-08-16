@@ -78,7 +78,11 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
     product.currency ?? "ARS",
     product.price === undefined ? 1000 : product.price,
   ]);
-  const salesHeaders = options.salesHeaders ?? ["nro_de_compra", "items_json"];
+  const salesHeaders = options.salesHeaders ?? [
+    "nro_de_compra",
+    "items_json",
+    ...(options.emailOutboxHeaders || options.emailOutboxRows ? ["receipt_outbox_version"] : []),
+  ];
   const salesRows: unknown[][] = options.salesRows ?? [];
   const writes: WriteRecord[] = [];
   const batchCalls: Array<{ requests: Array<Record<string, unknown>> }> = [];
@@ -153,7 +157,11 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
           .map((sourceRow) => sourceRow.slice(column - 1, column - 1 + columnCount));
       },
       setValue: (value: unknown) => {
-        state.rows[row - 2][column - 1] = value;
+        if (row === 1) {
+          state.headers[column - 1] = value;
+        } else {
+          state.rows[row - 2][column - 1] = value;
+        }
         writes.push({ sheet: state.name, row, column, value });
       },
       setValues: (values: unknown[][]) => {
@@ -1207,6 +1215,7 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
     const second = recoveryPost(harness, "ensureRecoverySchema");
     expect(first.email_outbox_rollout_at).toBe(boundary);
     expect(second.email_outbox_rollout_at).toBe(boundary);
+    expect(harness.states.get("ventas")?.headers.filter((header) => header === "receipt_outbox_version")).toHaveLength(1);
   });
 
   it("stores one immutable event, replays the same payload, and fails closed on conflict", () => {
@@ -1249,6 +1258,7 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
       leaseExpiresAt: "2026-08-16T10:07:00.000Z",
     }) as { events?: unknown[] };
     expect(first.events?.[0]).toMatchObject({ attempt_count: 1, lease_owner: "email-worker-one" });
+    expect(first.events?.[0]).toMatchObject({ provider_first_attempt_at: claim.claimedAt });
     expect(replay.events?.[0]).toMatchObject({ attempt_count: 1, lease_owner: "email-worker-one" });
     expect(overlap.events).toEqual([]);
   });
@@ -1278,6 +1288,65 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
         lease_owner: "email-worker-two",
       }),
     ]);
+  });
+
+  it("AUD3-H06E-CRASH-06 reclaims blank-error ambiguous processing inside 24h", () => {
+    const payloadJson = String(emailOutboxEvent().payload_json);
+    const row = emailOutboxRow({
+      state: "processing",
+      attempt_count: 1,
+      lease_owner: "email-worker-one",
+      lease_expires_at: "2026-08-16T10:05:00.000Z",
+      provider_first_attempt_at: "2026-08-16T10:00:00.000Z",
+      last_attempt_at: "2026-08-16T10:00:00.000Z",
+      last_error_code: "",
+    });
+    const harness = createHarness([], {
+      emailOutboxHeaders,
+      emailOutboxRows: [row],
+      emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
+    });
+    const result = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-two",
+      claimedAt: "2026-08-16T11:00:00.000Z",
+      leaseExpiresAt: "2026-08-16T11:05:00.000Z",
+      maxEvents: 1,
+    }) as { events?: Array<Record<string, unknown>> };
+    expect(result.events).toEqual([
+      expect.objectContaining({
+        payload_json: payloadJson,
+        idempotency_key: "purchase-receipt/es-email-000001/v1",
+        provider_first_attempt_at: "2026-08-16T10:00:00.000Z",
+        attempt_count: 2,
+      }),
+    ]);
+  });
+
+  it("AUD3-H06E-CRASH-07 refuses blank-error ambiguous processing at 24h", () => {
+    const row = emailOutboxRow({
+      state: "processing",
+      attempt_count: 1,
+      lease_owner: "email-worker-one",
+      lease_expires_at: "2026-08-16T10:05:00.000Z",
+      provider_first_attempt_at: "2026-08-16T10:00:00.000Z",
+      last_attempt_at: "2026-08-16T10:00:00.000Z",
+      last_error_code: "",
+    });
+    const harness = createHarness([], {
+      emailOutboxHeaders,
+      emailOutboxRows: [row],
+      emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
+    });
+    const result = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-two",
+      claimedAt: "2026-08-17T10:00:00.000Z",
+      leaseExpiresAt: "2026-08-17T10:05:00.000Z",
+      maxEvents: 1,
+    }) as { events?: unknown[] };
+    expect(result.events).toEqual([]);
+    const stored = harness.states.get("_email_outbox_events")?.rows[0] ?? [];
+    expect(stored[emailOutboxHeaders.indexOf("state")]).toBe("attention");
+    expect(stored[emailOutboxHeaders.indexOf("last_error_code")]).toBe("RESEND_OUTCOME_UNKNOWN");
   });
 
   it("claims retryable work only when next_attempt_at is due", () => {
@@ -1439,17 +1508,19 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
     expect(row[emailOutboxHeaders.indexOf("last_error_code")]).toBe("EMAIL_OUTBOX_ATTEMPTS_EXHAUSTED");
   });
 
-  it("discovers only post-rollout paid ventas rows and repairs accepted compatibility markers", () => {
+  it("AUD3-H06E-ROLLOUT-01/02/04 uses per-order enrollment and repairs accepted markers", () => {
     const rolloutAt = "2026-08-15T00:00:00.000Z";
     const salesHeaders = [
       "nro_de_compra", "estado_de_pago", "approved_at", "customer_email", "customer_name",
       "mp_payment_id", "items_json", "total", "currency", "receipt_email_sent_at",
+      "receipt_outbox_version",
     ];
     const itemJson = JSON.stringify([{ title: "Producto", qty: 1, unitPrice: 1000 }]);
     const salesRows = [
-      ["es-before-000001", "Confirmado", "2026-08-14T10:00:00.000Z", "before@example.test", "Antes", "pay-1", itemJson, 1000, "ARS", ""],
-      ["es-after-000001", "Confirmado", "2026-08-16T10:00:00.000Z", "after@example.test", "Después", "pay-2", itemJson, 1000, "ARS", ""],
-      ["es-repair-000001", "Confirmado", "2026-08-16T11:00:00.000Z", "repair@example.test", "Reparar", "pay-3", itemJson, 1000, "ARS", ""],
+      ["es-bootstrap-gap-000001", "Confirmado", "2026-08-16T10:00:00.000Z", "legacy@example.test", "Legacy", "pay-1", itemJson, 1000, "ARS", "", ""],
+      ["es-enrolled-000001", "Confirmado", "2026-08-14T10:00:00.000Z", "new@example.test", "Nuevo", "pay-2", itemJson, 1000, "ARS", "", 1],
+      ["es-sent-000001", "Confirmado", "2026-08-16T10:30:00.000Z", "sent@example.test", "Enviado", "pay-3", itemJson, 1000, "ARS", "2026-08-16T10:31:00.000Z", 1],
+      ["es-repair-000001", "Confirmado", "2026-08-16T11:00:00.000Z", "repair@example.test", "Reparar", "pay-4", itemJson, 1000, "ARS", "", 1],
     ];
     const acceptedRow = emailOutboxRow({
       external_reference: "es-repair-000001",
@@ -1472,11 +1543,46 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
       marker_repairs?: Array<Record<string, unknown>>;
     };
     expect(result.candidates).toEqual([
-      expect.objectContaining({ external_reference: "es-after-000001", recipient_email: "after@example.test" }),
+      expect.objectContaining({ external_reference: "es-enrolled-000001", recipient_email: "new@example.test" }),
     ]);
     expect(result.marker_repairs).toEqual([
       { external_reference: "es-repair-000001", accepted_at: "2026-08-16T11:02:00.000Z" },
     ]);
+  });
+
+  it("AUD3-H06E-ROLLOUT-05 appends the exact ventas eligibility column once", () => {
+    const harness = createHarness([], {
+      salesHeaders: ["nro_de_compra", "estado_de_pago", "approved_at"],
+    });
+    expect(recoveryPost(harness, "ensureRecoverySchema")).toMatchObject({ ok: true });
+    expect(recoveryPost(harness, "ensureRecoverySchema")).toMatchObject({ ok: true });
+    expect(harness.states.get("ventas")?.headers).toEqual([
+      "nro_de_compra",
+      "estado_de_pago",
+      "approved_at",
+      "receipt_outbox_version",
+    ]);
+  });
+
+  it("AUD3-H06E-ROLLOUT-06 fails closed on ambiguous eligibility headers", () => {
+    const harness = createHarness([], {
+      salesHeaders: [
+        "nro_de_compra",
+        "estado_de_pago",
+        "approved_at",
+        "receipt_outbox_version",
+        "Receipt Outbox Version",
+      ],
+    });
+    expect(recoveryPost(harness, "ensureRecoverySchema")).toMatchObject({
+      ok: false,
+      code: "EMAIL_OUTBOX_SCHEMA_INVALID",
+    });
+    expect(recoveryPost(harness, "listMissingReceiptCandidates", { limit: 20 })).toMatchObject({
+      ok: false,
+      code: "EMAIL_OUTBOX_SCHEMA_INVALID",
+    });
+    expect(harness.states.get("_email_outbox_events")?.rows).toEqual([]);
   });
 
   it("keeps Admin email attention output free of payload JSON and recipient PII", () => {
@@ -1556,10 +1662,10 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
     });
 
     const duplicateSales = createHarness([], {
-      salesHeaders: ["nro_de_compra", "estado_de_pago", "approved_at"],
+      salesHeaders: ["nro_de_compra", "estado_de_pago", "approved_at", "receipt_outbox_version"],
       salesRows: [
-        ["es-duplicate-000001", "Confirmado", "2026-08-16T00:00:00.000Z"],
-        ["es-duplicate-000001", "Confirmado", "2026-08-16T00:00:00.000Z"],
+        ["es-duplicate-000001", "Confirmado", "2026-08-16T00:00:00.000Z", 1],
+        ["es-duplicate-000001", "Confirmado", "2026-08-16T00:00:00.000Z", 1],
       ],
       emailOutboxHeaders,
       emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
