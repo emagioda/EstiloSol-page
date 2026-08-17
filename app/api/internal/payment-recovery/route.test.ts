@@ -24,6 +24,14 @@ vi.mock("@/src/server/emailOutbox/worker", () => ({
       attention: 0,
       skipped: 0,
     },
+    salesRecovery: {
+      ok: true,
+      attempted: 1,
+      recovered: 1,
+      pending: 0,
+      busy: 0,
+      attention: 0,
+    },
     discovery: {
       ok: true,
       rolloutAt: "2026-08-15T00:00:00.000Z",
@@ -95,6 +103,14 @@ describe("AUD3-H06 protected payment recovery cron route", () => {
           attention: 0,
           skipped: 0,
         },
+        salesRecovery: {
+          ok: true,
+          attempted: 1,
+          recovered: 1,
+          pending: 0,
+          busy: 0,
+          attention: 0,
+        },
         discovery: {
           ok: true,
           rolloutAt: "2026-08-15T00:00:00.000Z",
@@ -127,7 +143,7 @@ describe("AUD3-H06 protected payment recovery cron route", () => {
     });
   });
 
-  it("keeps financial convergence successful when both email phases report safe failure", async () => {
+  it("keeps financial convergence successful when all three email lifecycle phases report safe failure", async () => {
     vi.mocked(runEmailOutboxWorker).mockResolvedValueOnce({
       ok: false,
       existingWork: {
@@ -138,6 +154,15 @@ describe("AUD3-H06 protected payment recovery cron route", () => {
         attention: 0,
         skipped: 0,
         errorCode: "EMAIL_OUTBOX_EXISTING_WORK_FAILED",
+      },
+      salesRecovery: {
+        ok: false,
+        attempted: 0,
+        recovered: 0,
+        pending: 0,
+        busy: 0,
+        attention: 0,
+        errorCode: "EMAIL_OUTBOX_SALES_RECOVERY_FAILED",
       },
       discovery: {
         ok: false,
@@ -155,6 +180,7 @@ describe("AUD3-H06 protected payment recovery cron route", () => {
       email: {
         ok: false,
         existingWork: { errorCode: "EMAIL_OUTBOX_EXISTING_WORK_FAILED" },
+        salesRecovery: { errorCode: "EMAIL_OUTBOX_SALES_RECOVERY_FAILED" },
         discovery: { errorCode: "EMAIL_OUTBOX_DISCOVERY_FAILED" },
       },
     });

@@ -286,7 +286,7 @@ describe("PR 2 indexed sales Sheet recovery", () => {
     );
   });
 
-  it("AUD3-H06E-SALES-06 excludes a legacy confirmed Order without enrollment", async () => {
+  it("AUD3-H06E-AUTO-SALES-08 excludes a legacy confirmed Order without enrollment", async () => {
     const order = makeOrder({
       receiptOutboxVersion: undefined,
       salesSheetDeferredUntilApprovedAt: undefined,
@@ -306,7 +306,7 @@ describe("PR 2 indexed sales Sheet recovery", () => {
     expect(dependencies.removePending).toHaveBeenCalledWith(order.externalReference);
   });
 
-  it("AUD3-H06E-SALES-07 reconciles an existing row without a duplicate append", async () => {
+  it("AUD3-H06E-AUTO-SALES-09 reconciles an existing row without a duplicate append", async () => {
     const order = makeOrder({ salesSheetSyncedAt: 10, salesSheetSyncFailedAt: 20 });
 
     await recoverPendingSalesSheetOrder(
@@ -319,7 +319,7 @@ describe("PR 2 indexed sales Sheet recovery", () => {
     expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
   });
 
-  it("AUD3-H06E-SALES-08 keeps recovery indexed when an existing-row repair fails again", async () => {
+  it("AUD3-H06E-AUTO-SALES-10 keeps recovery indexed when an existing-row repair fails again", async () => {
     const order = makeOrder({ salesSheetSyncedAt: 10, salesSheetSyncFailedAt: 20 });
     const dependencies = dependenciesFor(order);
     vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(new Error("Sheets still unavailable"));

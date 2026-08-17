@@ -2,6 +2,9 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { logEvent } from "@/src/server/observability/log";
+import { recoverPendingSalesSheetOrder } from "@/src/server/orders/salesSheetRecovery";
+import { listPendingSalesSheetOrderIds } from "@/src/server/orders/salesSheetSync";
+import { getOrderRowById } from "@/src/server/sheets/repository";
 import {
   buildPurchaseReceiptEventKey,
   buildPurchaseReceiptPayloadFromCandidate,
@@ -20,6 +23,7 @@ import {
 } from "./repository";
 
 export const MAX_EMAIL_EVENTS_PER_RUN = 20;
+export const MAX_PENDING_SALES_RECOVERIES_PER_RUN = 20;
 export const MAX_MISSING_RECEIPT_CANDIDATES_PER_RUN = 20;
 
 type EmailWorkerDependencies = {
@@ -30,6 +34,9 @@ type EmailWorkerDependencies = {
   claim: typeof claimEmailOutboxWork;
   processClaimed: typeof processClaimedEmailOutboxEvent;
   projectMarker: typeof projectAcceptedReceiptMarker;
+  listPendingSales: typeof listPendingSalesSheetOrderIds;
+  getSalesRow: typeof getOrderRowById;
+  recoverPendingSales: typeof recoverPendingSalesSheetOrder;
 };
 const productionDependencies: EmailWorkerDependencies = {
   now: Date.now,
@@ -39,6 +46,9 @@ const productionDependencies: EmailWorkerDependencies = {
   claim: claimEmailOutboxWork,
   processClaimed: processClaimedEmailOutboxEvent,
   projectMarker: projectAcceptedReceiptMarker,
+  listPendingSales: listPendingSalesSheetOrderIds,
+  getSalesRow: getOrderRowById,
+  recoverPendingSales: recoverPendingSalesSheetOrder,
 };
 
 export type EmailOutboxWorkerResult = {
@@ -51,6 +61,15 @@ export type EmailOutboxWorkerResult = {
     attention: number;
     skipped: number;
     errorCode?: "EMAIL_OUTBOX_EXISTING_WORK_FAILED";
+  };
+  salesRecovery: {
+    ok: boolean;
+    attempted: number;
+    recovered: number;
+    pending: number;
+    busy: number;
+    attention: number;
+    errorCode?: "EMAIL_OUTBOX_SALES_RECOVERY_FAILED";
   };
   discovery: {
     ok: boolean;
@@ -111,6 +130,58 @@ export const runEmailOutboxWorker = async (
     });
   }
 
+  const salesRecovery: EmailOutboxWorkerResult["salesRecovery"] = {
+    ok: true,
+    attempted: 0,
+    recovered: 0,
+    pending: 0,
+    busy: 0,
+    attention: 0,
+  };
+
+  try {
+    const pendingOrderIds = await dependencies.listPendingSales(
+      MAX_PENDING_SALES_RECOVERIES_PER_RUN,
+    );
+    salesRecovery.attempted = pendingOrderIds.length;
+
+    for (const orderId of pendingOrderIds) {
+      try {
+        const row = await dependencies.getSalesRow(orderId);
+        const result = await dependencies.recoverPendingSales(orderId, {
+          rowExists: row !== null,
+        });
+        if (
+          result.outcome === "appended" ||
+          result.outcome === "reconciled" ||
+          result.outcome === "already_synced"
+        ) {
+          salesRecovery.recovered += 1;
+        } else if (result.outcome === "pending") {
+          salesRecovery.pending += 1;
+        } else if (result.outcome === "busy") {
+          salesRecovery.busy += 1;
+        } else {
+          salesRecovery.attention += 1;
+        }
+      } catch (error) {
+        salesRecovery.ok = false;
+        salesRecovery.pending += 1;
+        salesRecovery.errorCode = "EMAIL_OUTBOX_SALES_RECOVERY_FAILED";
+        logEvent("warn", "email.outbox.sales_recovery_order_failed", {
+          externalReference: orderId,
+          errorName: error instanceof Error ? error.name : "unknown",
+        });
+      }
+    }
+  } catch (error) {
+    salesRecovery.ok = false;
+    salesRecovery.errorCode = "EMAIL_OUTBOX_SALES_RECOVERY_FAILED";
+    logEvent("error", "email.outbox.sales_recovery_failed", {
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+  }
+
   const discoveryResult: EmailOutboxWorkerResult["discovery"] = {
     ok: true,
     candidatesFound: 0,
@@ -164,8 +235,9 @@ export const runEmailOutboxWorker = async (
   }
 
   return {
-    ok: existingWork.ok && discoveryResult.ok,
+    ok: existingWork.ok && salesRecovery.ok && discoveryResult.ok,
     existingWork,
+    salesRecovery,
     discovery: discoveryResult,
     durationMs: Math.max(0, dependencies.now() - startedAt),
   };

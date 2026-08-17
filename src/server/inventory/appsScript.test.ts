@@ -1583,6 +1583,35 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
     expect(row[emailOutboxHeaders.indexOf("last_error_code")]).toBe("EMAIL_OUTBOX_ATTEMPTS_EXHAUSTED");
   });
 
+  it("AUD3-H06E-UNCERTAINTY-11 lets attempt-five uncertainty replay only inside 24h", () => {
+    const retryable = emailOutboxRow({
+      state: "retryable",
+      attempt_count: 5,
+      next_attempt_at: "2026-08-16T10:00:00.000Z",
+      provider_first_attempt_at: "2026-08-15T10:00:00.000Z",
+      provider_outcome_unknown_since: "2026-08-15T10:01:00.001Z",
+      last_attempt_at: "2026-08-16T09:00:00.000Z",
+      last_error_code: "RESEND_SERVER_ERROR",
+    });
+    const harness = createHarness([], {
+      emailOutboxHeaders,
+      emailOutboxRows: [retryable],
+      emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
+    });
+    const claimed = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 20,
+    }) as { events?: Array<Record<string, unknown>> };
+    expect(claimed.events).toHaveLength(1);
+    expect(claimed.events?.[0]).toMatchObject({
+      state: "processing",
+      attempt_count: 6,
+      provider_outcome_unknown_since: "2026-08-15T10:01:00.001Z",
+    });
+  });
+
   it("AUD3-H06E-ROLLOUT-01/02/04 uses per-order enrollment and repairs accepted markers", () => {
     const rolloutAt = "2026-08-15T00:00:00.000Z";
     const salesHeaders = [

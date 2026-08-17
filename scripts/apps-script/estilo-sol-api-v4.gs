@@ -2020,7 +2020,11 @@ function handleClaimEmailOutboxWork_(payload) {
       );
       return;
     }
-    if (attemptCount >= EMAIL_OUTBOX_MAX_ATTEMPTS && (state === "retryable" || expiredProcessing)) {
+    if (
+      attemptCount >= EMAIL_OUTBOX_MAX_ATTEMPTS &&
+      !isFinite(providerOutcomeUnknownSince) &&
+      (state === "retryable" || expiredProcessing)
+    ) {
       completeEmailOutboxState_(
         { schema: data.schema, row: row },
         "attention",

@@ -105,7 +105,7 @@ export const sendPurchaseReceiptToResend = async (input: {
       accepted: false,
       disposition: "retryable",
       errorCode: "RESEND_SERVER_ERROR",
-      outcomeUnknown: false,
+      outcomeUnknown: true,
     };
   }
   if (response.status === 401 || response.status === 403) {

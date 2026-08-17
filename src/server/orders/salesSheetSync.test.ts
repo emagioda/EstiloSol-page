@@ -38,4 +38,13 @@ describe("PR 2 pending sales Sheet index", () => {
     await expect(removePendingSalesSheetOrder(orderId)).resolves.toBe(false);
     await expect(isPendingSalesSheetOrder(orderId)).resolves.toBe(false);
   });
+
+  it("AUD3-H06E-AUTO-SALES-03 reads at most the requested pending projection budget", async () => {
+    const orderIds = Array.from({ length: 25 }, (_, index) => uniqueOrderId(`bounded-${index}`));
+    await Promise.all(orderIds.map(addPendingSalesSheetOrder));
+
+    const pending = await listPendingSalesSheetOrderIds(20);
+    expect(pending).toHaveLength(20);
+    expect(pending.every((orderId) => orderIds.includes(orderId))).toBe(true);
+  });
 });

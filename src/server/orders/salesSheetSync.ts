@@ -2,6 +2,7 @@ import {
   addSetMember,
   isSetMember,
   listSetMembers,
+  listSetMembersBounded,
   removeSetMember,
 } from "@/src/server/kv";
 import type { Order } from "./types";
@@ -16,8 +17,11 @@ export async function removePendingSalesSheetOrder(orderId: string): Promise<boo
   return removeSetMember(PENDING_SALES_SHEET_SYNC_INDEX_KEY, orderId);
 }
 
-export async function listPendingSalesSheetOrderIds(): Promise<string[]> {
-  return (await listSetMembers(PENDING_SALES_SHEET_SYNC_INDEX_KEY)).sort();
+export async function listPendingSalesSheetOrderIds(limit?: number): Promise<string[]> {
+  const orderIds = limit === undefined
+    ? await listSetMembers(PENDING_SALES_SHEET_SYNC_INDEX_KEY)
+    : await listSetMembersBounded(PENDING_SALES_SHEET_SYNC_INDEX_KEY, limit);
+  return orderIds.sort();
 }
 
 export async function isPendingSalesSheetOrder(orderId: string): Promise<boolean> {

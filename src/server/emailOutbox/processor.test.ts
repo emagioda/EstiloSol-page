@@ -368,6 +368,72 @@ describe("AUD3-H06-E durable receipt processor", () => {
     }));
   });
 
+  it("AUD3-H06E-UNCERTAINTY-10 retains a new 5xx uncertainty and retries despite attempt five", async () => {
+    const event = processingEvent({ attemptCount: 5, providerOutcomeUnknownSince: undefined });
+    const deps = dependencies(event);
+    deps.send.mockImplementationOnce(async (input) => {
+      await input.beforeProviderRequest();
+      return {
+        accepted: false,
+        disposition: "retryable",
+        errorCode: "RESEND_SERVER_ERROR",
+        outcomeUnknown: true,
+      };
+    });
+
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("retryable");
+    expect(deps.markProviderOutcomeUnknown).toHaveBeenCalledTimes(1);
+    expect(deps.clearProviderOutcomeUnknown).not.toHaveBeenCalled();
+    expect(deps.markRetryable).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: "RESEND_SERVER_ERROR",
+    }));
+    expect(deps.markAttention).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-11 replays an earlier 5xx inside 24h with the immutable request", async () => {
+    const event = processingEvent({
+      attemptCount: 6,
+      providerOutcomeUnknownSince: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS + 1).toISOString(),
+      lastErrorCode: "RESEND_SERVER_ERROR",
+    });
+    const deps = dependencies(event);
+    deps.send.mockImplementationOnce(async (input) => {
+      await input.beforeProviderRequest();
+      return {
+        accepted: false,
+        disposition: "retryable",
+        errorCode: "RESEND_SERVER_ERROR",
+        outcomeUnknown: true,
+      };
+    });
+
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("retryable");
+    expect(deps.send).toHaveBeenCalledWith({
+      payload: payload(),
+      idempotencyKey: event.idempotencyKey,
+      beforeProviderRequest: expect.any(Function),
+    });
+    expect(deps.clearProviderOutcomeUnknown).not.toHaveBeenCalled();
+    expect(deps.markAttention).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-12 stops a 5xx uncertainty at 24h without another send", async () => {
+    const event = processingEvent({
+      attemptCount: 6,
+      providerOutcomeUnknownSince: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      lastErrorCode: "RESEND_SERVER_ERROR",
+    });
+    const deps = dependencies(event);
+
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("attention");
+    expect(deps.send).not.toHaveBeenCalled();
+    expect(deps.markAttention).toHaveBeenCalledWith({
+      eventKey: event.eventKey,
+      leaseOwner: "email-worker-one",
+      errorCode: "RESEND_OUTCOME_UNKNOWN",
+    });
+  });
+
   it("does not blindly retry response-unknown work outside Resend's safe window", async () => {
     const event = processingEvent({
       attemptCount: 2,

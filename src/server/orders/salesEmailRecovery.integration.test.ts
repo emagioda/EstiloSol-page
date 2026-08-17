@@ -35,10 +35,10 @@ import { runEmailOutboxWorker } from "@/src/server/emailOutbox/worker";
 import {
   appendOrderToSalesSheet,
   decrementProductsStockInSheet,
+  getOrderRowById,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
 import { createOrder, getOrder } from "./store";
-import { recoverPendingSalesSheetOrder } from "./salesSheetRecovery";
 import { isPendingSalesSheetOrder } from "./salesSheetSync";
 
 let sequence = 0;
@@ -67,6 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.RESEND_API_KEY = "re_test_synthetic_only";
   vi.mocked(appendOrderToSalesSheet).mockResolvedValue(undefined);
+  vi.mocked(getOrderRowById).mockResolvedValue({} as never);
   vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
   vi.mocked(decrementProductsStockInSheet).mockResolvedValue({
     deduped: false,
@@ -81,8 +82,8 @@ afterEach(() => {
 
 describe("AUD3-H06-E enrolled sales projection and email recovery", () => {
   it.each([
-    ["AUD3-H06E-SALES-04 cash full autonomous recovery with SALES-09 single event identity", "cash"],
-    ["AUD3-H06E-SALES-05 transfer full autonomous recovery", "transfer"],
+    ["AUD3-H06E-AUTO-SALES-01 cash with AUTO-SALES-03/04 full Cron lifecycle", "cash"],
+    ["AUD3-H06E-AUTO-SALES-02 transfer with AUTO-SALES-03/04 full Cron lifecycle", "transfer"],
   ] as const)("%s", async (_name, paymentMethod) => {
     const original = makeOrder(paymentMethod);
     await createOrder(original);
@@ -111,45 +112,27 @@ describe("AUD3-H06-E enrolled sales projection and email recovery", () => {
     expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
 
     vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
-    const recovered = await recoverPendingSalesSheetOrder(
-      original.externalReference,
-      { rowExists: true },
-    );
-    expect(recovered).toMatchObject({
-      outcome: "reconciled",
-      order: {
-        paymentStatus: "confirmed",
-        receiptOutboxVersion: 1,
-        salesSheetSyncFailedAt: undefined,
-      },
-    });
-    expect(await isPendingSalesSheetOrder(original.externalReference)).toBe(false);
-    expect(updateOrderRowInSalesSheet).toHaveBeenLastCalledWith(
-      original.externalReference,
-      expect.objectContaining({
-        paymentStatus: "confirmed",
-        approvedAt: expect.any(Number),
-        receiptOutboxVersion: 1,
-        inventoryStatus: "deducted",
-      }),
-    );
-    expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
-
-    const approved = recovered.order!;
-    const discoveryCandidate: MissingReceiptCandidate = {
-      externalReference: original.externalReference,
-      recipientEmail: original.customer!.email!,
-      customerName: original.customer!.name!,
-      paymentId: approved.mpPaymentId!,
-      approvedAt: new Date(approved.approvedAt!).toISOString(),
-      itemsJson: JSON.stringify(original.items),
-      total: original.total,
-      currency: "ARS",
-    };
     const events = new Map<string, EmailOutboxEvent>();
     let discoveryRuns = 0;
     const discover = vi.fn(async () => {
       discoveryRuns += 1;
+      const approved = await getOrder(original.externalReference);
+      expect(approved).toMatchObject({
+        paymentStatus: "confirmed",
+        receiptOutboxVersion: 1,
+        salesSheetSyncFailedAt: undefined,
+      });
+      expect(await isPendingSalesSheetOrder(original.externalReference)).toBe(false);
+      const discoveryCandidate: MissingReceiptCandidate = {
+        externalReference: original.externalReference,
+        recipientEmail: original.customer!.email!,
+        customerName: original.customer!.name!,
+        paymentId: approved!.mpPaymentId!,
+        approvedAt: new Date(approved!.approvedAt!).toISOString(),
+        itemsJson: JSON.stringify(original.items),
+        total: original.total,
+        currency: "ARS",
+      };
       return {
         rolloutAt: "2026-08-15T00:00:00.000Z",
         candidates: [discoveryCandidate],
@@ -274,12 +257,24 @@ describe("AUD3-H06-E enrolled sales projection and email recovery", () => {
 
     expect(creationRun).toMatchObject({
       existingWork: { claimed: 0 },
+      salesRecovery: { ok: true, attempted: 1, recovered: 1 },
       discovery: { candidatesFound: 1, eventsCreated: 1 },
     });
     expect(processingRun).toMatchObject({
       existingWork: { claimed: 1, accepted: 1 },
+      salesRecovery: { ok: true, attempted: 0, recovered: 0 },
       discovery: { candidatesFound: 1, eventsCreated: 0 },
     });
+    expect(updateOrderRowInSalesSheet).toHaveBeenLastCalledWith(
+      original.externalReference,
+      expect.objectContaining({
+        paymentStatus: "confirmed",
+        approvedAt: expect.any(Number),
+        receiptOutboxVersion: 1,
+        inventoryStatus: "deducted",
+      }),
+    );
+    expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
     expect(discoveryRuns).toBe(2);
     expect(events).toHaveLength(1);
     expect(events.get(`purchase-receipt/${original.externalReference}/v1`)).toMatchObject({

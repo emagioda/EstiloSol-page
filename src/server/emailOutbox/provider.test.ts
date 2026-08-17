@@ -79,8 +79,6 @@ describe("AUD3-H06-E Resend provider adapter", () => {
   });
 
   it.each([
-    [429, {}, "RESEND_RATE_LIMITED", "retryable"],
-    [503, {}, "RESEND_SERVER_ERROR", "retryable"],
     [400, {}, "RESEND_INVALID_REQUEST", "attention"],
     [409, { name: "invalid_idempotent_request" }, "RESEND_IDEMPOTENCY_CONFLICT", "attention"],
     [409, { name: "concurrent_idempotent_requests" }, "RESEND_CONCURRENT_IDEMPOTENT_REQUEST", "retryable"],
@@ -94,6 +92,31 @@ describe("AUD3-H06-E Resend provider adapter", () => {
       errorCode,
     });
   });
+
+  it("AUD3-H06E-UNCERTAINTY-09 classifies Resend HTTP 5xx as retryable outcome-unknown", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ message: "synthetic upstream failure" }), { status: 503 }),
+    );
+    await expect(sendPurchaseReceiptToResend(providerInput())).resolves.toEqual({
+      accepted: false,
+      disposition: "retryable",
+      errorCode: "RESEND_SERVER_ERROR",
+      outcomeUnknown: true,
+    });
+  });
+
+  it.each([429, 401, 403] as const)(
+    "AUD3-H06E-UNCERTAINTY-13 keeps HTTP %s as a known rejection",
+    async (status) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify({ message: "synthetic rejection" }), { status }),
+      );
+      await expect(sendPurchaseReceiptToResend(providerInput())).resolves.toMatchObject({
+        accepted: false,
+        outcomeUnknown: false,
+      });
+    },
+  );
 
   it("classifies a network failure as outcome-unknown", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("socket with sensitive detail"));

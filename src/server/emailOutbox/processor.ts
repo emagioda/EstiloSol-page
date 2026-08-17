@@ -253,7 +253,12 @@ export const processClaimedEmailOutboxEvent = async (
     Number.isFinite(activeUncertaintySince) &&
     now - activeUncertaintySince >= RESEND_IDEMPOTENCY_WINDOW_MS;
   const exhausted = event.attemptCount >= MAX_EMAIL_ATTEMPTS;
-  if (provider.disposition === "attention" || outsideUnknownWindow || exhausted) {
+  const hasActiveUncertainty = Number.isFinite(activeUncertaintySince);
+  if (
+    provider.disposition === "attention" ||
+    outsideUnknownWindow ||
+    (exhausted && !hasActiveUncertainty)
+  ) {
     const errorCode = outsideUnknownWindow ? "RESEND_OUTCOME_UNKNOWN" : provider.errorCode;
     await dependencies.markAttention({ eventKey: event.eventKey, leaseOwner, errorCode });
     logEvent("warn", "email.outbox.attention", {
