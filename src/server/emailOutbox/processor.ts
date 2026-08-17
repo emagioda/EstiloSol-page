@@ -7,8 +7,10 @@ import { updateOrder } from "@/src/server/orders/store";
 import { buildPurchaseReceiptEventKey, parsePurchaseReceiptPayload } from "./payload";
 import { sendPurchaseReceiptToResend } from "./provider";
 import {
+  clearEmailOutboxProviderOutcomeUnknown,
   claimEmailOutboxWork,
   getEmailOutboxEvent,
+  markEmailOutboxProviderOutcomeUnknown,
   markEmailOutboxAccepted,
   markEmailOutboxAttention,
   markEmailOutboxRetryable,
@@ -35,6 +37,8 @@ type ProcessorDependencies = {
   claim: typeof claimEmailOutboxWork;
   getEvent: typeof getEmailOutboxEvent;
   send: typeof sendPurchaseReceiptToResend;
+  markProviderOutcomeUnknown: typeof markEmailOutboxProviderOutcomeUnknown;
+  clearProviderOutcomeUnknown: typeof clearEmailOutboxProviderOutcomeUnknown;
   markAccepted: typeof markEmailOutboxAccepted;
   markRetryable: typeof markEmailOutboxRetryable;
   markAttention: typeof markEmailOutboxAttention;
@@ -88,6 +92,8 @@ const productionDependencies: ProcessorDependencies = {
   claim: claimEmailOutboxWork,
   getEvent: getEmailOutboxEvent,
   send: sendPurchaseReceiptToResend,
+  markProviderOutcomeUnknown: markEmailOutboxProviderOutcomeUnknown,
+  clearProviderOutcomeUnknown: clearEmailOutboxProviderOutcomeUnknown,
   markAccepted: markEmailOutboxAccepted,
   markRetryable: markEmailOutboxRetryable,
   markAttention: markEmailOutboxAttention,
@@ -169,10 +175,11 @@ export const processClaimedEmailOutboxEvent = async (
     return "attention";
   }
 
-  const firstAttemptAt = Date.parse(event.providerFirstAttemptAt ?? "");
+  let providerOutcomeUnknownSince = event.providerOutcomeUnknownSince;
+  const unresolvedSince = Date.parse(providerOutcomeUnknownSince ?? "");
   if (
-    Number.isFinite(firstAttemptAt) &&
-    dependencies.now() - firstAttemptAt >= RESEND_IDEMPOTENCY_WINDOW_MS
+    Number.isFinite(unresolvedSince) &&
+    dependencies.now() - unresolvedSince >= RESEND_IDEMPOTENCY_WINDOW_MS
   ) {
     await dependencies.markAttention({
       eventKey: event.eventKey,
@@ -189,7 +196,21 @@ export const processClaimedEmailOutboxEvent = async (
     return "attention";
   }
 
-  const provider = await dependencies.send({ payload, idempotencyKey: event.idempotencyKey });
+  let uncertaintyCreatedForCurrentRequest = false;
+  const provider = await dependencies.send({
+    payload,
+    idempotencyKey: event.idempotencyKey,
+    beforeProviderRequest: async () => {
+      const unknownSince = new Date(dependencies.now()).toISOString();
+      uncertaintyCreatedForCurrentRequest = !providerOutcomeUnknownSince;
+      const marked = await dependencies.markProviderOutcomeUnknown({
+        eventKey: event.eventKey,
+        leaseOwner,
+        unknownSince,
+      });
+      providerOutcomeUnknownSince = marked.providerOutcomeUnknownSince ?? unknownSince;
+    },
+  });
   const now = dependencies.now();
   if (provider.accepted) {
     let accepted: EmailOutboxEvent;
@@ -219,10 +240,18 @@ export const processClaimedEmailOutboxEvent = async (
     return "accepted";
   }
 
+  if (!provider.outcomeUnknown && uncertaintyCreatedForCurrentRequest) {
+    await dependencies.clearProviderOutcomeUnknown({
+      eventKey: event.eventKey,
+      leaseOwner,
+    });
+    providerOutcomeUnknownSince = undefined;
+  }
+
+  const activeUncertaintySince = Date.parse(providerOutcomeUnknownSince ?? "");
   const outsideUnknownWindow =
-    provider.outcomeUnknown &&
-    Number.isFinite(firstAttemptAt) &&
-    now - firstAttemptAt >= RESEND_IDEMPOTENCY_WINDOW_MS;
+    Number.isFinite(activeUncertaintySince) &&
+    now - activeUncertaintySince >= RESEND_IDEMPOTENCY_WINDOW_MS;
   const exhausted = event.attemptCount >= MAX_EMAIL_ATTEMPTS;
   if (provider.disposition === "attention" || outsideUnknownWindow || exhausted) {
     const errorCode = outsideUnknownWindow ? "RESEND_OUTCOME_UNKNOWN" : provider.errorCode;

@@ -20,6 +20,7 @@ export const EMAIL_OUTBOX_HEADERS = [
   "lease_expires_at",
   "next_attempt_at",
   "provider_first_attempt_at",
+  "provider_outcome_unknown_since",
   "last_attempt_at",
   "last_error_code",
   "provider_message_id",
@@ -70,6 +71,7 @@ export type EmailOutboxEvent = {
   leaseExpiresAt?: string;
   nextAttemptAt?: string;
   providerFirstAttemptAt?: string;
+  providerOutcomeUnknownSince?: string;
   lastAttemptAt?: string;
   lastErrorCode?: string;
   providerMessageId?: string;

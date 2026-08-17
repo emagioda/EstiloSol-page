@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PurchaseReceiptPayloadV1, EmailOutboxEvent } from "./types";
-import type { ReceiptProviderResult } from "./provider";
+import { sendPurchaseReceiptToResend, type ReceiptProviderResult } from "./provider";
 import { canonicalEmailPayloadJson, hashEmailPayload } from "./payload";
 import {
   EMAIL_RETRY_BACKOFF_MS,
@@ -60,14 +60,28 @@ const dependencies = (event = processingEvent()) => ({
   owner: () => "email-worker-one",
   claim: vi.fn(async () => [event]),
   getEvent: vi.fn(async () => event),
-  send: vi.fn(async (): Promise<ReceiptProviderResult> => ({
-    accepted: true,
-    providerMessageId: "provider-message-123",
+  send: vi.fn(async (
+    input: Parameters<typeof sendPurchaseReceiptToResend>[0],
+  ): Promise<ReceiptProviderResult> => {
+    await input.beforeProviderRequest();
+    return {
+      accepted: true,
+      providerMessageId: "provider-message-123",
+    };
+  }),
+  markProviderOutcomeUnknown: vi.fn(async ({ unknownSince }) => ({
+    ...event,
+    providerOutcomeUnknownSince: event.providerOutcomeUnknownSince ?? unknownSince,
+  })),
+  clearProviderOutcomeUnknown: vi.fn(async () => ({
+    ...event,
+    providerOutcomeUnknownSince: undefined,
   })),
   markAccepted: vi.fn(async () => ({
     ...event,
     state: "accepted" as const,
     leaseOwner: undefined,
+    providerOutcomeUnknownSince: undefined,
     acceptedAt: new Date(now).toISOString(),
     providerMessageId: "provider-message-123",
   })),
@@ -87,6 +101,7 @@ describe("AUD3-H06-E durable receipt processor", () => {
     expect(deps.send).toHaveBeenCalledWith({
       payload: payload(),
       idempotencyKey: event.eventKey,
+      beforeProviderRequest: expect.any(Function),
     });
     expect(deps.markAccepted).toHaveBeenCalledWith(expect.objectContaining({
       eventKey: event.eventKey,
@@ -94,6 +109,9 @@ describe("AUD3-H06-E durable receipt processor", () => {
     }));
     expect(deps.markAccepted.mock.invocationCallOrder[0]).toBeLessThan(
       deps.projectMarker.mock.invocationCallOrder[0],
+    );
+    expect(deps.markProviderOutcomeUnknown.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.markAccepted.mock.invocationCallOrder[0],
     );
   });
 
@@ -196,10 +214,164 @@ describe("AUD3-H06-E durable receipt processor", () => {
     expect(deps.markRetryable).not.toHaveBeenCalled();
   });
 
+  it("AUD3-H06E-UNCERTAINTY-01 keeps a local configuration failure known and retryable", async () => {
+    const event = processingEvent({ providerFirstAttemptAt: new Date(now - 1_000).toISOString() });
+    const deps = dependencies(event);
+    deps.send.mockResolvedValueOnce({
+      accepted: false,
+      disposition: "retryable",
+      errorCode: "RESEND_NOT_CONFIGURED",
+      outcomeUnknown: false,
+    });
+
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("retryable");
+    expect(deps.markProviderOutcomeUnknown).not.toHaveBeenCalled();
+    expect(deps.clearProviderOutcomeUnknown).not.toHaveBeenCalled();
+    expect(deps.markRetryable).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: "RESEND_NOT_CONFIGURED",
+    }));
+    expect(deps.markAttention).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-02 does not turn an old known configuration failure into outcome unknown", async () => {
+    const event = processingEvent({
+      attemptCount: 2,
+      providerFirstAttemptAt: new Date(now - 2 * RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      providerOutcomeUnknownSince: undefined,
+      lastErrorCode: "RESEND_NOT_CONFIGURED",
+    });
+    const deps = dependencies(event);
+    deps.send.mockResolvedValueOnce({
+      accepted: false,
+      disposition: "retryable",
+      errorCode: "RESEND_NOT_CONFIGURED",
+      outcomeUnknown: false,
+    });
+
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("retryable");
+    expect(deps.markAttention).not.toHaveBeenCalled();
+    expect(deps.markRetryable).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: "RESEND_NOT_CONFIGURED",
+    }));
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-03 persists uncertainty before a provider-side crash can escape", async () => {
+    const event = processingEvent({ providerOutcomeUnknownSince: undefined });
+    const deps = dependencies(event);
+    deps.send.mockImplementationOnce(async (input) => {
+      await input.beforeProviderRequest();
+      throw new Error("simulated process death before provider outcome persistence");
+    });
+
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).rejects.toThrow(
+      "simulated process death",
+    );
+    expect(deps.markProviderOutcomeUnknown).toHaveBeenCalledWith({
+      eventKey: event.eventKey,
+      leaseOwner: "email-worker-one",
+      unknownSince: new Date(now).toISOString(),
+    });
+    expect(deps.markRetryable).not.toHaveBeenCalled();
+    expect(deps.markAttention).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-04 replays an ambiguous request inside 24h with the same identity", async () => {
+    const event = processingEvent({
+      attemptCount: 2,
+      providerOutcomeUnknownSince: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS + 1).toISOString(),
+      lastErrorCode: "RESEND_NETWORK_ERROR",
+    });
+    const deps = dependencies(event);
+
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("accepted");
+    expect(deps.send).toHaveBeenCalledWith({
+      payload: payload(),
+      idempotencyKey: event.idempotencyKey,
+      beforeProviderRequest: expect.any(Function),
+    });
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-05 stops unresolved ambiguity exactly at 24h", async () => {
+    const event = processingEvent({
+      attemptCount: 2,
+      providerOutcomeUnknownSince: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      lastErrorCode: undefined,
+    });
+    const deps = dependencies(event);
+
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("attention");
+    expect(deps.send).not.toHaveBeenCalled();
+    expect(deps.markAttention).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: "RESEND_OUTCOME_UNKNOWN",
+    }));
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-06 preserves earlier ambiguity after a later known retryable response", async () => {
+    const originalUnknownSince = new Date(now - 60 * 60 * 1000).toISOString();
+    const event = processingEvent({
+      attemptCount: 2,
+      providerOutcomeUnknownSince: originalUnknownSince,
+      lastErrorCode: "RESEND_NETWORK_ERROR",
+    });
+    const deps = dependencies(event);
+    deps.send.mockImplementationOnce(async (input) => {
+      await input.beforeProviderRequest();
+      return {
+        accepted: false,
+        disposition: "retryable",
+        errorCode: "RESEND_RATE_LIMITED",
+        outcomeUnknown: false,
+      };
+    });
+
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("retryable");
+    expect(deps.clearProviderOutcomeUnknown).not.toHaveBeenCalled();
+    expect(deps.markProviderOutcomeUnknown).toHaveBeenCalled();
+    expect(deps.markRetryable).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: "RESEND_RATE_LIMITED",
+    }));
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-07 resolves uncertainty atomically in accepted state", async () => {
+    const event = processingEvent({ providerOutcomeUnknownSince: undefined });
+    const deps = dependencies(event);
+
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("accepted");
+    expect(deps.markProviderOutcomeUnknown.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.markAccepted.mock.invocationCallOrder[0],
+    );
+    await expect(deps.markAccepted.mock.results[0]?.value).resolves.toMatchObject({
+      state: "accepted",
+      providerMessageId: "provider-message-123",
+      providerOutcomeUnknownSince: undefined,
+    });
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-08 keeps concurrent same-key uncertainty active", async () => {
+    const event = processingEvent({ providerOutcomeUnknownSince: undefined });
+    const deps = dependencies(event);
+    deps.send.mockImplementationOnce(async (input) => {
+      await input.beforeProviderRequest();
+      return {
+        accepted: false,
+        disposition: "retryable",
+        errorCode: "RESEND_CONCURRENT_IDEMPOTENT_REQUEST",
+        outcomeUnknown: true,
+      };
+    });
+
+    await expect(processClaimedEmailOutboxEvent(event, "email-worker-one", deps)).resolves.toBe("retryable");
+    expect(deps.markProviderOutcomeUnknown).toHaveBeenCalled();
+    expect(deps.clearProviderOutcomeUnknown).not.toHaveBeenCalled();
+    expect(deps.markRetryable).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: "RESEND_CONCURRENT_IDEMPOTENT_REQUEST",
+    }));
+  });
+
   it("does not blindly retry response-unknown work outside Resend's safe window", async () => {
     const event = processingEvent({
       attemptCount: 2,
-      providerFirstAttemptAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      providerOutcomeUnknownSince: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
       lastErrorCode: "RESEND_NETWORK_ERROR",
     });
     const deps = dependencies(event);
@@ -213,7 +385,7 @@ describe("AUD3-H06-E durable receipt processor", () => {
   it("retries response-unknown work inside the safe window with the same provider key", async () => {
     const event = processingEvent({
       attemptCount: 2,
-      providerFirstAttemptAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS + 1).toISOString(),
+      providerOutcomeUnknownSince: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS + 1).toISOString(),
       lastErrorCode: "RESEND_NETWORK_ERROR",
     });
     const deps = dependencies(event);
@@ -224,7 +396,7 @@ describe("AUD3-H06-E durable receipt processor", () => {
   it("AUD3-H06E-CRASH-06 reclaims blank-error ambiguous processing inside 24h with the same request", async () => {
     const event = processingEvent({
       attemptCount: 2,
-      providerFirstAttemptAt: new Date(now - 60 * 60 * 1000).toISOString(),
+      providerOutcomeUnknownSince: new Date(now - 60 * 60 * 1000).toISOString(),
       lastErrorCode: undefined,
     });
     const deps = dependencies(event);
@@ -232,13 +404,14 @@ describe("AUD3-H06-E durable receipt processor", () => {
     expect(deps.send).toHaveBeenCalledWith({
       payload: payload(),
       idempotencyKey: event.idempotencyKey,
+      beforeProviderRequest: expect.any(Function),
     });
   });
 
   it("AUD3-H06E-CRASH-07 moves blank-error ambiguous processing at 24h to unknown attention", async () => {
     const event = processingEvent({
       attemptCount: 2,
-      providerFirstAttemptAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      providerOutcomeUnknownSince: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
       lastErrorCode: undefined,
     });
     const deps = dependencies(event);
@@ -254,7 +427,7 @@ describe("AUD3-H06-E durable receipt processor", () => {
   it("AUD3-H06E-CRASH-08 accepts an inside-window idempotent replay with the original provider id", async () => {
     const event = processingEvent({
       attemptCount: 2,
-      providerFirstAttemptAt: new Date(now - 60 * 60 * 1000).toISOString(),
+      providerOutcomeUnknownSince: new Date(now - 60 * 60 * 1000).toISOString(),
       lastErrorCode: undefined,
     });
     const deps = dependencies(event);
@@ -272,7 +445,7 @@ describe("AUD3-H06-E durable receipt processor", () => {
   it("AUD3-H06E-CRASH-09 bounds concurrent idempotent uncertainty by the same 24h window", async () => {
     const inside = processingEvent({
       attemptCount: 2,
-      providerFirstAttemptAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS + 1).toISOString(),
+      providerOutcomeUnknownSince: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS + 1).toISOString(),
       lastErrorCode: "RESEND_CONCURRENT_IDEMPOTENT_REQUEST",
     });
     const insideDeps = dependencies(inside);
@@ -289,7 +462,7 @@ describe("AUD3-H06-E durable receipt processor", () => {
 
     const outside = processingEvent({
       attemptCount: 3,
-      providerFirstAttemptAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      providerOutcomeUnknownSince: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
       lastErrorCode: "RESEND_CONCURRENT_IDEMPOTENT_REQUEST",
     });
     const outsideDeps = dependencies(outside);
@@ -306,6 +479,7 @@ describe("AUD3-H06-E durable receipt processor", () => {
       leaseOwner: undefined,
       leaseExpiresAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
       providerFirstAttemptAt: new Date(now - 2 * RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
+      providerOutcomeUnknownSince: new Date(now - 2 * RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
       acceptedAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
       completedAt: new Date(now - RESEND_IDEMPOTENCY_WINDOW_MS).toISOString(),
       providerMessageId: "provider-message-123",

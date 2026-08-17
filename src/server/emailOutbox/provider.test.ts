@@ -21,6 +21,14 @@ const payload: PurchaseReceiptPayloadV1 = {
   templateVersion: 1,
 };
 
+const providerInput = (
+  beforeProviderRequest = vi.fn(async () => undefined),
+) => ({
+  payload,
+  idempotencyKey: "stable-key",
+  beforeProviderRequest,
+});
+
 describe("AUD3-H06-E Resend provider adapter", () => {
   beforeEach(() => {
     process.env.RESEND_API_KEY = "re_test_key";
@@ -31,12 +39,21 @@ describe("AUD3-H06-E Resend provider adapter", () => {
   });
 
   it("sends the stable event identity in Idempotency-Key and requires a provider id", async () => {
+    const callOrder: string[] = [];
+    const beforeProviderRequest = vi.fn(async () => {
+      callOrder.push("durable-uncertainty");
+    });
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ id: "provider-message-123" }), { status: 200 }),
     );
+    fetchMock.mockImplementationOnce(async () => {
+      callOrder.push("provider-fetch");
+      return new Response(JSON.stringify({ id: "provider-message-123" }), { status: 200 });
+    });
     const result = await sendPurchaseReceiptToResend({
       payload,
       idempotencyKey: "purchase-receipt/es-email-provider-000001/v1",
+      beforeProviderRequest,
     });
     expect(result).toEqual({ accepted: true, providerMessageId: "provider-message-123" });
     expect(fetchMock).toHaveBeenCalledWith(
@@ -48,11 +65,12 @@ describe("AUD3-H06-E Resend provider adapter", () => {
         }),
       }),
     );
+    expect(callOrder).toEqual(["durable-uncertainty", "provider-fetch"]);
   });
 
   it("treats a successful response without a valid id as response-unknown", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
-    await expect(sendPurchaseReceiptToResend({ payload, idempotencyKey: "stable-key" })).resolves.toEqual({
+    await expect(sendPurchaseReceiptToResend(providerInput())).resolves.toEqual({
       accepted: false,
       disposition: "retryable",
       errorCode: "RESEND_RESPONSE_INVALID",
@@ -70,7 +88,7 @@ describe("AUD3-H06-E Resend provider adapter", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify(body), { status }),
     );
-    await expect(sendPurchaseReceiptToResend({ payload, idempotencyKey: "stable-key" })).resolves.toMatchObject({
+    await expect(sendPurchaseReceiptToResend(providerInput())).resolves.toMatchObject({
       accepted: false,
       disposition,
       errorCode,
@@ -79,7 +97,7 @@ describe("AUD3-H06-E Resend provider adapter", () => {
 
   it("classifies a network failure as outcome-unknown", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("socket with sensitive detail"));
-    await expect(sendPurchaseReceiptToResend({ payload, idempotencyKey: "stable-key" })).resolves.toEqual({
+    await expect(sendPurchaseReceiptToResend(providerInput())).resolves.toEqual({
       accepted: false,
       disposition: "retryable",
       errorCode: "RESEND_NETWORK_ERROR",
@@ -91,7 +109,7 @@ describe("AUD3-H06-E Resend provider adapter", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ name: "concurrent_idempotent_requests" }), { status: 409 }),
     );
-    await expect(sendPurchaseReceiptToResend({ payload, idempotencyKey: "stable-key" })).resolves.toEqual({
+    await expect(sendPurchaseReceiptToResend(providerInput())).resolves.toEqual({
       accepted: false,
       disposition: "retryable",
       errorCode: "RESEND_CONCURRENT_IDEMPOTENT_REQUEST",
@@ -102,10 +120,12 @@ describe("AUD3-H06-E Resend provider adapter", () => {
   it("never calls the provider when Resend is not configured", async () => {
     delete process.env.RESEND_API_KEY;
     const fetchMock = vi.spyOn(globalThis, "fetch");
-    await expect(sendPurchaseReceiptToResend({ payload, idempotencyKey: "stable-key" })).resolves.toMatchObject({
+    const beforeProviderRequest = vi.fn(async () => undefined);
+    await expect(sendPurchaseReceiptToResend(providerInput(beforeProviderRequest))).resolves.toMatchObject({
       accepted: false,
       errorCode: "RESEND_NOT_CONFIGURED",
     });
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(beforeProviderRequest).not.toHaveBeenCalled();
   });
 });

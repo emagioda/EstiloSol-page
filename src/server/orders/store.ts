@@ -405,6 +405,9 @@ export const mergeOrderUpdate = (
   };
 };
 
+const needsEnrolledSalesProjectionRecovery = (order: Order): boolean =>
+  order.paymentStatus === "confirmed" && order.receiptOutboxVersion === 1;
+
 export async function updateOrder(
   externalReference: string,
   patch: OrderPatch,
@@ -415,10 +418,11 @@ export async function updateOrder(
     if (!current) return null;
 
     const normalizedCurrent = ensureOrderDefaults(current);
-    const { order: updated, inventoryStatePreserved } = mergeOrderUpdate(
+    const { order: mergedOrder, inventoryStatePreserved } = mergeOrderUpdate(
       normalizedCurrent,
       patch
     );
+    let updated = mergedOrder;
 
     if (inventoryStatePreserved) {
       logEvent("info", "orders.inventory_state_preserved", {
@@ -463,13 +467,46 @@ export async function updateOrder(
       } catch (error) {
         logEvent("warn", "orders.sync_sheet_update_failed", {
           externalReference: updated.externalReference,
-          error,
+          errorName: error instanceof Error ? error.name : "unknown",
         });
         logEvent("warn", "orders.sheet_sync_pending", {
           orderId: updated.externalReference,
           inventoryStatus: resolveOrderInventoryStatus(updated) ?? "legacy",
           errorName: error instanceof Error ? error.name : "unknown",
         });
+        if (needsEnrolledSalesProjectionRecovery(updated)) {
+          const salesSheetSyncFailedAt = Date.now();
+          const failedProjectionOrder = {
+            ...updated,
+            salesSheetSyncFailedAt,
+            updatedAt: Math.max(updated.updatedAt, salesSheetSyncFailedAt),
+          };
+          try {
+            await setJson(
+              orderKey(externalReference),
+              failedProjectionOrder,
+              privacyPolicy.ttlSecondsForStatus(failedProjectionOrder.status),
+            );
+            updated = failedProjectionOrder;
+          } catch (stateError) {
+            logEvent("error", "orders.sales_sheet_sync_failure_state_failed", {
+              orderId: externalReference,
+              paymentStatus: updated.paymentStatus,
+              inventoryStatus: resolveOrderInventoryStatus(updated) ?? "legacy",
+              outcome: stateError instanceof Error ? stateError.name : "unknown",
+            });
+          }
+          try {
+            await addPendingSalesSheetOrder(externalReference);
+          } catch (indexError) {
+            logEvent("error", "orders.sales_sheet_pending_index_failed", {
+              orderId: externalReference,
+              paymentStatus: updated.paymentStatus,
+              inventoryStatus: resolveOrderInventoryStatus(updated) ?? "legacy",
+              outcome: indexError instanceof Error ? indexError.name : "unknown",
+            });
+          }
+        }
       }
     }
 

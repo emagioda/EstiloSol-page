@@ -46,6 +46,7 @@ import {
   isPendingSalesSheetOrder,
   removePendingSalesSheetOrder,
 } from "./salesSheetSync";
+import { recoverPendingSalesSheetOrder } from "./salesSheetRecovery";
 
 let sequence = 0;
 const makeOrder = (patch: Partial<Order> = {}): Order => {
@@ -439,6 +440,42 @@ describe("AUD3 Mercado Pago bulk order-store reconciliation", () => {
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
     expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
   });
+
+  it("AUD3-H06E-SALES-10 keeps MP financial, inventory, and receipt enrollment single during sales repair", async () => {
+    const order = makeOrder();
+    await createOrder(order);
+    vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(new Error("Sheets unavailable"));
+
+    const first = await reconcileMercadoPagoPaymentObservationBatch(
+      order.externalReference,
+      [observation("A", "approved", 30)],
+    );
+    expect(first).toMatchObject({
+      firstEffectiveApproval: true,
+      order: {
+        paymentStatus: "confirmed",
+        receiptOutboxVersion: 1,
+        salesSheetSyncFailedAt: expect.any(Number),
+      },
+      receiptOrder: { receiptOutboxVersion: 1 },
+    });
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(true);
+
+    const replay = await reconcileMercadoPagoPaymentObservationBatch(
+      order.externalReference,
+      [observation("A", "approved", 31)],
+    );
+    expect(replay.firstEffectiveApproval).toBe(false);
+    expect(replay.receiptOrder).toBeUndefined();
+
+    vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
+    await expect(
+      recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }),
+    ).resolves.toMatchObject({ outcome: "reconciled" });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(false);
+  });
 });
 
 describe("PR 2 recoverable Sheets synchronization", () => {
@@ -492,6 +529,49 @@ describe("PR 2 recoverable Sheets synchronization", () => {
       inventoryStatus: "error",
       inventoryIssueCode: "SHEETS_UNAVAILABLE",
     });
+  });
+
+  it.each(["cash", "transfer"] as const)(
+    "AUD3-H06E-SALES-01 %s confirmation keeps durable enrolled recovery intent when the row update fails",
+    async (paymentMethod) => {
+      const order = makeOrder({ paymentMethod });
+      await createOrder(order);
+      const initial = await getOrder(order.externalReference);
+      expect(initial?.salesSheetSyncedAt).toEqual(expect.any(Number));
+      vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(new Error("Sheets unavailable"));
+
+      const updated = await approve(order);
+
+      expect(updated).toMatchObject({
+        paymentStatus: "confirmed",
+        receiptOutboxVersion: 1,
+        salesSheetSyncedAt: initial?.salesSheetSyncedAt,
+        salesSheetSyncFailedAt: expect.any(Number),
+      });
+      await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+        paymentStatus: "confirmed",
+        receiptOutboxVersion: 1,
+        salesSheetSyncFailedAt: expect.any(Number),
+      });
+      await expect(isPendingSalesSheetOrder(order.externalReference)).resolves.toBe(true);
+      await removePendingSalesSheetOrder(order.externalReference);
+    },
+  );
+
+  it("AUD3-H06E-SALES-06 does not index a legacy confirmed Order after an unrelated projection failure", async () => {
+    const order = makeOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      receiptOutboxVersion: undefined,
+    });
+    await createOrder(order);
+    vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(new Error("Sheets unavailable"));
+
+    const updated = await updateOrder(order.externalReference, { shippingStatus: "completed" });
+
+    expect(updated?.receiptOutboxVersion).toBeUndefined();
+    expect(updated?.salesSheetSyncFailedAt).toBeUndefined();
+    await expect(isPendingSalesSheetOrder(order.externalReference)).resolves.toBe(false);
   });
 
   it("PR2-SYNC-09 failed approved append keeps the confirmed KV order indexed", async () => {

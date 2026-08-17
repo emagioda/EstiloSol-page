@@ -81,6 +81,7 @@ const EMAIL_OUTBOX_EVENT_HEADERS = [
   "lease_expires_at",
   "next_attempt_at",
   "provider_first_attempt_at",
+  "provider_outcome_unknown_since",
   "last_attempt_at",
   "last_error_code",
   "provider_message_id",
@@ -324,6 +325,8 @@ function getPostScope_(payload, action) {
     "upsert_email_outbox_event",
     "get_email_outbox_event",
     "claim_email_outbox_work",
+    "mark_email_outbox_provider_outcome_unknown",
+    "clear_email_outbox_provider_outcome_unknown",
     "mark_email_outbox_accepted",
     "mark_email_outbox_retryable",
     "mark_email_outbox_attention",
@@ -1916,6 +1919,7 @@ function validateEmailOutboxEventInput_(input) {
     String(input.lease_expires_at || "") ||
     String(input.next_attempt_at || "") ||
     String(input.provider_first_attempt_at || "") ||
+    String(input.provider_outcome_unknown_since || "") ||
     String(input.last_attempt_at || "") ||
     String(input.provider_message_id || "") ||
     String(input.accepted_at || "") ||
@@ -2002,11 +2006,11 @@ function handleClaimEmailOutboxWork_(payload) {
     const attemptCount = Number(row.object.attempt_count || 0);
     const expiredProcessing =
       state === "processing" && (!isFinite(currentExpiry) || currentExpiry <= claimedAtMs);
-    const providerFirstAttemptAt = Date.parse(String(row.object.provider_first_attempt_at || ""));
+    const providerOutcomeUnknownSince = Date.parse(String(row.object.provider_outcome_unknown_since || ""));
     if (
-      expiredProcessing &&
-      isFinite(providerFirstAttemptAt) &&
-      claimedAtMs - providerFirstAttemptAt >= EMAIL_OUTBOX_PROVIDER_IDEMPOTENCY_WINDOW_MS
+      (expiredProcessing || state === "retryable") &&
+      isFinite(providerOutcomeUnknownSince) &&
+      claimedAtMs - providerOutcomeUnknownSince >= EMAIL_OUTBOX_PROVIDER_IDEMPOTENCY_WINDOW_MS
     ) {
       completeEmailOutboxState_(
         { schema: data.schema, row: row },
@@ -2100,6 +2104,27 @@ function completeEmailOutboxState_(found, targetState, errorCode, completedAt, n
   writeEmailOutboxRow_(found);
 }
 
+function handleMarkEmailOutboxProviderOutcomeUnknown_(payload) {
+  const found = findEmailOutboxEvent_(payload.eventKey);
+  assertEmailLeaseOwner_(found, String(payload.leaseOwner || "").trim());
+  const unknownSince = assertRecoveryIsoDate_(payload.unknownSince, "provider outcome unknownSince", false);
+  if (!String(found.row.object.provider_outcome_unknown_since || "")) {
+    found.row.object.provider_outcome_unknown_since = unknownSince;
+    found.row.object.updated_at = new Date().toISOString();
+    writeEmailOutboxRow_(found);
+  }
+  return { ok: true, result: "EMAIL_PROVIDER_OUTCOME_UNKNOWN", event: found.row.object };
+}
+
+function handleClearEmailOutboxProviderOutcomeUnknown_(payload) {
+  const found = findEmailOutboxEvent_(payload.eventKey);
+  assertEmailLeaseOwner_(found, String(payload.leaseOwner || "").trim());
+  found.row.object.provider_outcome_unknown_since = "";
+  found.row.object.updated_at = new Date().toISOString();
+  writeEmailOutboxRow_(found);
+  return { ok: true, result: "EMAIL_PROVIDER_OUTCOME_KNOWN", event: found.row.object };
+}
+
 function handleMarkEmailOutboxAccepted_(payload) {
   const found = findEmailOutboxEvent_(payload.eventKey);
   const providerMessageId = String(payload.providerMessageId || "").trim();
@@ -2111,6 +2136,10 @@ function handleMarkEmailOutboxAccepted_(payload) {
     if (String(found.row.object.provider_message_id) !== providerMessageId) {
       throw recoveryError_("EMAIL_OUTBOX_EVENT_CONFLICT", "Accepted provider id is immutable");
     }
+    if (String(found.row.object.provider_outcome_unknown_since || "")) {
+      found.row.object.provider_outcome_unknown_since = "";
+      writeEmailOutboxRow_(found);
+    }
     return { ok: true, result: "EMAIL_EVENT_ACCEPTED", event: found.row.object };
   }
   assertEmailLeaseOwner_(found, String(payload.leaseOwner || "").trim());
@@ -2120,6 +2149,7 @@ function handleMarkEmailOutboxAccepted_(payload) {
   found.row.object.lease_expires_at = "";
   found.row.object.next_attempt_at = "";
   found.row.object.last_error_code = "";
+  found.row.object.provider_outcome_unknown_since = "";
   found.row.object.provider_message_id = providerMessageId;
   found.row.object.accepted_at = acceptedAt;
   found.row.object.completed_at = acceptedAt;
@@ -2362,6 +2392,8 @@ function doPost(e) {
     if (action === "upsert_email_outbox_event") return jsonOutput(handleUpsertEmailOutboxEvent_(payload));
     if (action === "get_email_outbox_event") return jsonOutput(handleGetEmailOutboxEvent_(payload));
     if (action === "claim_email_outbox_work") return jsonOutput(handleClaimEmailOutboxWork_(payload));
+    if (action === "mark_email_outbox_provider_outcome_unknown") return jsonOutput(handleMarkEmailOutboxProviderOutcomeUnknown_(payload));
+    if (action === "clear_email_outbox_provider_outcome_unknown") return jsonOutput(handleClearEmailOutboxProviderOutcomeUnknown_(payload));
     if (action === "mark_email_outbox_accepted") return jsonOutput(handleMarkEmailOutboxAccepted_(payload));
     if (action === "mark_email_outbox_retryable") return jsonOutput(handleMarkEmailOutboxRetryable_(payload));
     if (action === "mark_email_outbox_attention") return jsonOutput(handleMarkEmailOutboxAttention_(payload));

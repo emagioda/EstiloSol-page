@@ -1148,7 +1148,7 @@ const recoveryPost = (
 const emailOutboxHeaders = [
   "event_key", "external_reference", "notification_type", "schema_version", "template_version",
   "payload_hash", "payload_json", "idempotency_key", "state", "attempt_count", "lease_owner",
-  "lease_expires_at", "next_attempt_at", "provider_first_attempt_at", "last_attempt_at",
+  "lease_expires_at", "next_attempt_at", "provider_first_attempt_at", "provider_outcome_unknown_since", "last_attempt_at",
   "last_error_code", "provider_message_id", "accepted_at", "created_at", "updated_at", "completed_at",
 ];
 
@@ -1182,6 +1182,7 @@ const emailOutboxEvent = (patch: Record<string, unknown> = {}) => {
     lease_expires_at: "",
     next_attempt_at: "",
     provider_first_attempt_at: "",
+    provider_outcome_unknown_since: "",
     last_attempt_at: "",
     last_error_code: "",
     provider_message_id: "",
@@ -1259,6 +1260,7 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
     }) as { events?: unknown[] };
     expect(first.events?.[0]).toMatchObject({ attempt_count: 1, lease_owner: "email-worker-one" });
     expect(first.events?.[0]).toMatchObject({ provider_first_attempt_at: claim.claimedAt });
+    expect(first.events?.[0]).toMatchObject({ provider_outcome_unknown_since: "" });
     expect(replay.events?.[0]).toMatchObject({ attempt_count: 1, lease_owner: "email-worker-one" });
     expect(overlap.events).toEqual([]);
   });
@@ -1290,6 +1292,67 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
     ]);
   });
 
+  it("AUD3-H06E-UNCERTAINTY-03 durably marks provider uncertainty under the active lease", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "ensureRecoverySchema");
+    const event = emailOutboxEvent();
+    recoveryPost(harness, "upsertEmailOutboxEvent", { event });
+    recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 1,
+    });
+
+    const marked = recoveryPost(harness, "markEmailOutboxProviderOutcomeUnknown", {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-one",
+      unknownSince: "2026-08-16T10:01:30.000Z",
+    });
+    expect(marked).toMatchObject({
+      result: "EMAIL_PROVIDER_OUTCOME_UNKNOWN",
+      event: { provider_outcome_unknown_since: "2026-08-16T10:01:30.000Z" },
+    });
+
+    const cleared = recoveryPost(harness, "clearEmailOutboxProviderOutcomeUnknown", {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-one",
+    });
+    expect(cleared).toMatchObject({
+      result: "EMAIL_PROVIDER_OUTCOME_KNOWN",
+      event: { provider_outcome_unknown_since: "" },
+    });
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-02 does not cutoff an old prepared attempt without unresolved uncertainty", () => {
+    const row = emailOutboxRow({
+      state: "processing",
+      attempt_count: 1,
+      lease_owner: "email-worker-one",
+      lease_expires_at: "2026-08-15T10:05:00.000Z",
+      provider_first_attempt_at: "2026-08-15T10:00:00.000Z",
+      provider_outcome_unknown_since: "",
+      last_attempt_at: "2026-08-15T10:00:00.000Z",
+      last_error_code: "RESEND_NOT_CONFIGURED",
+    });
+    const harness = createHarness([], {
+      emailOutboxHeaders,
+      emailOutboxRows: [row],
+      emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
+    });
+    const result = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-two",
+      claimedAt: "2026-08-17T10:00:00.000Z",
+      leaseExpiresAt: "2026-08-17T10:05:00.000Z",
+      maxEvents: 1,
+    }) as { events?: Array<Record<string, unknown>> };
+    expect(result.events?.[0]).toMatchObject({
+      state: "processing",
+      attempt_count: 2,
+      provider_outcome_unknown_since: "",
+    });
+  });
+
   it("AUD3-H06E-CRASH-06 reclaims blank-error ambiguous processing inside 24h", () => {
     const payloadJson = String(emailOutboxEvent().payload_json);
     const row = emailOutboxRow({
@@ -1298,6 +1361,7 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
       lease_owner: "email-worker-one",
       lease_expires_at: "2026-08-16T10:05:00.000Z",
       provider_first_attempt_at: "2026-08-16T10:00:00.000Z",
+      provider_outcome_unknown_since: "2026-08-16T10:00:00.000Z",
       last_attempt_at: "2026-08-16T10:00:00.000Z",
       last_error_code: "",
     });
@@ -1329,6 +1393,7 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
       lease_owner: "email-worker-one",
       lease_expires_at: "2026-08-16T10:05:00.000Z",
       provider_first_attempt_at: "2026-08-16T10:00:00.000Z",
+      provider_outcome_unknown_since: "2026-08-16T10:00:00.000Z",
       last_attempt_at: "2026-08-16T10:00:00.000Z",
       last_error_code: "",
     });
@@ -1391,6 +1456,11 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
       leaseExpiresAt: "2026-08-16T10:06:00.000Z",
       maxEvents: 1,
     });
+    recoveryPost(harness, "markEmailOutboxProviderOutcomeUnknown", {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-one",
+      unknownSince: "2026-08-16T10:01:30.000Z",
+    });
     const accepted = recoveryPost(harness, "markEmailOutboxAccepted", {
       eventKey: event.event_key,
       leaseOwner: "email-worker-one",
@@ -1399,7 +1469,12 @@ describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
     });
     expect(accepted).toMatchObject({
       result: "EMAIL_EVENT_ACCEPTED",
-      event: { state: "accepted", provider_message_id: "provider-message-123", payload_json: "" },
+      event: {
+        state: "accepted",
+        provider_message_id: "provider-message-123",
+        provider_outcome_unknown_since: "",
+        payload_json: "",
+      },
     });
     expect(recoveryPost(harness, "markEmailOutboxRetryable", {
       eventKey: event.event_key,

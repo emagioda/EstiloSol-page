@@ -107,6 +107,7 @@ const parseEvent = (input: unknown): EmailOutboxEvent => {
     leaseExpiresAt: optionalString(row.lease_expires_at),
     nextAttemptAt: optionalString(row.next_attempt_at),
     providerFirstAttemptAt: optionalString(row.provider_first_attempt_at),
+    providerOutcomeUnknownSince: optionalString(row.provider_outcome_unknown_since),
     lastAttemptAt: optionalString(row.last_attempt_at),
     lastErrorCode: optionalString(row.last_error_code),
     providerMessageId: optionalString(row.provider_message_id),
@@ -206,6 +207,7 @@ export const upsertEmailOutboxEvent = async (input: {
       lease_expires_at: "",
       next_attempt_at: "",
       provider_first_attempt_at: "",
+      provider_outcome_unknown_since: "",
       last_attempt_at: "",
       last_error_code: "",
       provider_message_id: "",
@@ -257,6 +259,26 @@ export const claimEmailOutboxWork = async (input: {
 type StateMutationInput = {
   eventKey: string;
   leaseOwner: string;
+};
+
+export const markEmailOutboxProviderOutcomeUnknown = async (
+  input: StateMutationInput & { unknownSince: string },
+): Promise<EmailOutboxEvent> => {
+  const response = await postEmailAction({ action: "markEmailOutboxProviderOutcomeUnknown", ...input });
+  if (response.result !== "EMAIL_PROVIDER_OUTCOME_UNKNOWN") {
+    throw new EmailOutboxStoreError("EMAIL_OUTBOX_RESPONSE_INVALID", "Unexpected provider uncertainty result");
+  }
+  return parseEvent(response.event);
+};
+
+export const clearEmailOutboxProviderOutcomeUnknown = async (
+  input: StateMutationInput,
+): Promise<EmailOutboxEvent> => {
+  const response = await postEmailAction({ action: "clearEmailOutboxProviderOutcomeUnknown", ...input });
+  if (response.result !== "EMAIL_PROVIDER_OUTCOME_KNOWN") {
+    throw new EmailOutboxStoreError("EMAIL_OUTBOX_RESPONSE_INVALID", "Unexpected provider certainty result");
+  }
+  return parseEvent(response.event);
 };
 
 export const markEmailOutboxAccepted = async (

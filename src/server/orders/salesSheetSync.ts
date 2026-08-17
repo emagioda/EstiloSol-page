@@ -25,6 +25,14 @@ export async function isPendingSalesSheetOrder(orderId: string): Promise<boolean
 }
 
 export function shouldRecoverOrderInSalesSheet(order: Order): boolean {
+  if (
+    order.paymentStatus === "confirmed" &&
+    order.receiptOutboxVersion === 1 &&
+    order.salesSheetSyncFailedAt
+  ) {
+    return true;
+  }
+
   if (!order.salesSheetDeferredUntilApprovedAt) return false;
 
   return Boolean(

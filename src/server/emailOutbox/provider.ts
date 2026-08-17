@@ -29,6 +29,7 @@ const readErrorType = async (response: Response): Promise<string> => {
 export const sendPurchaseReceiptToResend = async (input: {
   payload: PurchaseReceiptPayloadV1;
   idempotencyKey: string;
+  beforeProviderRequest: () => Promise<void>;
 }): Promise<ReceiptProviderResult> => {
   const apiKey = env.getOptionalServer("RESEND_API_KEY");
   if (!apiKey) {
@@ -40,6 +41,7 @@ export const sendPurchaseReceiptToResend = async (input: {
     };
   }
   const request = renderPurchaseReceiptV1(input.payload);
+  await input.beforeProviderRequest();
   let response: Response;
   try {
     response = await fetch("https://api.resend.com/emails", {
