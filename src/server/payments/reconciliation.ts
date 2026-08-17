@@ -1,16 +1,14 @@
-import { scheduleAfterResponse } from "@/src/server/http/afterResponse";
-import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
-import { logEvent } from "@/src/server/observability/log";
-import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import {
-  claimReceiptEmailDelivery,
+  ensurePurchaseReceiptEventSafely,
+  nudgePurchaseReceiptEvent,
+} from "@/src/server/emailOutbox/service";
+import { logEvent } from "@/src/server/observability/log";
+import {
   ensureOrderDurableInSalesSheet,
   ensureOrderExists,
   getOrder,
   reconcileMercadoPagoPaymentObservation,
   reconcileMercadoPagoPaymentObservationBatch,
-  releaseReceiptEmailDelivery,
-  updateOrder,
 } from "@/src/server/orders/store";
 import type { Order } from "@/src/server/orders/types";
 import type { MercadoPagoPaymentObservation } from "./ledger";
@@ -89,46 +87,6 @@ export type MercadoPagoBatchReconciliationResult =
       firstEffectiveApproval: boolean;
       activeApprovedPaymentIds: string[];
     };
-
-const safeMetric = async (event: Parameters<typeof trackBusinessEvent>[0], properties: Record<string, unknown>) => {
-  try {
-    await trackBusinessEvent(event, properties);
-  } catch (error) {
-    logEvent("warn", "payments.reconciliation_metric_failed", {
-      event,
-      errorName: error instanceof Error ? error.name : "unknown",
-    });
-  }
-};
-
-const trySendReceiptEmail = async (order: Order, paymentId: string, approvedAt: number) => {
-  if (order.receiptEmailSentAt) return;
-  const claimed = await claimReceiptEmailDelivery(order.externalReference);
-  if (!claimed) return;
-
-  const latestOrder = await getOrder(order.externalReference);
-  if (latestOrder?.receiptEmailSentAt) return;
-
-  const result = await sendOrderReceiptEmail({ order, paymentId, approvedAt });
-  if (result.sent) {
-    await updateOrder(order.externalReference, { receiptEmailSentAt: Date.now() });
-    await safeMetric("payment.receipt_email.sent", { externalReference: order.externalReference });
-    return;
-  }
-
-  if (result.reason !== "missing_customer_email") {
-    logEvent("warn", "payments.receipt_email_failed", {
-      externalReference: order.externalReference,
-      reason: result.reason,
-      detail: result.detail,
-    });
-    await safeMetric("payment.receipt_email.failed", {
-      externalReference: order.externalReference,
-      reason: result.reason,
-    });
-  }
-  await releaseReceiptEmailDelivery(order.externalReference);
-};
 
 const ignored = (
   reason: Extract<MercadoPagoReconciliationResult, { outcome: "ignored" }>["reason"],
@@ -320,7 +278,13 @@ export async function reconcileMercadoPagoPayment(input: {
   if (result.firstEffectiveApproval && result.receiptOrder) {
     const approvedAt =
       result.receiptOrder.mpPaymentLedger?.[paymentId]?.approvedAt ?? observation.observedAt;
-    scheduleAfterResponse(() => trySendReceiptEmail(result.receiptOrder!, paymentId, approvedAt));
+    await ensurePurchaseReceiptEventSafely({
+      order: result.receiptOrder,
+      paymentId,
+      approvedAt,
+    });
+  } else if (result.order.paymentStatus === "confirmed") {
+    nudgePurchaseReceiptEvent(result.order.externalReference);
   }
 
   return reconciledObservationResult({
@@ -550,10 +514,14 @@ export async function reconcileMercadoPagoPaymentObservations(input: {
         result.receiptOrder.mpPaymentLedger?.[paymentId]?.approvedAt ??
         result.receiptOrder.approvedAt ??
         Date.now();
-      scheduleAfterResponse(() =>
-        trySendReceiptEmail(result.receiptOrder!, paymentId, approvedAt)
-      );
+      await ensurePurchaseReceiptEventSafely({
+        order: result.receiptOrder,
+        paymentId,
+        approvedAt,
+      });
     }
+  } else if (projectedOrder.paymentStatus === "confirmed") {
+    nudgePurchaseReceiptEvent(projectedOrder.externalReference);
   }
 
   return {
@@ -663,9 +631,13 @@ export async function reconcileRecoveryPaymentEvent(
       const approvedAt =
         result.receiptOrder.mpPaymentLedger?.[event.paymentId]?.approvedAt ??
         Date.parse(event.observedAt);
-      scheduleAfterResponse(() =>
-        trySendReceiptEmail(result.receiptOrder!, event.paymentId, approvedAt),
-      );
+      await ensurePurchaseReceiptEventSafely({
+        order: result.receiptOrder,
+        paymentId: event.paymentId,
+        approvedAt,
+      });
+    } else if (sales.order.paymentStatus === "confirmed") {
+      nudgePurchaseReceiptEvent(sales.order.externalReference);
     }
     return { outcome: "completed", order: sales.order };
   } catch (error) {

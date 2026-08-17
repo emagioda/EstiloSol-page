@@ -52,6 +52,8 @@ const buildOperationalSheetUpdates = (order: Order, updatedAt: number) => ({
   mpStatus: order.mpStatus,
   mpPaymentId: order.mpPaymentId,
   mpPreferenceId: order.mpPreferenceId,
+  approvedAt: order.approvedAt ?? null,
+  receiptOutboxVersion: order.receiptOutboxVersion,
   receiptEmailSentAt: order.receiptEmailSentAt,
   inventoryStatus: resolveOrderInventoryStatus(order) ?? null,
   inventoryIssueCode: order.inventoryIssueCode ?? null,
@@ -122,7 +124,7 @@ export async function recoverPendingSalesSheetOrder(
       return { outcome: "not_eligible", order };
     }
 
-    if (order.salesSheetSyncedAt) {
+    if (order.salesSheetSyncedAt && !order.salesSheetSyncFailedAt) {
       await removePending(orderId);
       logRecovery("info", "orders.sales_sheet_append_recovered", order, "already_synced");
       return { outcome: "already_synced", order };

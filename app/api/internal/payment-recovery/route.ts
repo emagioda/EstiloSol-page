@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { runEmailOutboxWorker } from "@/src/server/emailOutbox/worker";
 import { logEvent } from "@/src/server/observability/log";
 import { runPaymentRecoveryWorker } from "@/src/server/recovery/worker";
 
@@ -12,13 +13,32 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: false }, { status: 401 });
   }
 
+  let financial: Awaited<ReturnType<typeof runPaymentRecoveryWorker>> | null = null;
+  let financialFailed = false;
   try {
-    const result = await runPaymentRecoveryWorker();
-    return NextResponse.json(result, { status: 200 });
+    financial = await runPaymentRecoveryWorker();
   } catch (error) {
+    financialFailed = true;
     logEvent("error", "recovery.worker.failed", {
       errorName: error instanceof Error ? error.name : "unknown",
     });
-    return NextResponse.json({ ok: false }, { status: 503 });
   }
+
+  let email: Awaited<ReturnType<typeof runEmailOutboxWorker>> | null = null;
+  try {
+    email = await runEmailOutboxWorker();
+  } catch (error) {
+    logEvent("error", "email.outbox.worker_failed", {
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+  }
+
+  return NextResponse.json(
+    {
+      ok: !financialFailed,
+      financial,
+      email: email ?? { ok: false },
+    },
+    { status: financialFailed ? 503 : 200 },
+  );
 }

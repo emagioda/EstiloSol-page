@@ -47,6 +47,8 @@ const makeOrder = (patch: Partial<Order> = {}): Order => {
     shippingStatus: "in_process",
     inventoryStatus: "deducted",
     stockDeductedAt: 100,
+    approvedAt: 15,
+    receiptOutboxVersion: 1,
     salesSheetDeferredUntilApprovedAt: 1,
     salesSheetSyncFailedAt: 2,
     items: [
@@ -222,11 +224,121 @@ describe("PR 2 indexed sales Sheet recovery", () => {
       order.externalReference,
       expect.objectContaining({
         paymentStatus: "confirmed",
+        approvedAt: 15,
+        receiptOutboxVersion: 1,
         inventoryStatus: "deducted",
         stockDeductedAt: 100,
       })
     );
     expect(dependencies.removePending).toHaveBeenCalledWith(order.externalReference);
+  });
+
+  it("AUD3-H06E-SALES-02 an older sync timestamp cannot suppress a newer failed projection", async () => {
+    const order = makeOrder({
+      salesSheetSyncedAt: 10,
+      salesSheetSyncFailedAt: 20,
+      salesSheetDeferredUntilApprovedAt: undefined,
+    });
+    const dependencies = dependenciesFor(order);
+
+    const result = await recoverPendingSalesSheetOrder(
+      order.externalReference,
+      { rowExists: true },
+      dependencies,
+    );
+
+    expect(result.outcome).toBe("reconciled");
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledOnce();
+    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H06E-SALES-03 repairs an existing enrolled row before clearing durable recovery intent", async () => {
+    const order = makeOrder({
+      salesSheetSyncedAt: 10,
+      salesSheetSyncFailedAt: 20,
+      salesSheetDeferredUntilApprovedAt: undefined,
+    });
+    const dependencies = dependenciesFor(order);
+
+    await recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }, dependencies);
+
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      order.externalReference,
+      expect.objectContaining({
+        paymentStatus: "confirmed",
+        approvedAt: 15,
+        receiptOutboxVersion: 1,
+        inventoryStatus: "deducted",
+        stockDeductedAt: 100,
+      }),
+    );
+    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
+    expect(dependencies.persistOrder).toHaveBeenCalledWith(
+      order.externalReference,
+      expect.objectContaining({
+        salesSheetSyncFailedAt: undefined,
+        salesSheetSyncedAt: 1_000,
+      }),
+      { syncSheet: false },
+    );
+    expect(dependencies.persistOrder.mock.invocationCallOrder[0]).toBeLessThan(
+      dependencies.removePending.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("AUD3-H06E-AUTO-SALES-08 excludes a legacy confirmed Order without enrollment", async () => {
+    const order = makeOrder({
+      receiptOutboxVersion: undefined,
+      salesSheetDeferredUntilApprovedAt: undefined,
+      salesSheetSyncFailedAt: 20,
+    });
+    const dependencies = dependenciesFor(order);
+
+    const result = await recoverPendingSalesSheetOrder(
+      order.externalReference,
+      { rowExists: true },
+      dependencies,
+    );
+
+    expect(result.outcome).toBe("not_eligible");
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
+    expect(dependencies.removePending).toHaveBeenCalledWith(order.externalReference);
+  });
+
+  it("AUD3-H06E-AUTO-SALES-09 reconciles an existing row without a duplicate append", async () => {
+    const order = makeOrder({ salesSheetSyncedAt: 10, salesSheetSyncFailedAt: 20 });
+
+    await recoverPendingSalesSheetOrder(
+      order.externalReference,
+      { rowExists: true },
+      dependenciesFor(order),
+    );
+
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledOnce();
+    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H06E-AUTO-SALES-10 keeps recovery indexed when an existing-row repair fails again", async () => {
+    const order = makeOrder({ salesSheetSyncedAt: 10, salesSheetSyncFailedAt: 20 });
+    const dependencies = dependenciesFor(order);
+    vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(new Error("Sheets still unavailable"));
+
+    const result = await recoverPendingSalesSheetOrder(
+      order.externalReference,
+      { rowExists: true },
+      dependencies,
+    );
+
+    expect(result.outcome).toBe("pending");
+    expect(dependencies.addPending).toHaveBeenCalledWith(order.externalReference);
+    expect(dependencies.removePending).not.toHaveBeenCalled();
+    expect(dependencies.persistOrder).toHaveBeenCalledWith(
+      order.externalReference,
+      { salesSheetSyncFailedAt: 1_000 },
+      { syncSheet: false },
+    );
+    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
   });
 
   it("PR2-SYNC-20-LOCK concurrent recovery allows at most one effective append", async () => {

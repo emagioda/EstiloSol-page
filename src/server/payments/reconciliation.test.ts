@@ -13,8 +13,9 @@ vi.mock("@/src/server/sheets/repository", () => ({
 vi.mock("@/src/server/catalog/getProducts", () => ({
   invalidateProductsCatalogCache: vi.fn(async () => undefined),
 }));
-vi.mock("@/src/server/notifications/orderReceipt", () => ({
-  sendOrderReceiptEmail: vi.fn(async () => ({ sent: true })),
+vi.mock("@/src/server/emailOutbox/service", () => ({
+  ensurePurchaseReceiptEventSafely: vi.fn(async () => null),
+  nudgePurchaseReceiptEvent: vi.fn(),
 }));
 vi.mock("@/src/server/http/afterResponse", () => ({
   scheduleAfterResponse: vi.fn((task: () => Promise<void> | void) => {
@@ -31,7 +32,7 @@ vi.mock("@/src/server/recovery/repository", () => ({
   markRecoveryEventState: vi.fn(async () => undefined),
 }));
 
-import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
+import { ensurePurchaseReceiptEventSafely } from "@/src/server/emailOutbox/service";
 import { createOrder, getOrder } from "@/src/server/orders/store";
 import {
   appendOrderToSalesSheet,
@@ -133,7 +134,6 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     vi.clearAllMocks();
     scheduledTasks.splice(0);
     vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: false, updated: [] });
-    vi.mocked(sendOrderReceiptEmail).mockResolvedValue({ sent: true });
     vi.mocked(prepareProtectedPaymentDurability).mockResolvedValue({ protected: false });
     vi.mocked(completeRecoveryEvent).mockResolvedValue(undefined);
     vi.mocked(getRecoverySnapshot).mockResolvedValue(null);
@@ -344,9 +344,17 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     const stored = await getOrder(order.externalReference);
 
     expect(stored?.paymentStatus).toBe("confirmed");
+    expect(stored?.receiptOutboxVersion).toBe(1);
     expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["A"]);
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
+    const markerCallIndex = vi.mocked(appendOrderToSalesSheet).mock.calls.findIndex(
+      ([projected]) => projected.receiptOutboxVersion === 1,
+    );
+    expect(markerCallIndex).toBeGreaterThanOrEqual(0);
+    expect(vi.mocked(appendOrderToSalesSheet).mock.invocationCallOrder[markerCallIndex]).toBeLessThan(
+      vi.mocked(ensurePurchaseReceiptEventSafely).mock.invocationCallOrder[0],
+    );
   });
 
   it("AUD3-PAY-02 webhook and verify concurrency for one ID has one logical effect", async () => {
@@ -365,7 +373,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     ]);
     await flushReceipts();
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
     expect(Object.keys((await getOrder(order.externalReference))?.mpPaymentLedger ?? {})).toEqual(["A"]);
   });
 
@@ -405,7 +413,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
     expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
     expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
-    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it("AUD3-PAY-07 two approvals retain both and do not repeat effects", async () => {
@@ -421,7 +429,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     });
     expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["A", "B"]);
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 
   it.each(["refunded", "charged_back"])(
@@ -437,7 +445,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
       expect(stored?.paymentStatus).toBe(status);
       expect(stored?.inventoryStatus).toBe("deducted");
       expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-      expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+      expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
     }
   );
 
@@ -454,7 +462,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     expect(result).toMatchObject({ outcome: "ignored", reason });
     expect(after).toEqual(before);
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
-    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it("AUD3-PAY-19 concurrent different IDs cannot lose either ledger entry", async () => {
@@ -469,7 +477,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     expect(stored?.paymentStatus).toBe("confirmed");
     expect(Object.keys(stored?.mpPaymentLedger ?? {}).sort()).toEqual(["A", "B"]);
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 
   it("AUD3-PAY-CAP-04 capacity compaction cannot repeat inventory or receipt effects", async () => {
@@ -499,7 +507,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     expect(stored?.paymentStatus).toBe("confirmed");
     expect(stored?.mpPaymentLedger).toHaveProperty("A.approvedAt");
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 
   it("AUD3-PAY-BATCH-02 aggregates two approvals with one inventory and receipt effect", async () => {
@@ -518,7 +526,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     });
     expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["A", "B"]);
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 
   it("AUD3-PAY-BATCH-03 persists only confirmed for refund plus other approval", async () => {
@@ -542,7 +550,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
       mpPaymentId: "B",
     });
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 
   it("AUD3-PAY-BATCH-04 applies rejected cancelled and approved as one final aggregate", async () => {
@@ -558,7 +566,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     expect(stored?.paymentStatus).toBe("confirmed");
     expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["B", "C", "A"]);
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 
   it("AUD3-PAY-BATCH-05 commits a complete non-approved aggregate normally", async () => {
@@ -574,7 +582,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     expect(stored).toMatchObject({ status: "cancelled", paymentStatus: "cancelled" });
     expect(Object.keys(stored?.mpPaymentLedger ?? {})).toEqual(["B", "C"]);
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
-    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
   it("AUD3-PAY-BATCH-07 retry is ledger-idempotent with no duplicate effects", async () => {
@@ -594,7 +602,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     expect(stored?.mpPaymentLedger).toEqual(firstLedger);
     expect(stored?.paymentStatus).toBe("confirmed");
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(sendOrderReceiptEmail).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 
   it("AUD3-PREF-10 reconciles valid payment evidence after the preference window time", async () => {

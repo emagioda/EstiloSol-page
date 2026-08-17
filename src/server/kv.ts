@@ -9,6 +9,7 @@ type KvClient = {
   sadd(key: string, ...members: string[]): Promise<number>;
   srem(key: string, ...members: string[]): Promise<number>;
   smembers<T = string>(key: string): Promise<T[]>;
+  srandmember<T = string>(key: string, count: number): Promise<T[]>;
   sismember(key: string, member: string): Promise<number>;
   incr(key: string): Promise<number>;
   incrby(key: string, amount: number): Promise<number>;
@@ -93,6 +94,11 @@ const memoryKv: KvClient = {
     if (!(entry?.value instanceof Set)) return [];
     return Array.from(entry.value) as T[];
   },
+  async srandmember<T = string>(key: string, count: number): Promise<T[]> {
+    const entry = getMemoryEntry(key);
+    if (!(entry?.value instanceof Set)) return [];
+    return Array.from(entry.value).slice(0, Math.max(0, count)) as T[];
+  },
   async sismember(key: string, member: string): Promise<number> {
     const entry = getMemoryEntry(key);
     return entry?.value instanceof Set && entry.value.has(member) ? 1 : 0;
@@ -173,6 +179,12 @@ export async function removeSetMember(key: string, member: string): Promise<bool
 
 export async function listSetMembers(key: string): Promise<string[]> {
   return kv.smembers<string>(key);
+}
+
+export async function listSetMembersBounded(key: string, limit: number): Promise<string[]> {
+  const boundedLimit = Math.max(0, Math.min(100, Math.trunc(limit)));
+  if (boundedLimit === 0) return [];
+  return kv.srandmember<string>(key, boundedLimit);
 }
 
 export async function isSetMember(key: string, member: string): Promise<boolean> {

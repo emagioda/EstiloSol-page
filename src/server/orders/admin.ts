@@ -1,4 +1,6 @@
 import { logEvent } from "@/src/server/observability/log";
+import { listEmailOutboxAttention } from "@/src/server/emailOutbox/repository";
+import type { EmailOutboxAttentionItem } from "@/src/server/emailOutbox/types";
 import {
   getOrdersForAdmin,
   updateOrderRowInSalesSheet,
@@ -381,6 +383,17 @@ export async function getRecoveryAttentionForAdmin(): Promise<RecoveryAttentionI
     return await listRecoveryAttention(100);
   } catch (error) {
     logEvent("warn", "recovery.admin_attention_unavailable", {
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    return [];
+  }
+}
+
+export async function getEmailOutboxAttentionForAdmin(): Promise<EmailOutboxAttentionItem[]> {
+  try {
+    return await listEmailOutboxAttention(100);
+  } catch (error) {
+    logEvent("warn", "email.outbox.admin_attention_unavailable", {
       errorName: error instanceof Error ? error.name : "unknown",
     });
     return [];

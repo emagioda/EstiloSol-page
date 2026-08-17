@@ -28,6 +28,11 @@ type HarnessOptions = {
   recoverySnapshotRows?: unknown[][];
   recoveryEventHeaders?: string[];
   recoveryEventRows?: unknown[][];
+  emailOutboxHeaders?: string[];
+  emailOutboxRows?: unknown[][];
+  emailOutboxRolloutAt?: string;
+  salesHeaders?: string[];
+  salesRows?: unknown[][];
   sheetsServiceEnabled?: boolean;
 };
 
@@ -73,8 +78,12 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
     product.currency ?? "ARS",
     product.price === undefined ? 1000 : product.price,
   ]);
-  const salesHeaders = ["nro_de_compra", "items_json"];
-  const salesRows: unknown[][] = [];
+  const salesHeaders = options.salesHeaders ?? [
+    "nro_de_compra",
+    "items_json",
+    ...(options.emailOutboxHeaders || options.emailOutboxRows ? ["receipt_outbox_version"] : []),
+  ];
+  const salesRows: unknown[][] = options.salesRows ?? [];
   const writes: WriteRecord[] = [];
   const batchCalls: Array<{ requests: Array<Record<string, unknown>> }> = [];
   const logs: Array<Record<string, unknown>> = [];
@@ -84,6 +93,9 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
     ["SHEETS_READ_TOKEN", "read-token"],
     ["SHEETS_WRITE_TOKEN", "write-token"],
     ["SHEETS_ADMIN_TOKEN", "admin-token"],
+    ...(options.emailOutboxRolloutAt
+      ? [["EMAIL_OUTBOX_ROLLOUT_AT", options.emailOutboxRolloutAt] as [string, string]]
+      : []),
   ]);
   const locks = { waited: 0, released: 0 };
   const states = new Map<string, SheetState>([
@@ -117,6 +129,15 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
       hidden: true,
     });
   }
+  if (options.emailOutboxHeaders || options.emailOutboxRows) {
+    states.set("_email_outbox_events", {
+      id: 106,
+      name: "_email_outbox_events",
+      headers: options.emailOutboxHeaders ?? [],
+      rows: options.emailOutboxRows ?? [],
+      hidden: true,
+    });
+  }
 
   const buildSheet = (state: SheetState) => ({
     getSheetId: () => state.id,
@@ -136,7 +157,11 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
           .map((sourceRow) => sourceRow.slice(column - 1, column - 1 + columnCount));
       },
       setValue: (value: unknown) => {
-        state.rows[row - 2][column - 1] = value;
+        if (row === 1) {
+          state.headers[column - 1] = value;
+        } else {
+          state.rows[row - 2][column - 1] = value;
+        }
         writes.push({ sheet: state.name, row, column, value });
       },
       setValues: (values: unknown[][]) => {
@@ -818,6 +843,12 @@ describe("AUD3-H06 Apps Script recovery journal", () => {
       hidden: true,
       frozenRows: 1,
     });
+    expect(harness.states.get("_email_outbox_events")).toMatchObject({
+      headers: emailOutboxHeaders,
+      hidden: true,
+      frozenRows: 1,
+    });
+    expect(harness.properties.get("EMAIL_OUTBOX_ROLLOUT_AT")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(harness.locks).toEqual({ waited: 1, released: 1 });
   });
 
@@ -1113,6 +1144,642 @@ const recoveryPost = (
 ) => JSON.parse((harness.api.doPost({
   postData: { contents: JSON.stringify({ action, token, ...payload }) },
 }) as { getContent: () => string }).getContent()) as Record<string, unknown>;
+
+const emailOutboxHeaders = [
+  "event_key", "external_reference", "notification_type", "schema_version", "template_version",
+  "payload_hash", "payload_json", "idempotency_key", "state", "attempt_count", "lease_owner",
+  "lease_expires_at", "next_attempt_at", "provider_first_attempt_at", "provider_outcome_unknown_since", "last_attempt_at",
+  "last_error_code", "provider_message_id", "accepted_at", "created_at", "updated_at", "completed_at",
+];
+
+const emailOutboxEvent = (patch: Record<string, unknown> = {}) => {
+  const externalReference = String(patch.external_reference ?? "es-email-000001");
+  const payloadJson = String(patch.payload_json ?? JSON.stringify({
+    externalReference,
+    recipientEmail: "customer@example.test",
+    customerName: "Cliente",
+    paymentId: "pay-email-1",
+    approvedAt: Date.parse("2026-08-16T10:00:00.000Z"),
+    items: [{ title: "Producto", qty: 1, unitPrice: 1000, currency: "ARS" }],
+    total: 1000,
+    currency: "ARS",
+    fromEmail: "Estilo Sol <ventas@example.test>",
+    templateVersion: 1,
+  }));
+  const eventKey = `purchase-receipt/${externalReference}/v1`;
+  return {
+    event_key: eventKey,
+    external_reference: externalReference,
+    notification_type: "purchase_receipt",
+    schema_version: 1,
+    template_version: 1,
+    payload_hash: createHash("sha256").update(payloadJson).digest("hex"),
+    payload_json: payloadJson,
+    idempotency_key: eventKey,
+    state: "pending",
+    attempt_count: 0,
+    lease_owner: "",
+    lease_expires_at: "",
+    next_attempt_at: "",
+    provider_first_attempt_at: "",
+    provider_outcome_unknown_since: "",
+    last_attempt_at: "",
+    last_error_code: "",
+    provider_message_id: "",
+    accepted_at: "",
+    created_at: "2026-08-16T10:00:00.000Z",
+    updated_at: "2026-08-16T10:00:00.000Z",
+    completed_at: "",
+    ...patch,
+  };
+};
+
+const emailOutboxRow = (patch: Record<string, unknown> = {}) => {
+  const event = emailOutboxEvent(patch);
+  return emailOutboxHeaders.map((header) => event[header as keyof typeof event]);
+};
+
+describe("AUD3-H06-E Apps Script durable receipt outbox", () => {
+  it("does not create the outbox implicitly before the explicit recovery bootstrap", () => {
+    const harness = createHarness([]);
+    expect(recoveryPost(harness, "upsertEmailOutboxEvent", { event: emailOutboxEvent() })).toMatchObject({
+      ok: false,
+      code: "EMAIL_OUTBOX_SCHEMA_NOT_READY",
+    });
+    expect(harness.states.has("_email_outbox_events")).toBe(false);
+  });
+
+  it("keeps the first rollout boundary stable across repeated bootstrap calls", () => {
+    const harness = createHarness([]);
+    const first = recoveryPost(harness, "ensureRecoverySchema");
+    const boundary = harness.properties.get("EMAIL_OUTBOX_ROLLOUT_AT");
+    const second = recoveryPost(harness, "ensureRecoverySchema");
+    expect(first.email_outbox_rollout_at).toBe(boundary);
+    expect(second.email_outbox_rollout_at).toBe(boundary);
+    expect(harness.states.get("ventas")?.headers.filter((header) => header === "receipt_outbox_version")).toHaveLength(1);
+  });
+
+  it("stores one immutable event, replays the same payload, and fails closed on conflict", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "ensureRecoverySchema");
+    const event = emailOutboxEvent();
+    expect(recoveryPost(harness, "upsertEmailOutboxEvent", { event }).result).toBe("EMAIL_EVENT_STORED");
+    expect(recoveryPost(harness, "upsertEmailOutboxEvent", { event }).result).toBe("EMAIL_EVENT_ALREADY_EXISTS");
+    const conflict = emailOutboxEvent({ payload_json: JSON.stringify({
+      externalReference: "es-email-000001",
+      items: [],
+      currency: "ARS",
+      templateVersion: 1,
+    }) });
+    expect(recoveryPost(harness, "upsertEmailOutboxEvent", { event: conflict })).toMatchObject({
+      ok: false,
+      code: "EMAIL_OUTBOX_EVENT_CONFLICT",
+    });
+    const row = harness.states.get("_email_outbox_events")?.rows[0] ?? [];
+    expect(row[emailOutboxHeaders.indexOf("state")]).toBe("attention");
+    expect(row[emailOutboxHeaders.indexOf("payload_json")]).toBe(event.payload_json);
+  });
+
+  it("claims with an owned lease, replays the same claim, and excludes overlapping workers", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "ensureRecoverySchema");
+    recoveryPost(harness, "upsertEmailOutboxEvent", { event: emailOutboxEvent() });
+    const claim = {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 20,
+    };
+    const first = recoveryPost(harness, "claimEmailOutboxWork", claim) as { events?: Array<Record<string, unknown>> };
+    const replay = recoveryPost(harness, "claimEmailOutboxWork", claim) as { events?: Array<Record<string, unknown>> };
+    const overlap = recoveryPost(harness, "claimEmailOutboxWork", {
+      ...claim,
+      leaseOwner: "email-worker-two",
+      claimedAt: "2026-08-16T10:02:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:07:00.000Z",
+    }) as { events?: unknown[] };
+    expect(first.events?.[0]).toMatchObject({ attempt_count: 1, lease_owner: "email-worker-one" });
+    expect(first.events?.[0]).toMatchObject({ provider_first_attempt_at: claim.claimedAt });
+    expect(first.events?.[0]).toMatchObject({ provider_outcome_unknown_since: "" });
+    expect(replay.events?.[0]).toMatchObject({ attempt_count: 1, lease_owner: "email-worker-one" });
+    expect(overlap.events).toEqual([]);
+  });
+
+  it("reclaims an expired processing lease without changing the stable event identity", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "ensureRecoverySchema");
+    const event = emailOutboxEvent();
+    recoveryPost(harness, "upsertEmailOutboxEvent", { event });
+    recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 1,
+    });
+    const reclaimed = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-two",
+      claimedAt: "2026-08-16T10:07:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:12:00.000Z",
+      maxEvents: 1,
+    }) as { events?: Array<Record<string, unknown>> };
+    expect(reclaimed.events).toEqual([
+      expect.objectContaining({
+        event_key: event.event_key,
+        idempotency_key: event.event_key,
+        attempt_count: 2,
+        lease_owner: "email-worker-two",
+      }),
+    ]);
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-03 durably marks provider uncertainty under the active lease", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "ensureRecoverySchema");
+    const event = emailOutboxEvent();
+    recoveryPost(harness, "upsertEmailOutboxEvent", { event });
+    recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 1,
+    });
+
+    const marked = recoveryPost(harness, "markEmailOutboxProviderOutcomeUnknown", {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-one",
+      unknownSince: "2026-08-16T10:01:30.000Z",
+    });
+    expect(marked).toMatchObject({
+      result: "EMAIL_PROVIDER_OUTCOME_UNKNOWN",
+      event: { provider_outcome_unknown_since: "2026-08-16T10:01:30.000Z" },
+    });
+
+    const cleared = recoveryPost(harness, "clearEmailOutboxProviderOutcomeUnknown", {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-one",
+    });
+    expect(cleared).toMatchObject({
+      result: "EMAIL_PROVIDER_OUTCOME_KNOWN",
+      event: { provider_outcome_unknown_since: "" },
+    });
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-02 does not cutoff an old prepared attempt without unresolved uncertainty", () => {
+    const row = emailOutboxRow({
+      state: "processing",
+      attempt_count: 1,
+      lease_owner: "email-worker-one",
+      lease_expires_at: "2026-08-15T10:05:00.000Z",
+      provider_first_attempt_at: "2026-08-15T10:00:00.000Z",
+      provider_outcome_unknown_since: "",
+      last_attempt_at: "2026-08-15T10:00:00.000Z",
+      last_error_code: "RESEND_NOT_CONFIGURED",
+    });
+    const harness = createHarness([], {
+      emailOutboxHeaders,
+      emailOutboxRows: [row],
+      emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
+    });
+    const result = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-two",
+      claimedAt: "2026-08-17T10:00:00.000Z",
+      leaseExpiresAt: "2026-08-17T10:05:00.000Z",
+      maxEvents: 1,
+    }) as { events?: Array<Record<string, unknown>> };
+    expect(result.events?.[0]).toMatchObject({
+      state: "processing",
+      attempt_count: 2,
+      provider_outcome_unknown_since: "",
+    });
+  });
+
+  it("AUD3-H06E-CRASH-06 reclaims blank-error ambiguous processing inside 24h", () => {
+    const payloadJson = String(emailOutboxEvent().payload_json);
+    const row = emailOutboxRow({
+      state: "processing",
+      attempt_count: 1,
+      lease_owner: "email-worker-one",
+      lease_expires_at: "2026-08-16T10:05:00.000Z",
+      provider_first_attempt_at: "2026-08-16T10:00:00.000Z",
+      provider_outcome_unknown_since: "2026-08-16T10:00:00.000Z",
+      last_attempt_at: "2026-08-16T10:00:00.000Z",
+      last_error_code: "",
+    });
+    const harness = createHarness([], {
+      emailOutboxHeaders,
+      emailOutboxRows: [row],
+      emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
+    });
+    const result = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-two",
+      claimedAt: "2026-08-16T11:00:00.000Z",
+      leaseExpiresAt: "2026-08-16T11:05:00.000Z",
+      maxEvents: 1,
+    }) as { events?: Array<Record<string, unknown>> };
+    expect(result.events).toEqual([
+      expect.objectContaining({
+        payload_json: payloadJson,
+        idempotency_key: "purchase-receipt/es-email-000001/v1",
+        provider_first_attempt_at: "2026-08-16T10:00:00.000Z",
+        attempt_count: 2,
+      }),
+    ]);
+  });
+
+  it("AUD3-H06E-CRASH-07 refuses blank-error ambiguous processing at 24h", () => {
+    const row = emailOutboxRow({
+      state: "processing",
+      attempt_count: 1,
+      lease_owner: "email-worker-one",
+      lease_expires_at: "2026-08-16T10:05:00.000Z",
+      provider_first_attempt_at: "2026-08-16T10:00:00.000Z",
+      provider_outcome_unknown_since: "2026-08-16T10:00:00.000Z",
+      last_attempt_at: "2026-08-16T10:00:00.000Z",
+      last_error_code: "",
+    });
+    const harness = createHarness([], {
+      emailOutboxHeaders,
+      emailOutboxRows: [row],
+      emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
+    });
+    const result = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-two",
+      claimedAt: "2026-08-17T10:00:00.000Z",
+      leaseExpiresAt: "2026-08-17T10:05:00.000Z",
+      maxEvents: 1,
+    }) as { events?: unknown[] };
+    expect(result.events).toEqual([]);
+    const stored = harness.states.get("_email_outbox_events")?.rows[0] ?? [];
+    expect(stored[emailOutboxHeaders.indexOf("state")]).toBe("attention");
+    expect(stored[emailOutboxHeaders.indexOf("last_error_code")]).toBe("RESEND_OUTCOME_UNKNOWN");
+  });
+
+  it("claims retryable work only when next_attempt_at is due", () => {
+    const rolloutAt = "2026-08-15T00:00:00.000Z";
+    const future = emailOutboxRow({
+      state: "retryable",
+      attempt_count: 1,
+      next_attempt_at: "2026-08-16T10:10:00.000Z",
+      provider_first_attempt_at: "2026-08-16T10:00:00.000Z",
+      last_attempt_at: "2026-08-16T10:00:00.000Z",
+      last_error_code: "RESEND_RATE_LIMITED",
+    });
+    const harness = createHarness([], {
+      emailOutboxHeaders,
+      emailOutboxRows: [future],
+      emailOutboxRolloutAt: rolloutAt,
+    });
+    const early = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:09:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:14:00.000Z",
+      maxEvents: 1,
+    }) as { events?: unknown[] };
+    const due = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:10:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:15:00.000Z",
+      maxEvents: 1,
+    }) as { events?: Array<Record<string, unknown>> };
+    expect(early.events).toEqual([]);
+    expect(due.events?.[0]).toMatchObject({ state: "processing", attempt_count: 2 });
+  });
+
+  it("persists accepted state and provider id before redacting the payload, then stays terminal", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "ensureRecoverySchema");
+    const event = emailOutboxEvent();
+    recoveryPost(harness, "upsertEmailOutboxEvent", { event });
+    recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 1,
+    });
+    recoveryPost(harness, "markEmailOutboxProviderOutcomeUnknown", {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-one",
+      unknownSince: "2026-08-16T10:01:30.000Z",
+    });
+    const accepted = recoveryPost(harness, "markEmailOutboxAccepted", {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-one",
+      providerMessageId: "provider-message-123",
+      acceptedAt: "2026-08-16T10:02:00.000Z",
+    });
+    expect(accepted).toMatchObject({
+      result: "EMAIL_EVENT_ACCEPTED",
+      event: {
+        state: "accepted",
+        provider_message_id: "provider-message-123",
+        provider_outcome_unknown_since: "",
+        payload_json: "",
+      },
+    });
+    expect(recoveryPost(harness, "markEmailOutboxRetryable", {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-one",
+      errorCode: "LATE_FAILURE",
+      nextAttemptAt: "2026-08-16T10:10:00.000Z",
+    })).toMatchObject({ ok: false, code: "EMAIL_OUTBOX_LEASE_CONFLICT" });
+  });
+
+  it("enforces lease ownership for terminal state mutations", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "ensureRecoverySchema");
+    const event = emailOutboxEvent();
+    recoveryPost(harness, "upsertEmailOutboxEvent", { event });
+    recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 1,
+    });
+    expect(recoveryPost(harness, "markEmailOutboxAccepted", {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-two",
+      providerMessageId: "provider-message-123",
+      acceptedAt: "2026-08-16T10:02:00.000Z",
+    })).toMatchObject({ ok: false, code: "EMAIL_OUTBOX_LEASE_CONFLICT" });
+  });
+
+  it("keeps accepted replay idempotent and provider identity immutable", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "ensureRecoverySchema");
+    const event = emailOutboxEvent();
+    recoveryPost(harness, "upsertEmailOutboxEvent", { event });
+    recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 1,
+    });
+    const input = {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-one",
+      providerMessageId: "provider-message-123",
+      acceptedAt: "2026-08-16T10:02:00.000Z",
+    };
+    expect(recoveryPost(harness, "markEmailOutboxAccepted", input).result).toBe("EMAIL_EVENT_ACCEPTED");
+    expect(recoveryPost(harness, "markEmailOutboxAccepted", input).result).toBe("EMAIL_EVENT_ACCEPTED");
+    expect(recoveryPost(harness, "markEmailOutboxAccepted", {
+      ...input,
+      providerMessageId: "provider-message-456",
+    })).toMatchObject({ ok: false, code: "EMAIL_OUTBOX_EVENT_CONFLICT" });
+  });
+
+  it("stores missing-email work as an explicit terminal skipped event", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "ensureRecoverySchema");
+    const event = emailOutboxEvent();
+    recoveryPost(harness, "upsertEmailOutboxEvent", { event });
+    recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 1,
+    });
+    expect(recoveryPost(harness, "markEmailOutboxSkipped", {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-one",
+      errorCode: "MISSING_CUSTOMER_EMAIL",
+    })).toMatchObject({
+      result: "EMAIL_EVENT_SKIPPED",
+      event: { state: "skipped", last_error_code: "MISSING_CUSTOMER_EMAIL" },
+    });
+    const laterClaim = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-two",
+      claimedAt: "2026-08-17T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-17T10:06:00.000Z",
+      maxEvents: 1,
+    }) as { events?: unknown[] };
+    expect(laterClaim.events).toEqual([]);
+  });
+
+  it("respects next_attempt_at and moves an expired fifth attempt to attention", () => {
+    const rolloutAt = "2026-08-15T00:00:00.000Z";
+    const retryable = emailOutboxRow({
+      state: "retryable",
+      attempt_count: 5,
+      next_attempt_at: "2026-08-16T10:00:00.000Z",
+      provider_first_attempt_at: "2026-08-15T10:00:00.000Z",
+      last_attempt_at: "2026-08-16T09:00:00.000Z",
+      last_error_code: "RESEND_SERVER_ERROR",
+    });
+    const harness = createHarness([], {
+      emailOutboxHeaders,
+      emailOutboxRows: [retryable],
+      emailOutboxRolloutAt: rolloutAt,
+    });
+    const claimed = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 20,
+    }) as { events?: unknown[] };
+    expect(claimed.events).toEqual([]);
+    const row = harness.states.get("_email_outbox_events")?.rows[0] ?? [];
+    expect(row[emailOutboxHeaders.indexOf("state")]).toBe("attention");
+    expect(row[emailOutboxHeaders.indexOf("last_error_code")]).toBe("EMAIL_OUTBOX_ATTEMPTS_EXHAUSTED");
+  });
+
+  it("AUD3-H06E-UNCERTAINTY-11 lets attempt-five uncertainty replay only inside 24h", () => {
+    const retryable = emailOutboxRow({
+      state: "retryable",
+      attempt_count: 5,
+      next_attempt_at: "2026-08-16T10:00:00.000Z",
+      provider_first_attempt_at: "2026-08-15T10:00:00.000Z",
+      provider_outcome_unknown_since: "2026-08-15T10:01:00.001Z",
+      last_attempt_at: "2026-08-16T09:00:00.000Z",
+      last_error_code: "RESEND_SERVER_ERROR",
+    });
+    const harness = createHarness([], {
+      emailOutboxHeaders,
+      emailOutboxRows: [retryable],
+      emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
+    });
+    const claimed = recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 20,
+    }) as { events?: Array<Record<string, unknown>> };
+    expect(claimed.events).toHaveLength(1);
+    expect(claimed.events?.[0]).toMatchObject({
+      state: "processing",
+      attempt_count: 6,
+      provider_outcome_unknown_since: "2026-08-15T10:01:00.001Z",
+    });
+  });
+
+  it("AUD3-H06E-ROLLOUT-01/02/04 uses per-order enrollment and repairs accepted markers", () => {
+    const rolloutAt = "2026-08-15T00:00:00.000Z";
+    const salesHeaders = [
+      "nro_de_compra", "estado_de_pago", "approved_at", "customer_email", "customer_name",
+      "mp_payment_id", "items_json", "total", "currency", "receipt_email_sent_at",
+      "receipt_outbox_version",
+    ];
+    const itemJson = JSON.stringify([{ title: "Producto", qty: 1, unitPrice: 1000 }]);
+    const salesRows = [
+      ["es-bootstrap-gap-000001", "Confirmado", "2026-08-16T10:00:00.000Z", "legacy@example.test", "Legacy", "pay-1", itemJson, 1000, "ARS", "", ""],
+      ["es-enrolled-000001", "Confirmado", "2026-08-14T10:00:00.000Z", "new@example.test", "Nuevo", "pay-2", itemJson, 1000, "ARS", "", 1],
+      ["es-sent-000001", "Confirmado", "2026-08-16T10:30:00.000Z", "sent@example.test", "Enviado", "pay-3", itemJson, 1000, "ARS", "2026-08-16T10:31:00.000Z", 1],
+      ["es-repair-000001", "Confirmado", "2026-08-16T11:00:00.000Z", "repair@example.test", "Reparar", "pay-4", itemJson, 1000, "ARS", "", 1],
+    ];
+    const acceptedRow = emailOutboxRow({
+      external_reference: "es-repair-000001",
+      payload_json: "",
+      state: "accepted",
+      attempt_count: 1,
+      provider_message_id: "provider-message-123",
+      accepted_at: "2026-08-16T11:02:00.000Z",
+      completed_at: "2026-08-16T11:02:00.000Z",
+    });
+    const harness = createHarness([], {
+      salesHeaders,
+      salesRows,
+      emailOutboxHeaders,
+      emailOutboxRows: [acceptedRow],
+      emailOutboxRolloutAt: rolloutAt,
+    });
+    const result = recoveryPost(harness, "listMissingReceiptCandidates", { limit: 20 }) as {
+      candidates?: Array<Record<string, unknown>>;
+      marker_repairs?: Array<Record<string, unknown>>;
+    };
+    expect(result.candidates).toEqual([
+      expect.objectContaining({ external_reference: "es-enrolled-000001", recipient_email: "new@example.test" }),
+    ]);
+    expect(result.marker_repairs).toEqual([
+      { external_reference: "es-repair-000001", accepted_at: "2026-08-16T11:02:00.000Z" },
+    ]);
+  });
+
+  it("AUD3-H06E-ROLLOUT-05 appends the exact ventas eligibility column once", () => {
+    const harness = createHarness([], {
+      salesHeaders: ["nro_de_compra", "estado_de_pago", "approved_at"],
+    });
+    expect(recoveryPost(harness, "ensureRecoverySchema")).toMatchObject({ ok: true });
+    expect(recoveryPost(harness, "ensureRecoverySchema")).toMatchObject({ ok: true });
+    expect(harness.states.get("ventas")?.headers).toEqual([
+      "nro_de_compra",
+      "estado_de_pago",
+      "approved_at",
+      "receipt_outbox_version",
+    ]);
+  });
+
+  it("AUD3-H06E-ROLLOUT-06 fails closed on ambiguous eligibility headers", () => {
+    const harness = createHarness([], {
+      salesHeaders: [
+        "nro_de_compra",
+        "estado_de_pago",
+        "approved_at",
+        "receipt_outbox_version",
+        "Receipt Outbox Version",
+      ],
+    });
+    expect(recoveryPost(harness, "ensureRecoverySchema")).toMatchObject({
+      ok: false,
+      code: "EMAIL_OUTBOX_SCHEMA_INVALID",
+    });
+    expect(recoveryPost(harness, "listMissingReceiptCandidates", { limit: 20 })).toMatchObject({
+      ok: false,
+      code: "EMAIL_OUTBOX_SCHEMA_INVALID",
+    });
+    expect(harness.states.get("_email_outbox_events")?.rows).toEqual([]);
+  });
+
+  it("keeps Admin email attention output free of payload JSON and recipient PII", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "ensureRecoverySchema");
+    const event = emailOutboxEvent();
+    recoveryPost(harness, "upsertEmailOutboxEvent", { event });
+    recoveryPost(harness, "claimEmailOutboxWork", {
+      leaseOwner: "email-worker-one",
+      claimedAt: "2026-08-16T10:01:00.000Z",
+      leaseExpiresAt: "2026-08-16T10:06:00.000Z",
+      maxEvents: 1,
+    });
+    recoveryPost(harness, "markEmailOutboxAttention", {
+      eventKey: event.event_key,
+      leaseOwner: "email-worker-one",
+      errorCode: "CUSTOMER_EMAIL_INVALID",
+    });
+    const result = recoveryPost(harness, "listEmailOutboxAttention", { limit: 20 });
+    const serialized = JSON.stringify(result);
+    expect(result).toMatchObject({
+      items: [expect.objectContaining({
+        external_reference: "es-email-000001",
+        state: "attention",
+        last_error_code: "CUSTOMER_EMAIL_INVALID",
+      })],
+    });
+    expect(serialized).not.toContain("payload_json");
+    expect(serialized).not.toContain("customer@example.test");
+  });
+
+  it("stores independent events for two different Orders", () => {
+    const harness = createHarness([]);
+    recoveryPost(harness, "ensureRecoverySchema");
+    const first = emailOutboxEvent({ external_reference: "es-email-first-000001" });
+    const second = emailOutboxEvent({ external_reference: "es-email-second-000001" });
+    expect(recoveryPost(harness, "upsertEmailOutboxEvent", { event: first }).result).toBe("EMAIL_EVENT_STORED");
+    expect(recoveryPost(harness, "upsertEmailOutboxEvent", { event: second }).result).toBe("EMAIL_EVENT_STORED");
+    expect(harness.states.get("_email_outbox_events")?.rows).toHaveLength(2);
+  });
+
+  it("fails closed on duplicate event_key rows and rejects non-admin tokens", () => {
+    const row = emailOutboxRow();
+    const duplicate = createHarness([], {
+      emailOutboxHeaders,
+      emailOutboxRows: [row, row.slice()],
+      emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
+    });
+    expect(recoveryPost(duplicate, "getEmailOutboxEvent", {
+      eventKey: "purchase-receipt/es-email-000001/v1",
+    })).toMatchObject({ ok: false, code: "EMAIL_OUTBOX_SCHEMA_INVALID" });
+
+    const protectedHarness = createHarness([]);
+    recoveryPost(protectedHarness, "ensureRecoverySchema");
+    expect(recoveryPost(
+      protectedHarness,
+      "listEmailOutboxAttention",
+      { limit: 20 },
+      "read-token",
+    )).toEqual({ ok: false, error: "Unauthorized" });
+    expect(recoveryPost(
+      protectedHarness,
+      "listEmailOutboxAttention",
+      { limit: 20 },
+      "write-token",
+    )).toEqual({ ok: false, error: "Unauthorized" });
+  });
+
+  it("fails closed on malformed outbox headers and duplicate ventas identities", () => {
+    const malformed = createHarness([], {
+      emailOutboxHeaders: ["wrong"],
+      emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
+    });
+    expect(recoveryPost(malformed, "listEmailOutboxAttention", { limit: 20 })).toMatchObject({
+      ok: false,
+      code: "RECOVERY_SCHEMA_INVALID",
+    });
+
+    const duplicateSales = createHarness([], {
+      salesHeaders: ["nro_de_compra", "estado_de_pago", "approved_at", "receipt_outbox_version"],
+      salesRows: [
+        ["es-duplicate-000001", "Confirmado", "2026-08-16T00:00:00.000Z", 1],
+        ["es-duplicate-000001", "Confirmado", "2026-08-16T00:00:00.000Z", 1],
+      ],
+      emailOutboxHeaders,
+      emailOutboxRolloutAt: "2026-08-15T00:00:00.000Z",
+    });
+    expect(recoveryPost(duplicateSales, "listMissingReceiptCandidates", { limit: 20 })).toMatchObject({
+      ok: false,
+      code: "EMAIL_OUTBOX_SCHEMA_INVALID",
+    });
+  });
+});
 
 describe("AUD3 crash-safe inventory matrix", () => {
   it("preserves the production web app config while enabling the Advanced Sheets Service", () => {
