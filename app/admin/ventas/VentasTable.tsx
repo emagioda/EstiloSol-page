@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   retryOrderInventoryAction,
   saveOrderStatusesBatchAction,
-  updateOrderStatusesAction,
 } from "@/app/admin/actions";
 import type { AdminOrderSheetRow } from "@/src/server/sheets/repository";
 import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
@@ -64,6 +63,7 @@ type SaveDialogState =
       mode: "info";
       title: string;
       description: string;
+      reloadOnClose?: boolean;
     }
   | {
       mode: "confirm";
@@ -408,7 +408,6 @@ const toShippingStatus = (value: FormDataEntryValue | null): ShippingStatus | nu
 
 export default function VentasTable({ orders }: VentasTableProps) {
   const skipLeaveGuardRef = useRef(false);
-  const allowedFormIdRef = useRef<string | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -737,7 +736,16 @@ export default function VentasTable({ orders }: VentasTableProps) {
 
     try {
       if (pendingOrderUpdates.length > 0) {
-        await saveOrderStatusesBatchAction(pendingOrderUpdates);
+        const result = await saveOrderStatusesBatchAction(pendingOrderUpdates);
+        const completionBlockMessage = result.results.find(
+          (entry) => entry.completionBlockMessage
+        )?.completionBlockMessage;
+        if (completionBlockMessage) {
+          skipLeaveGuardRef.current = false;
+          setIsSavingBeforeLeave(false);
+          setLeaveDialogError(completionBlockMessage);
+          return;
+        }
       }
       continueLeave(leaveDialogState);
     } catch {
@@ -752,12 +760,6 @@ export default function VentasTable({ orders }: VentasTableProps) {
   const handleSubmitConfirm = (order: AdminOrderSheetRow, event: FormEvent<HTMLFormElement>) => {
     const formElement = event.currentTarget;
     const formId = formElement.id || `venta-form-${order.orderId}`;
-
-    if (allowedFormIdRef.current === formId) {
-      allowedFormIdRef.current = null;
-      setIsPersistingSale(true);
-      return;
-    }
 
     event.preventDefault();
 
@@ -801,23 +803,40 @@ export default function VentasTable({ orders }: VentasTableProps) {
     });
   };
 
-  const handleConfirmSave = () => {
+  const handleConfirmSave = async () => {
     if (saveDialogState.mode !== "confirm") return;
 
-    const nextFormId = saveDialogState.formId;
+    const orderId = saveDialogState.orderId;
+    const draft = draftByOrder[orderId];
+    if (!draft) return;
     setSaveDialogState({ mode: "closed" });
     skipLeaveGuardRef.current = true;
-    allowedFormIdRef.current = nextFormId;
     setIsPersistingSale(true);
 
-    const formElement = document.getElementById(nextFormId);
-    if (formElement instanceof HTMLFormElement) {
-      formElement.requestSubmit();
-      return;
+    try {
+      const result = await saveOrderStatusesBatchAction([{ orderId, ...draft }]);
+      const completionBlockMessage = result.results[0]?.completionBlockMessage;
+      if (completionBlockMessage) {
+        skipLeaveGuardRef.current = false;
+        setIsPersistingSale(false);
+        setSaveDialogState({
+          mode: "info",
+          title: "La venta quedó En proceso",
+          description: completionBlockMessage,
+          reloadOnClose: true,
+        });
+        return;
+      }
+      window.location.reload();
+    } catch {
+      skipLeaveGuardRef.current = false;
+      setIsPersistingSale(false);
+      setSaveDialogState({
+        mode: "info",
+        title: "No pudimos guardar",
+        description: "Los cambios siguen pendientes. Revisá tu conexión y probá nuevamente.",
+      });
     }
-    skipLeaveGuardRef.current = false;
-    allowedFormIdRef.current = null;
-    setIsPersistingSale(false);
   };
 
   const persistPendingChanges = async () => {
@@ -825,7 +844,21 @@ export default function VentasTable({ orders }: VentasTableProps) {
     skipLeaveGuardRef.current = true;
 
     try {
-      await saveOrderStatusesBatchAction(pendingOrderUpdates);
+      const result = await saveOrderStatusesBatchAction(pendingOrderUpdates);
+      const completionBlockMessage = result.results.find(
+        (entry) => entry.completionBlockMessage
+      )?.completionBlockMessage;
+      if (completionBlockMessage) {
+        skipLeaveGuardRef.current = false;
+        setIsPersistingSale(false);
+        setSaveDialogState({
+          mode: "info",
+          title: "Algunas ventas quedaron En proceso",
+          description: completionBlockMessage,
+          reloadOnClose: true,
+        });
+        return;
+      }
       window.location.reload();
     } catch {
       skipLeaveGuardRef.current = false;
@@ -1219,7 +1252,13 @@ export default function VentasTable({ orders }: VentasTableProps) {
                         </option>
                         <option
                           value="completed"
-                          disabled={!canCompleteShipping(order.inventoryStatus)}
+                          disabled={
+                            !canCompleteShipping(
+                              order.inventoryStatus,
+                              order.paymentStatus,
+                              draft.paymentStatus
+                            )
+                          }
                           className={shippingOptionClass.completed}
                         >
                           Finalizado
@@ -1251,7 +1290,6 @@ export default function VentasTable({ orders }: VentasTableProps) {
                     <div className="flex items-center justify-center gap-2">
                       <form
                         id={formId}
-                        action={updateOrderStatusesAction}
                         onSubmit={(event) => handleSubmitConfirm(order, event)}
                       >
                         <input type="hidden" name="orderId" value={order.orderId} />
@@ -1322,7 +1360,6 @@ export default function VentasTable({ orders }: VentasTableProps) {
 
             <form
               id={`venta-form-mobile-${editingOrder.orderId}`}
-              action={updateOrderStatusesAction}
               onSubmit={(event) => handleSubmitConfirm(editingOrder, event)}
               className="space-y-3"
             >
@@ -1379,7 +1416,11 @@ export default function VentasTable({ orders }: VentasTableProps) {
                         type="button"
                         disabled={
                           option.value === "completed" &&
-                          !canCompleteShipping(editingOrder.inventoryStatus)
+                          !canCompleteShipping(
+                            editingOrder.inventoryStatus,
+                            editingOrder.paymentStatus,
+                            editingDraft?.paymentStatus ?? editingOrder.paymentStatus
+                          )
                         }
                         onClick={() =>
                           updateDraft(editingOrder.orderId, {
@@ -1451,7 +1492,7 @@ export default function VentasTable({ orders }: VentasTableProps) {
                   onClick={
                     saveDialogState.mode === "batchConfirm"
                       ? handleConfirmBatchSave
-                      : handleConfirmSave
+                      : () => void handleConfirmSave()
                   }
                   disabled={isPersistingSale}
                   className="rounded-lg bg-[var(--brand-gold-300)] px-3 py-2 text-xs font-semibold text-[var(--brand-violet-950)] transition hover:brightness-105"
@@ -1463,7 +1504,12 @@ export default function VentasTable({ orders }: VentasTableProps) {
               <div className="mt-5">
                 <button
                   type="button"
-                  onClick={() => setSaveDialogState({ mode: "closed" })}
+                  onClick={() => {
+                    const shouldReload =
+                      saveDialogState.mode === "info" && saveDialogState.reloadOnClose;
+                    setSaveDialogState({ mode: "closed" });
+                    if (shouldReload) window.location.reload();
+                  }}
                   className="w-full rounded-lg bg-[var(--brand-gold-300)] px-3 py-2 text-xs font-semibold text-[var(--brand-violet-950)] transition hover:brightness-105"
                 >
                   Entendido

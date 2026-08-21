@@ -45,17 +45,26 @@ export const orderRequiresAttention = (order: InventoryOrder) =>
 export const canRetryInventory = (status: OrderInventoryStatus | undefined) =>
   inventoryRequiresAttention(status);
 
-export const canCompleteShipping = (status: OrderInventoryStatus | undefined) =>
-  !inventoryRequiresAttention(status);
+export const canCompleteShipping = (
+  status: OrderInventoryStatus | undefined,
+  currentPaymentStatus?: OrderPaymentStatus,
+  draftPaymentStatus?: OrderPaymentStatus
+) =>
+  status === "deducted" ||
+  ((status === "pending" || status === undefined) &&
+    currentPaymentStatus !== "confirmed" &&
+    draftPaymentStatus === "confirmed");
 
 export const isOrderReadyForShipping = (order: InventoryOrder) =>
   order.paymentStatus === "confirmed" &&
   order.shippingStatus === "in_process" &&
+  order.inventoryStatus === "deducted" &&
   !orderRequiresAttention(order);
 
 export const isOrderNormallyCompleted = (order: InventoryOrder) =>
   order.paymentStatus === "confirmed" &&
   order.shippingStatus === "completed" &&
+  order.inventoryStatus === "deducted" &&
   !orderRequiresAttention(order);
 
 export const getOrderAction = (
@@ -72,6 +81,9 @@ export const getOrderAction = (
   }
   if (draft.paymentStatus === "pending") {
     return { label: "Falta confirmar pago", tone: "payment" as const };
+  }
+  if (draft.paymentStatus === "confirmed" && order.inventoryStatus !== "deducted") {
+    return { label: "Stock pendiente", tone: "review" as const };
   }
   if (
     draft.paymentStatus === "cancelled" ||

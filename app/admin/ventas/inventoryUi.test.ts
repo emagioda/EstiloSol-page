@@ -49,11 +49,19 @@ describe("PR 2 admin inventory UI helpers", () => {
     })).toBe(false);
   });
 
-  it("blocks completed only for explicit conflict/error, not legacy undefined", () => {
+  it("UI-01 enables normal completion only with deducted inventory", () => {
     expect(canCompleteShipping("conflict")).toBe(false);
     expect(canCompleteShipping("error")).toBe(false);
     expect(canCompleteShipping("deducted")).toBe(true);
-    expect(canCompleteShipping(undefined)).toBe(true);
+    expect(canCompleteShipping("pending")).toBe(false);
+    expect(canCompleteShipping(undefined)).toBe(false);
+  });
+
+  it("UI-02 permits the explicit confirm-plus-complete operator action before first allocation", () => {
+    expect(canCompleteShipping("pending", "pending", "confirmed")).toBe(true);
+    expect(canCompleteShipping(undefined, "pending", "confirmed")).toBe(true);
+    expect(canCompleteShipping("pending", "confirmed", "confirmed")).toBe(false);
+    expect(canCompleteShipping("conflict", "pending", "confirmed")).toBe(false);
   });
 
   it("shows retry only for conflict/error", () => {
@@ -91,5 +99,16 @@ describe("PR 2 admin inventory UI helpers", () => {
 
     expect(isOrderReadyForShipping(order)).toBe(false);
     expect(isOrderNormallyCompleted({ ...order, shippingStatus: "completed" })).toBe(false);
+  });
+
+  it("UI-03 excludes pending/legacy inventory from the normal ready counter", () => {
+    const base = {
+      paymentStatus: "confirmed" as const,
+      shippingStatus: "in_process" as const,
+      inventoryIssueCode: "",
+    };
+    expect(isOrderReadyForShipping({ ...base, inventoryStatus: "pending" })).toBe(false);
+    expect(isOrderReadyForShipping({ ...base, inventoryStatus: undefined })).toBe(false);
+    expect(isOrderReadyForShipping({ ...base, inventoryStatus: "deducted" })).toBe(true);
   });
 });

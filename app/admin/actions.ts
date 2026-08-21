@@ -19,13 +19,22 @@ import {
 import {
   attemptInventoryForPaidOrder,
   inventoryResultToOrderPatch,
-  isInventoryBlockingShipping,
   resolveOrderInventoryStatus,
   shouldAttemptInventoryAutomatically,
   type InventoryAttemptResult,
 } from "@/src/server/orders/inventory";
+import {
+  evaluateFulfillmentCompletion,
+  FulfillmentCompletionBlockedError,
+  getFulfillmentCompletionBlockMessage,
+  isTrustedHistoricalCompletion,
+  type FulfillmentCompletionBlockReason,
+} from "@/src/server/orders/fulfillmentCompletion";
 import type { Order, OrderPaymentStatus, OrderShippingStatus, OrderStatus } from "@/src/server/orders/types";
-import { parseFallbackOrderItems } from "@/src/server/orders/sheetFallback";
+import {
+  parseFallbackOrderFulfillment,
+  parseFallbackOrderItems,
+} from "@/src/server/orders/sheetFallback";
 import {
   fetchPaymentByIdFromMp,
   searchPaymentsByExternalReference,
@@ -40,6 +49,7 @@ import {
   getOrderRowById,
   updateOrderRowInSalesSheet,
   updateProductRowInSheet,
+  type AdminOrderSheetRow,
 } from "@/src/server/sheets/repository";
 
 const parsePaymentStatus = (value: FormDataEntryValue | null): OrderPaymentStatus | null => {
@@ -200,14 +210,11 @@ const assertMercadoPagoApproval = async (
   throw new Error("Mercado Pago no confirma un pago aprobado para esta orden.");
 };
 
-const buildFallbackOrderFromSheet = async (
-  orderId: string,
+const buildFallbackOrderFromSheet = (
+  sheetOrder: AdminOrderSheetRow,
   paymentStatus: OrderPaymentStatus,
   shippingStatus: OrderShippingStatus
-): Promise<Order | null> => {
-  const sheetOrder = await getOrderRowById(orderId);
-  if (!sheetOrder) return null;
-
+): Order => {
   const raw = sheetOrder.raw as Record<string, unknown>;
   const items = parseFallbackOrderItems(raw, sheetOrder.items);
   const mpPaymentId =
@@ -243,6 +250,7 @@ const buildFallbackOrderFromSheet = async (
       : undefined,
     paymentMethod: sheetOrder.paymentMethod,
     deliveryMethod: sheetOrder.deliveryMethod,
+    fulfillment: parseFallbackOrderFulfillment(raw, sheetOrder.deliveryMethod),
     items,
     total: sheetOrder.total,
     currency: "ARS",
@@ -263,6 +271,67 @@ type AdminOrderUpdateResult = {
   inventoryStatus?: Order["inventoryStatus"];
   shippingStatus: OrderShippingStatus;
   shippingBlocked: boolean;
+  completionBlockReason?: FulfillmentCompletionBlockReason;
+  completionBlockMessage?: string;
+};
+
+const completionBlockFields = (reason: FulfillmentCompletionBlockReason) => ({
+  shippingBlocked: true,
+  completionBlockReason: reason,
+  completionBlockMessage: getFulfillmentCompletionBlockMessage(reason),
+});
+
+const persistRequestedShippingStatus = async ({
+  orderId,
+  previousOrder,
+  currentOrder,
+  requestedShippingStatus,
+}: {
+  orderId: string;
+  previousOrder: Order;
+  currentOrder: Order;
+  requestedShippingStatus: OrderShippingStatus;
+}): Promise<{
+  order: Order;
+  shippingBlocked: boolean;
+  completionBlockReason?: FulfillmentCompletionBlockReason;
+  completionBlockMessage?: string;
+}> => {
+  if (isTrustedHistoricalCompletion(previousOrder)) {
+    return { order: currentOrder, shippingBlocked: false };
+  }
+
+  if (requestedShippingStatus === "in_process") {
+    const order =
+      currentOrder.shippingStatus === "in_process"
+        ? currentOrder
+        : (await updateOrder(orderId, { shippingStatus: "in_process" })) ?? currentOrder;
+    return { order, shippingBlocked: false };
+  }
+
+  const completionDecision = evaluateFulfillmentCompletion({
+    ...currentOrder,
+    shippingStatus: "completed",
+  });
+  if (!completionDecision.allowed) {
+    const order =
+      currentOrder.shippingStatus === "in_process"
+        ? currentOrder
+        : (await updateOrder(orderId, { shippingStatus: "in_process" })) ?? currentOrder;
+    return { order, ...completionBlockFields(completionDecision.reason) };
+  }
+
+  try {
+    const order =
+      currentOrder.shippingStatus === "completed"
+        ? currentOrder
+        : (await updateOrder(orderId, { shippingStatus: "completed" })) ?? currentOrder;
+    return { order, shippingBlocked: false };
+  } catch (error) {
+    if (!(error instanceof FulfillmentCompletionBlockedError)) throw error;
+    const newestOrder = (await getOrder(orderId)) ?? currentOrder;
+    return { order: newestOrder, ...completionBlockFields(error.reason) };
+  }
 };
 
 const inventoryPatchFromAttempt = async (order: Order) => {
@@ -293,16 +362,14 @@ const applyOrderStatusesUpdate = async ({
       throw new Error("Pedido no encontrado.");
     }
 
-    const fallbackOrder = await buildFallbackOrderFromSheet(orderId, paymentStatus, shippingStatus);
-    if (!fallbackOrder) {
-      throw new Error("No se pudo reconstruir el pedido desde Google Sheets.");
-    }
+    const previousFallbackOrder = buildFallbackOrderFromSheet(
+      sheetOrder,
+      sheetOrder.paymentStatus,
+      sheetOrder.shippingStatus
+    );
+    const fallbackOrder = buildFallbackOrderFromSheet(sheetOrder, paymentStatus, shippingStatus);
 
     const wasConfirmed = sheetOrder.paymentStatus === "confirmed";
-    const wasInventoryBlocked = isInventoryBlockingShipping(fallbackOrder);
-    if (shippingStatus === "completed" && wasInventoryBlocked && wasConfirmed) {
-      throw new Error("No se puede finalizar la entrega mientras el inventario requiere atención.");
-    }
 
     let verifiedPaymentId = fallbackOrder.mpPaymentId;
     let verifiedMpStatus = fallbackOrder.mpStatus;
@@ -329,9 +396,19 @@ const applyOrderStatusesUpdate = async ({
     }
 
     const resolvedFallbackOrder = { ...fallbackOrder, ...inventoryPatch };
-    const shippingBlocked =
-      shippingStatus === "completed" && isInventoryBlockingShipping(resolvedFallbackOrder);
-    const resolvedShippingStatus = shippingBlocked ? "in_process" : shippingStatus;
+    const historicalCompletion = isTrustedHistoricalCompletion(previousFallbackOrder);
+    const completionDecision =
+      shippingStatus === "completed" && !historicalCompletion
+        ? evaluateFulfillmentCompletion({ ...resolvedFallbackOrder, shippingStatus: "completed" })
+        : { allowed: true as const };
+    const completionBlockReason = completionDecision.allowed
+      ? undefined
+      : completionDecision.reason;
+    const resolvedShippingStatus = historicalCompletion
+      ? "completed"
+      : shippingStatus === "completed" && completionBlockReason
+        ? "in_process"
+        : shippingStatus;
 
     const approvedAt = paymentStatus === "confirmed" && !wasConfirmed ? Date.now() : null;
     await updateOrderRowInSalesSheet(orderId, {
@@ -376,18 +453,13 @@ const applyOrderStatusesUpdate = async ({
       orderId,
       inventoryStatus: resolveOrderInventoryStatus(resolvedFallbackOrder),
       shippingStatus: resolvedShippingStatus,
-      shippingBlocked,
+      ...(completionBlockReason
+        ? completionBlockFields(completionBlockReason)
+        : { shippingBlocked: false }),
     };
   }
 
   const wasConfirmed = currentOrder.paymentStatus === "confirmed";
-  if (
-    shippingStatus === "completed" &&
-    isInventoryBlockingShipping(currentOrder) &&
-    wasConfirmed
-  ) {
-    throw new Error("No se puede finalizar la entrega mientras el inventario requiere atención.");
-  }
 
   if (paymentStatus === "confirmed") {
     const approvedAt = wasConfirmed ? currentOrder.approvedAt ?? Date.now() : Date.now();
@@ -419,12 +491,12 @@ const applyOrderStatusesUpdate = async ({
       throw new Error("No se pudo persistir la confirmación del pago.");
     }
 
-    const shippingBlocked =
-      shippingStatus === "completed" && isInventoryBlockingShipping(approvedOrder);
-    const resolvedShippingStatus = shippingBlocked ? "in_process" : shippingStatus;
-    if (resolvedShippingStatus !== approvedOrder.shippingStatus) {
-      await updateOrder(orderId, { shippingStatus: resolvedShippingStatus });
-    }
+    const shippingResult = await persistRequestedShippingStatus({
+      orderId,
+      previousOrder: currentOrder,
+      currentOrder: approvedOrder,
+      requestedShippingStatus: shippingStatus,
+    });
 
     if (!wasConfirmed && !currentOrder.receiptEmailSentAt) {
       await ensurePurchaseReceiptEventSafely({
@@ -440,45 +512,69 @@ const applyOrderStatusesUpdate = async ({
     }
     return {
       orderId,
-      inventoryStatus: resolveOrderInventoryStatus(approvedOrder),
-      shippingStatus: resolvedShippingStatus,
-      shippingBlocked,
+      inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
+      shippingStatus: shippingResult.order.shippingStatus,
+      shippingBlocked: shippingResult.shippingBlocked,
+      ...(shippingResult.completionBlockReason
+        ? {
+            completionBlockReason: shippingResult.completionBlockReason,
+            completionBlockMessage: shippingResult.completionBlockMessage,
+          }
+        : {}),
     };
-  }
-
-  if (shippingStatus === "completed" && isInventoryBlockingShipping(currentOrder)) {
-    throw new Error("No se puede finalizar la entrega mientras el inventario requiere atención.");
   }
 
   const terminalStatus = terminalOrderStatusFromPaymentStatus(paymentStatus);
   if (terminalStatus) {
-    await markTerminalPaymentState(orderId, {
+    const terminalOrder = await markTerminalPaymentState(orderId, {
       status: terminalStatus,
       paymentId: currentOrder.mpPaymentId,
       mpStatus: currentOrder.mpStatus || terminalStatus,
     });
-    if (shippingStatus !== currentOrder.shippingStatus) {
-      await updateOrder(orderId, { shippingStatus });
-    }
+    if (!terminalOrder) throw new Error("No se pudo persistir el estado final del pago.");
+    const shippingResult = await persistRequestedShippingStatus({
+      orderId,
+      previousOrder: currentOrder,
+      currentOrder: terminalOrder,
+      requestedShippingStatus: shippingStatus,
+    });
     return {
       orderId,
-      inventoryStatus: resolveOrderInventoryStatus(currentOrder),
-      shippingStatus,
-      shippingBlocked: false,
+      inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
+      shippingStatus: shippingResult.order.shippingStatus,
+      shippingBlocked: shippingResult.shippingBlocked,
+      ...(shippingResult.completionBlockReason
+        ? {
+            completionBlockReason: shippingResult.completionBlockReason,
+            completionBlockMessage: shippingResult.completionBlockMessage,
+          }
+        : {}),
     };
   }
 
-  await updateOrder(orderId, {
+  const pendingOrder = await updateOrder(orderId, {
     paymentStatus,
-    shippingStatus,
     status: "pending",
     mpStatus: "pending",
   });
+  if (!pendingOrder) throw new Error("No se pudo persistir el estado del pago.");
+  const shippingResult = await persistRequestedShippingStatus({
+    orderId,
+    previousOrder: currentOrder,
+    currentOrder: pendingOrder,
+    requestedShippingStatus: shippingStatus,
+  });
   return {
     orderId,
-    inventoryStatus: resolveOrderInventoryStatus(currentOrder),
-    shippingStatus,
-    shippingBlocked: false,
+    inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
+    shippingStatus: shippingResult.order.shippingStatus,
+    shippingBlocked: shippingResult.shippingBlocked,
+    ...(shippingResult.completionBlockReason
+      ? {
+          completionBlockReason: shippingResult.completionBlockReason,
+          completionBlockMessage: shippingResult.completionBlockMessage,
+        }
+      : {}),
   };
 };
 
@@ -524,22 +620,25 @@ export async function retryOrderInventoryAction(orderIdInput: string) {
       throw new Error("El inventario solo puede reintentarse para un pago confirmado.");
     }
 
-    const fallbackOrder = await buildFallbackOrderFromSheet(
-      orderId,
+    const fallbackOrder = buildFallbackOrderFromSheet(
+      sheetOrder,
       sheetOrder.paymentStatus,
       sheetOrder.shippingStatus
     );
-    if (!fallbackOrder) throw new Error("No se pudo reconstruir el pedido desde Google Sheets.");
 
     if (resolveOrderInventoryStatus(fallbackOrder) === "deducted") {
       inventoryStatus = "deducted";
     } else {
       const { patch } = await inventoryPatchFromAttempt(fallbackOrder);
+      const shouldResetInvalidCompletion =
+        fallbackOrder.shippingStatus === "completed" &&
+        !isTrustedHistoricalCompletion(fallbackOrder);
       await updateOrderRowInSalesSheet(orderId, {
         inventoryStatus: patch.inventoryStatus ?? null,
         inventoryIssueCode: patch.inventoryIssueCode ?? null,
         inventoryIssueAt: patch.inventoryIssueAt ?? null,
         stockDeductedAt: patch.stockDeductedAt,
+        ...(shouldResetInvalidCompletion ? { shippingStatus: "in_process" } : {}),
         updatedAt: Date.now(),
       });
       inventoryStatus = patch.inventoryStatus;
