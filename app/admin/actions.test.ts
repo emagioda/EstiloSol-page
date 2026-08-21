@@ -39,6 +39,7 @@ import {
 import {
   getOrder,
   markApproved,
+  markTerminalPaymentState,
   retryPaidOrderInventory,
   updateOrder,
 } from "@/src/server/orders/store";
@@ -50,6 +51,10 @@ import {
 } from "@/src/server/sheets/repository";
 import { searchPaymentsByExternalReference } from "@/src/server/payments/mpClient";
 import { parseFallbackOrderItems } from "@/src/server/orders/sheetFallback";
+import {
+  FULFILLMENT_COMPLETION_BLOCK_REASONS,
+  FulfillmentCompletionBlockedError,
+} from "@/src/server/orders/fulfillmentCompletion";
 
 const baseOrder = (patch: Partial<Order> = {}): Order => ({
   externalReference: "order-admin-1",
@@ -57,9 +62,23 @@ const baseOrder = (patch: Partial<Order> = {}): Order => ({
   paymentStatus: "pending",
   shippingStatus: "in_process",
   paymentMethod: "transfer",
+  deliveryMethod: "pickup",
   items: [{ productId: "p1", title: "Producto", qty: 1, unitPrice: 1000, currency: "ARS" }],
   total: 1000,
   currency: "ARS",
+  fulfillment: {
+    subtotalProducts: 1000,
+    discountAmount: 0,
+    shippingFee: 0,
+    finalTotal: 1000,
+    pickupPoint: {
+      id: "pickup-1",
+      name: "Estilo Sol",
+      address: "San Martín 123",
+      reference: "Mostrador",
+    },
+    summary: "Retiro en Estilo Sol",
+  },
   createdAt: 1,
   updatedAt: 1,
   customer: { email: "client@test.com" },
@@ -91,6 +110,15 @@ const baseSheetOrder = (patch: Partial<AdminOrderSheetRow> = {}): AdminOrderShee
     items_json: JSON.stringify([
       { productId: "p1", title: "Producto", qty: 1, unitPrice: 1000 },
     ]),
+    subtotal_productos: 1000,
+    descuento: 0,
+    costo_envio: 0,
+    total_final: 1000,
+    pickup_point_id: "pickup-1",
+    pickup_point_name: "Estilo Sol",
+    pickup_point_address: "San Martín 123",
+    pickup_point_reference: "Mostrador",
+    fulfillment_summary: "Retiro en Estilo Sol",
   },
   ...patch,
 });
@@ -102,6 +130,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.MP_ACCESS_TOKEN = "test-token";
   vi.mocked(updateOrder).mockImplementation(async (_id, patch) => baseOrder(patch));
+  vi.mocked(markTerminalPaymentState).mockImplementation(async (_id, input) => baseOrder({
+    status: input.status,
+    paymentStatus: input.status === "refunded" ? "refunded" : input.status === "charged_back" ? "charged_back" : "cancelled",
+  }));
   vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
   vi.mocked(decrementProductsStockInSheet).mockResolvedValue({
     deduped: false,
@@ -222,21 +254,30 @@ describe("PR 2 shipping guard", () => {
     ["PR2-SHIP-07 forged status payload cannot bypass the server guard", "conflict"],
     ["PR2-SHIP-08 batch update cannot bypass the server guard", "error"],
   ] as const)("%s", async (_name, inventoryStatus) => {
-    vi.mocked(getOrder).mockResolvedValue(baseOrder({
+    const current = baseOrder({
       status: "approved",
       paymentStatus: "confirmed",
       inventoryStatus,
-    }));
-    await expect(save("order-admin-1", "confirmed", "completed")).rejects.toThrow("inventario requiere atención");
+    });
+    vi.mocked(getOrder).mockResolvedValue(current);
+    const result = await save("order-admin-1", "confirmed", "completed");
+    expect(result.results[0]).toMatchObject({
+      shippingStatus: "in_process",
+      shippingBlocked: true,
+      completionBlockReason: "INVENTORY_REQUIRES_ATTENTION",
+      completionBlockMessage: "El inventario requiere atención.",
+    });
   });
 
   it("PR2-SHIP-03 deducted can become completed", async () => {
-    vi.mocked(getOrder).mockResolvedValue(baseOrder({
+    const current = baseOrder({
       status: "approved",
       paymentStatus: "confirmed",
       inventoryStatus: "deducted",
       stockDeductedAt: 10,
-    }));
+    });
+    vi.mocked(getOrder).mockResolvedValue(current);
+    vi.mocked(updateOrder).mockImplementation(async (_id, patch) => ({ ...current, ...patch }));
     const result = await save("order-admin-1", "confirmed", "completed");
     expect(result.results[0]).toMatchObject({ shippingStatus: "completed", shippingBlocked: false });
     expect(updateOrder).toHaveBeenCalledWith("order-admin-1", { shippingStatus: "completed" });
@@ -244,17 +285,19 @@ describe("PR 2 shipping guard", () => {
   });
 
   it.each([
-    ["PR2-SHIP-04 confirm plus completed with stock success completes", "deducted", "completed", false],
-    ["PR2-SHIP-05 confirm plus completed with conflict keeps in_process", "conflict", "in_process", true],
-    ["PR2-SHIP-06 confirm plus completed with error keeps in_process", "error", "in_process", true],
+    ["COMBINED-01 confirm plus completed with stock success completes", "deducted", "completed", false],
+    ["COMBINED-02 confirm plus completed with conflict keeps in_process", "conflict", "in_process", true],
+    ["COMBINED-03 confirm plus completed with error keeps in_process", "error", "in_process", true],
   ] as const)("%s", async (_name, inventoryStatus, expectedShipping, shippingBlocked) => {
     vi.mocked(getOrder).mockResolvedValue(baseOrder());
-    vi.mocked(markApproved).mockResolvedValue(baseOrder({
+    const approved = baseOrder({
       status: "approved",
       paymentStatus: "confirmed",
       inventoryStatus,
       ...(inventoryStatus === "deducted" ? { stockDeductedAt: 10 } : {}),
-    }));
+    });
+    vi.mocked(markApproved).mockResolvedValue(approved);
+    vi.mocked(updateOrder).mockImplementation(async (_id, patch) => ({ ...approved, ...patch }));
     const result = await save("order-admin-1", "confirmed", "completed");
     expect(result.results[0]).toMatchObject({
       inventoryStatus,
@@ -263,14 +306,19 @@ describe("PR 2 shipping guard", () => {
     });
   });
 
-  it("PR2-SHIP-09 legacy undefined is not blocked solely for being legacy", async () => {
+  it("ADMIN-01 blocks a legacy undefined inventory state", async () => {
     vi.mocked(getOrder).mockResolvedValue(baseOrder({
       status: "approved",
       paymentStatus: "confirmed",
       inventoryStatus: undefined,
     }));
     const result = await save("order-admin-1", "confirmed", "completed");
-    expect(result.results[0]).toMatchObject({ shippingStatus: "completed", shippingBlocked: false });
+    expect(result.results[0]).toMatchObject({
+      shippingStatus: "in_process",
+      shippingBlocked: true,
+      completionBlockReason: "INVENTORY_NOT_DEDUCTED",
+      completionBlockMessage: "Stock todavía no descontado.",
+    });
   });
 });
 
@@ -371,5 +419,231 @@ describe("PR 2 Sheets fallback", () => {
     expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith("sheet-order-1", expect.objectContaining({
       inventoryStatus: "error",
     }));
+  });
+});
+
+describe("AUD3 H07 Admin fulfillment completion", () => {
+  it("ADMIN-02 rejects direct completion while payment is pending", async () => {
+    const current = baseOrder({ inventoryStatus: "deducted", stockDeductedAt: 10 });
+    vi.mocked(getOrder).mockResolvedValue(current);
+    vi.mocked(updateOrder).mockImplementation(async (_id, patch) => ({ ...current, ...patch }));
+
+    const result = await save(current.externalReference, "pending", "completed");
+    expect(result.results[0]).toMatchObject({
+      shippingStatus: "in_process",
+      completionBlockReason: "PAYMENT_NOT_CONFIRMED",
+      completionBlockMessage: "Pago todavía no confirmado.",
+    });
+  });
+
+  it("ADMIN-03 rejects an incomplete frozen pickup snapshot", async () => {
+    const current = baseOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+      fulfillment: undefined,
+    });
+    vi.mocked(getOrder).mockResolvedValue(current);
+
+    expect((await save(current.externalReference, "confirmed", "completed")).results[0]).toMatchObject({
+      shippingStatus: "in_process",
+      completionBlockReason: "PICKUP_INCOMPLETE",
+      completionBlockMessage: "Faltan datos del punto de retiro.",
+    });
+  });
+
+  it("ADMIN-04 rejects incoherent authoritative totals", async () => {
+    const current = baseOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+      fulfillment: { ...baseOrder().fulfillment!, finalTotal: 900 },
+    });
+    vi.mocked(getOrder).mockResolvedValue(current);
+
+    expect((await save(current.externalReference, "confirmed", "completed")).results[0]).toMatchObject({
+      completionBlockReason: "FULFILLMENT_TOTALS_INVALID",
+      completionBlockMessage: "Datos/totales históricos incompletos.",
+    });
+  });
+
+  it("ADMIN-05 preserves a valid historical completion through a refund", async () => {
+    const current = baseOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      shippingStatus: "completed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+    });
+    const refunded = { ...current, status: "refunded" as const, paymentStatus: "refunded" as const };
+    vi.mocked(getOrder).mockResolvedValue(current);
+    vi.mocked(markTerminalPaymentState).mockResolvedValue(refunded);
+
+    expect((await save(current.externalReference, "refunded", "completed")).results[0]).toMatchObject({
+      shippingStatus: "completed",
+      shippingBlocked: false,
+    });
+    expect(updateOrder).not.toHaveBeenCalled();
+  });
+
+  it("COMBINED-04 preserves durable confirmation/inventory but blocks incomplete fulfillment", async () => {
+    const current = baseOrder({ paymentMethod: "cash" });
+    const approved = baseOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+      fulfillment: undefined,
+    });
+    vi.mocked(getOrder).mockResolvedValue(current);
+    vi.mocked(markApproved).mockResolvedValue(approved);
+
+    const result = await save(current.externalReference, "confirmed", "completed");
+    expect(result.results[0]).toMatchObject({
+      inventoryStatus: "deducted",
+      shippingStatus: "in_process",
+      completionBlockReason: "PICKUP_INCOMPLETE",
+    });
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
+  });
+
+  it("COMBINED-05 converts a locked completion race into a safe operator reason", async () => {
+    const current = baseOrder({ paymentMethod: "cash" });
+    const approved = baseOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+    });
+    vi.mocked(getOrder).mockResolvedValue(current);
+    vi.mocked(markApproved).mockResolvedValue(approved);
+    vi.mocked(updateOrder).mockRejectedValueOnce(new FulfillmentCompletionBlockedError(
+      FULFILLMENT_COMPLETION_BLOCK_REASONS.inventoryRequiresAttention
+    ));
+
+    const result = await save(current.externalReference, "confirmed", "completed");
+    expect(result.results[0]).toMatchObject({
+      shippingStatus: "in_process",
+      completionBlockReason: "INVENTORY_REQUIRES_ATTENTION",
+      completionBlockMessage: "El inventario requiere atención.",
+    });
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
+  });
+
+  it("FALLBACK-H07-01 completes a valid exact Sheets snapshot after durable inventory success", async () => {
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder());
+
+    const result = await save("sheet-order-1", "confirmed", "completed");
+    expect(result.results[0]).toMatchObject({
+      inventoryStatus: "deducted",
+      shippingStatus: "completed",
+      shippingBlocked: false,
+    });
+  });
+
+  it("FALLBACK-H07-02 fails closed when the existing Sheet snapshot is incomplete", async () => {
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: "2026-08-01T00:00:00.000Z",
+      raw: { items_json: JSON.stringify([{ productId: "p1", qty: 1, unitPrice: 1000 }]) },
+    }));
+
+    expect((await save("sheet-order-1", "confirmed", "completed")).results[0]).toMatchObject({
+      shippingStatus: "in_process",
+      completionBlockReason: "FULFILLMENT_TOTALS_INVALID",
+    });
+  });
+
+  it("FALLBACK-H07-03 preserves payment and blocks completion on inventory conflict", async () => {
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder());
+    vi.mocked(decrementProductsStockInSheet).mockRejectedValue(new InventoryOperationError({
+      code: "INSUFFICIENT_STOCK",
+      message: "none",
+    }));
+
+    const result = await save("sheet-order-1", "confirmed", "completed");
+    expect(result.results[0]).toMatchObject({
+      inventoryStatus: "conflict",
+      shippingStatus: "in_process",
+      completionBlockReason: "INVENTORY_REQUIRES_ATTENTION",
+    });
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({ paymentStatus: "confirmed", shippingStatus: "in_process" })
+    );
+  });
+
+  it("FALLBACK-H07-04 rejects a missing pickup reference from existing fields", async () => {
+    const sheetOrder = baseSheetOrder({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: "2026-08-01T00:00:00.000Z",
+    });
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue({
+      ...sheetOrder,
+      raw: { ...sheetOrder.raw, pickup_point_reference: "" },
+    });
+
+    expect((await save("sheet-order-1", "confirmed", "completed")).results[0]).toMatchObject({
+      completionBlockReason: "PICKUP_INCOMPLETE",
+    });
+  });
+
+  it("FALLBACK-H07-05 preserves valid historical completion through a terminal financial update", async () => {
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
+      paymentStatus: "confirmed",
+      shippingStatus: "completed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: "2026-08-01T00:00:00.000Z",
+    }));
+
+    expect((await save("sheet-order-1", "refunded", "in_process")).results[0]).toMatchObject({
+      shippingStatus: "completed",
+      shippingBlocked: false,
+    });
+  });
+
+  it("BATCH-01 applies the same policy independently to valid and blocked rows", async () => {
+    const valid = baseOrder({
+      externalReference: "valid",
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+    });
+    const blocked = baseOrder({
+      externalReference: "blocked",
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: undefined,
+    });
+    vi.mocked(getOrder).mockImplementation(async (id) => id === "valid" ? valid : blocked);
+    vi.mocked(updateOrder).mockImplementation(async (_id, patch) => ({ ...valid, ...patch }));
+
+    const result = await saveOrderStatusesBatchAction([
+      { orderId: "valid", paymentStatus: "confirmed", shippingStatus: "completed" },
+      { orderId: "blocked", paymentStatus: "confirmed", shippingStatus: "completed" },
+    ]);
+    expect(result.results).toEqual([
+      expect.objectContaining({ orderId: "valid", shippingStatus: "completed", shippingBlocked: false }),
+      expect.objectContaining({ orderId: "blocked", completionBlockReason: "INVENTORY_NOT_DEDUCTED" }),
+    ]);
+  });
+
+  it("BATCH-02 rejects forged enum values before any persistence", async () => {
+    await expect(saveOrderStatusesBatchAction([{
+      orderId: "order-admin-1",
+      paymentStatus: "confirmed",
+      shippingStatus: "delivered",
+    }])).rejects.toThrow("Invalid batch order update payload");
+    expect(updateOrder).not.toHaveBeenCalled();
   });
 });

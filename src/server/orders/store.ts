@@ -16,6 +16,12 @@ import {
   type InventoryAttemptResult,
 } from "./inventory";
 import {
+  evaluateFulfillmentCompletion,
+  FULFILLMENT_COMPLETION_BLOCK_REASONS,
+  FulfillmentCompletionBlockedError,
+  isTrustedHistoricalCompletion,
+} from "./fulfillmentCompletion";
+import {
   addPendingSalesSheetOrder,
   removePendingSalesSheetOrder,
 } from "./salesSheetSync";
@@ -368,7 +374,7 @@ export const mergeOrderUpdate = (
   patch: OrderPatch,
   updatedAt = Date.now()
 ): { order: Order; inventoryStatePreserved: boolean } => {
-  const candidate: Order = {
+  let candidate: Order = {
     ...current,
     ...patch,
     externalReference: current.externalReference,
@@ -389,20 +395,53 @@ export const mergeOrderUpdate = (
       candidate.inventoryIssueCode !== undefined ||
       candidate.inventoryIssueAt !== undefined);
 
-  if (!inventoryStatePreserved) {
-    return { order: candidate, inventoryStatePreserved: false };
-  }
-
-  return {
-    order: {
+  if (inventoryStatePreserved) {
+    candidate = {
       ...candidate,
       inventoryStatus: "deducted",
       stockDeductedAt: current.stockDeductedAt,
       inventoryIssueCode: undefined,
       inventoryIssueAt: undefined,
-    },
-    inventoryStatePreserved: true,
-  };
+    };
+  }
+
+  const fulfillmentStateMutation = [
+    "status",
+    "paymentStatus",
+    "mpPaymentId",
+    "mpStatus",
+    "mpPaymentLedger",
+    "mpPaymentAttentionCode",
+    "approvedAt",
+    "inventoryStatus",
+    "inventoryIssueCode",
+    "inventoryIssueAt",
+    "stockDeductedAt",
+  ].some((field) => Object.prototype.hasOwnProperty.call(patch, field));
+  const currentTrustedCompletion = isTrustedHistoricalCompletion(current);
+  const currentInvalidCompletion =
+    current.shippingStatus === "completed" && !currentTrustedCompletion;
+  const explicitlyCompletes = patch.shippingStatus === "completed";
+
+  if (currentTrustedCompletion) {
+    candidate = { ...candidate, shippingStatus: "completed" };
+  } else if (currentInvalidCompletion && fulfillmentStateMutation) {
+    candidate = { ...candidate, shippingStatus: "in_process" };
+    if (explicitlyCompletes) {
+      throw new FulfillmentCompletionBlockedError(
+        FULFILLMENT_COMPLETION_BLOCK_REASONS.requiresReconfirmation
+      );
+    }
+  }
+
+  if (explicitlyCompletes && !currentTrustedCompletion) {
+    const completionDecision = evaluateFulfillmentCompletion(candidate);
+    if (!completionDecision.allowed) {
+      throw new FulfillmentCompletionBlockedError(completionDecision.reason);
+    }
+  }
+
+  return { order: candidate, inventoryStatePreserved };
 };
 
 const needsEnrolledSalesProjectionRecovery = (order: Order): boolean =>
@@ -630,6 +669,7 @@ type MercadoPagoPaymentBatchDependencies = {
 const paymentProjectionChanged = (before: Order, after: Order) =>
   before.status !== after.status ||
   before.paymentStatus !== after.paymentStatus ||
+  before.shippingStatus !== after.shippingStatus ||
   before.mpPaymentId !== after.mpPaymentId ||
   before.mpStatus !== after.mpStatus ||
   before.receiptOutboxVersion !== after.receiptOutboxVersion ||

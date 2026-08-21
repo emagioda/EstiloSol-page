@@ -26,6 +26,7 @@ import {
   markCancelled,
   markChargedBack,
   markRefunded,
+  mergeOrderUpdate,
   ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS,
   ORDER_WRITE_LOCK_TTL_SECONDS,
   orderWriteLockCoversWorstCaseSheetUpdate,
@@ -34,6 +35,7 @@ import {
   updateOrder,
 } from "./store";
 import { resolveOrderInventoryStatus } from "./inventory";
+import { evaluateFulfillmentCompletion } from "./fulfillmentCompletion";
 import {
   appendOrderToSalesSheet,
   decrementProductsStockInSheet,
@@ -58,9 +60,23 @@ const makeOrder = (patch: Partial<Order> = {}): Order => {
     paymentStatus: "pending",
     shippingStatus: "in_process",
     paymentMethod: "mercadopago",
+    deliveryMethod: "pickup",
     items: [{ productId: "p1", title: "Producto", unitPrice: 1000, qty: 1, currency: "ARS" }],
     total: 1000,
     currency: "ARS",
+    fulfillment: {
+      subtotalProducts: 1000,
+      discountAmount: 0,
+      shippingFee: 0,
+      finalTotal: 1000,
+      pickupPoint: {
+        id: "pickup-1",
+        name: "Estilo Sol",
+        address: "San Martín 123",
+        reference: "Mostrador",
+      },
+      summary: "Retiro en Estilo Sol",
+    },
     createdAt: now,
     updatedAt: now,
     ...patch,
@@ -306,6 +322,134 @@ describe("PR 2 order store inventory state", () => {
     const updated = await transition(order.externalReference, { paymentId: "pay", mpStatus: expectedStatus });
     expect(updated).toMatchObject({ inventoryStatus: "deducted", stockDeductedAt: 123 });
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+  });
+});
+
+describe("AUD3 H07 store fulfillment invariant", () => {
+  it("RACE-01 rejects a forged direct completion at the locked store boundary", async () => {
+    const order = makeOrder({ inventoryStatus: "pending" });
+    await createOrder(order);
+
+    await expect(updateOrder(order.externalReference, {
+      shippingStatus: "completed",
+    })).rejects.toMatchObject({
+      name: "FulfillmentCompletionBlockedError",
+      reason: "PAYMENT_NOT_CONFIRMED",
+    });
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      shippingStatus: "in_process",
+    });
+  });
+
+  it("RACE-02 approval cannot retroactively legitimize a preexisting invalid completion", async () => {
+    const order = makeOrder({ shippingStatus: "completed", inventoryStatus: "pending" });
+    await createOrder(order);
+
+    await expect(approve(order)).resolves.toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      shippingStatus: "in_process",
+    });
+  });
+
+  it("RACE-03 inventory retry cleans an invalid preexisting completion", async () => {
+    const order = makeOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      shippingStatus: "completed",
+      inventoryStatus: "conflict",
+      inventoryIssueCode: "INSUFFICIENT_STOCK",
+    });
+    await createOrder(order);
+
+    await expect(retryPaidOrderInventory(order.externalReference)).resolves.toMatchObject({
+      inventoryStatus: "deducted",
+      shippingStatus: "in_process",
+    });
+  });
+
+  it("RACE-04 completion racing approval can only finish in a policy-valid state", async () => {
+    const order = makeOrder({ inventoryStatus: "pending" });
+    await createOrder(order);
+
+    await Promise.allSettled([
+      approve(order),
+      updateOrder(order.externalReference, { shippingStatus: "completed" }),
+    ]);
+    const finalOrder = await getOrder(order.externalReference);
+    expect(finalOrder).not.toBeNull();
+    if (finalOrder?.shippingStatus === "completed") {
+      expect(evaluateFulfillmentCompletion(finalOrder)).toEqual({ allowed: true });
+    } else {
+      expect(finalOrder?.shippingStatus).toBe("in_process");
+    }
+  });
+
+  it("MP-CLEAN-01 reconciliation removes an invalid preexisting completion without changing ledger semantics", async () => {
+    const order = makeOrder({ shippingStatus: "completed", inventoryStatus: "pending" });
+    await createOrder(order, { syncSheet: false });
+
+    const result = await reconcileMercadoPagoPaymentObservationBatch(order.externalReference, [{
+      paymentId: "approved-payment",
+      status: "approved",
+      amount: 1000,
+      currency: "ARS",
+      observedAt: 100,
+    }]);
+    expect(result.order).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      shippingStatus: "in_process",
+      mpPaymentLedger: {
+        "approved-payment": expect.objectContaining({ status: "approved" }),
+      },
+    });
+  });
+
+  it("HISTORY-02 preserves a valid completed flag through refund and later chargeback", async () => {
+    const order = makeOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      shippingStatus: "completed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 100,
+    });
+    await createOrder(order);
+
+    await markRefunded(order.externalReference, { paymentId: "pay", mpStatus: "refunded" });
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      paymentStatus: "refunded",
+      shippingStatus: "completed",
+    });
+    await markChargedBack(order.externalReference, { paymentId: "pay", mpStatus: "charged_back" });
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      paymentStatus: "charged_back",
+      shippingStatus: "completed",
+    });
+  });
+
+  it("HISTORY-03 keeps valid completion terminal when an operator requests reopening", async () => {
+    const current = makeOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      shippingStatus: "completed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 100,
+    });
+    expect(mergeOrderUpdate(current, { shippingStatus: "in_process" }).order.shippingStatus).toBe(
+      "completed"
+    );
+  });
+
+  it("FORGE-01 rejects a single forged patch that tries to repair and complete an invalid flag", () => {
+    const current = makeOrder({ shippingStatus: "completed", inventoryStatus: "pending" });
+    expect(() => mergeOrderUpdate(current, {
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 100,
+      shippingStatus: "completed",
+    })).toThrow(/Volvé a indicar Finalizado/);
   });
 });
 
@@ -562,6 +706,8 @@ describe("PR 2 recoverable Sheets synchronization", () => {
     const order = makeOrder({
       status: "approved",
       paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 123,
       receiptOutboxVersion: undefined,
     });
     await createOrder(order);
