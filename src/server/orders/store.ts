@@ -22,6 +22,14 @@ import {
   isTrustedHistoricalCompletion,
 } from "./fulfillmentCompletion";
 import {
+  evaluateAdminPaymentTransitionRequest,
+  evaluatePaymentTransition,
+  PAYMENT_TRANSITION_BLOCK_REASONS,
+  PaymentTransitionBlockedError,
+  type AdminPaymentTransitionRequestDecision,
+  type PaymentTransitionAuthority,
+} from "./paymentTransition";
+import {
   addPendingSalesSheetOrder,
   removePendingSalesSheetOrder,
 } from "./salesSheetSync";
@@ -51,6 +59,7 @@ type StoredOrder = Omit<Order, "paymentStatus" | "shippingStatus"> &
 
 type UpdateOrderOptions = {
   syncSheet?: boolean;
+  paymentAuthority?: PaymentTransitionAuthority;
 };
 
 type CreateOrderOptions = {
@@ -372,21 +381,102 @@ export const orderWriteLockCoversWorstCaseSheetUpdate = (): boolean =>
 export const mergeOrderUpdate = (
   current: Order,
   patch: OrderPatch,
-  updatedAt = Date.now()
-): { order: Order; inventoryStatePreserved: boolean } => {
+  updatedAt = Date.now(),
+  paymentAuthority?: PaymentTransitionAuthority
+): { order: Order; inventoryStatePreserved: boolean; noOp: boolean } => {
+  const financialPatchKeys: Array<keyof OrderPatch> = [
+    "status",
+    "paymentStatus",
+    "mpPaymentId",
+    "mpStatus",
+    "mpPaymentLedger",
+    "mpPaymentAttentionCode",
+    "approvedAt",
+    "receiptOutboxVersion",
+  ];
+  const hasFinancialPatch = financialPatchKeys.some((field) =>
+    Object.prototype.hasOwnProperty.call(patch, field)
+  );
+  if (hasFinancialPatch && !paymentAuthority) {
+    throw new PaymentTransitionBlockedError(
+      PAYMENT_TRANSITION_BLOCK_REASONS.authorityRequired
+    );
+  }
+
+  const hasPaymentStatus = Object.prototype.hasOwnProperty.call(patch, "paymentStatus");
+  const hasStatus = Object.prototype.hasOwnProperty.call(patch, "status");
+  if (hasFinancialPatch && paymentAuthority === "admin_manual" && !hasPaymentStatus) {
+    throw new PaymentTransitionBlockedError(
+      PAYMENT_TRANSITION_BLOCK_REASONS.notAllowed
+    );
+  }
+  if (hasPaymentStatus) {
+    if (
+      !hasStatus ||
+      !patch.paymentStatus ||
+      !patch.status ||
+      statusToPaymentStatus(patch.status) !== patch.paymentStatus
+    ) {
+      throw new PaymentTransitionBlockedError(
+        PAYMENT_TRANSITION_BLOCK_REASONS.incoherentState
+      );
+    }
+  } else if (
+    hasStatus &&
+    patch.status !== "created" &&
+    patch.status !== "preference_created"
+  ) {
+    throw new PaymentTransitionBlockedError(
+      PAYMENT_TRANSITION_BLOCK_REASONS.incoherentState
+    );
+  }
+
+  let effectivePatch = patch;
+  if (hasPaymentStatus && patch.paymentStatus && paymentAuthority) {
+    const decision = evaluatePaymentTransition({
+      current: current.paymentStatus,
+      requested: patch.paymentStatus,
+      paymentMethod: current.paymentMethod,
+      authority: paymentAuthority,
+    });
+    if (!decision.allowed) {
+      throw new PaymentTransitionBlockedError(decision.reason);
+    }
+    if (decision.replay && paymentAuthority === "admin_manual") {
+      const replaySideEffectKeys = new Set<keyof OrderPatch>([
+        ...financialPatchKeys,
+        "inventoryStatus",
+        "inventoryIssueCode",
+        "inventoryIssueAt",
+        "stockDeductedAt",
+      ]);
+      effectivePatch = Object.fromEntries(
+        Object.entries(patch).filter(([field]) => !replaySideEffectKeys.has(field as keyof OrderPatch))
+      ) as OrderPatch;
+    }
+  }
+
+  if (
+    Object.keys(effectivePatch).length === 0 &&
+    hasFinancialPatch &&
+    paymentAuthority === "admin_manual"
+  ) {
+    return { order: current, inventoryStatePreserved: false, noOp: true };
+  }
+
   let candidate: Order = {
     ...current,
-    ...patch,
+    ...effectivePatch,
     externalReference: current.externalReference,
     createdAt: current.createdAt,
     updatedAt,
   };
   const currentInventoryStatus = resolveOrderInventoryStatus(current);
   const inventoryPatchTouched =
-    "inventoryStatus" in patch ||
-    "inventoryIssueCode" in patch ||
-    "inventoryIssueAt" in patch ||
-    "stockDeductedAt" in patch;
+    "inventoryStatus" in effectivePatch ||
+    "inventoryIssueCode" in effectivePatch ||
+    "inventoryIssueAt" in effectivePatch ||
+    "stockDeductedAt" in effectivePatch;
   const inventoryStatePreserved =
     currentInventoryStatus === "deducted" &&
     inventoryPatchTouched &&
@@ -417,11 +507,11 @@ export const mergeOrderUpdate = (
     "inventoryIssueCode",
     "inventoryIssueAt",
     "stockDeductedAt",
-  ].some((field) => Object.prototype.hasOwnProperty.call(patch, field));
+  ].some((field) => Object.prototype.hasOwnProperty.call(effectivePatch, field));
   const currentTrustedCompletion = isTrustedHistoricalCompletion(current);
   const currentInvalidCompletion =
     current.shippingStatus === "completed" && !currentTrustedCompletion;
-  const explicitlyCompletes = patch.shippingStatus === "completed";
+  const explicitlyCompletes = effectivePatch.shippingStatus === "completed";
 
   if (currentTrustedCompletion) {
     candidate = { ...candidate, shippingStatus: "completed" };
@@ -441,26 +531,26 @@ export const mergeOrderUpdate = (
     }
   }
 
-  return { order: candidate, inventoryStatePreserved };
+  return { order: candidate, inventoryStatePreserved, noOp: false };
 };
 
 const needsEnrolledSalesProjectionRecovery = (order: Order): boolean =>
   order.paymentStatus === "confirmed" && order.receiptOutboxVersion === 1;
 
-export async function updateOrder(
+const persistOrderUpdateWithinLock = async (
   externalReference: string,
+  current: StoredOrder,
   patch: OrderPatch,
   options: UpdateOrderOptions = {}
-): Promise<Order | null> {
-  return withOrderWriteLock(externalReference, async () => {
-    const current = await getJson<StoredOrder>(orderKey(externalReference));
-    if (!current) return null;
-
+): Promise<Order> => {
     const normalizedCurrent = ensureOrderDefaults(current);
-    const { order: mergedOrder, inventoryStatePreserved } = mergeOrderUpdate(
+    const { order: mergedOrder, inventoryStatePreserved, noOp } = mergeOrderUpdate(
       normalizedCurrent,
-      patch
+      patch,
+      Date.now(),
+      options.paymentAuthority
     );
+    if (noOp) return normalizedCurrent;
     let updated = mergedOrder;
 
     if (inventoryStatePreserved) {
@@ -550,6 +640,17 @@ export async function updateOrder(
     }
 
     return updated;
+};
+
+export async function updateOrder(
+  externalReference: string,
+  patch: OrderPatch,
+  options: UpdateOrderOptions = {}
+): Promise<Order | null> {
+  return withOrderWriteLock(externalReference, async () => {
+    const current = await getJson<StoredOrder>(orderKey(externalReference));
+    if (!current) return null;
+    return persistOrderUpdateWithinLock(externalReference, current, patch, options);
   });
 }
 
@@ -581,38 +682,112 @@ const reportInventoryAttempt = async (
   }
 };
 
+export type LockedAdminPaymentTransitionRequest = {
+  order: Order;
+  decision: Extract<AdminPaymentTransitionRequestDecision, { allowed: true }>;
+};
+
+export async function assertAdminPaymentTransitionRequest(
+  externalReference: string,
+  requested: OrderPaymentStatus
+): Promise<LockedAdminPaymentTransitionRequest | null> {
+  return withOrderWriteLock(externalReference, async () => {
+    const stored = await getJson<StoredOrder>(orderKey(externalReference));
+    if (!stored) return null;
+    const order = ensureOrderDefaults(stored);
+    const decision = evaluateAdminPaymentTransitionRequest({
+      current: order.paymentStatus,
+      requested,
+      paymentMethod: order.paymentMethod,
+    });
+    if (!decision.allowed) {
+      throw new PaymentTransitionBlockedError(decision.reason);
+    }
+    return { order, decision };
+  });
+}
+
 export async function markApproved(
   externalReference: string,
-  input: { paymentId: string; mpStatus: string; approvedAt?: number }
+  input: { paymentId: string; mpStatus: string; approvedAt?: number },
+  authority: PaymentTransitionAuthority
 ): Promise<Order | null> {
-  const current = await getOrder(externalReference);
-  if (!current) return null;
+  let inventoryResult: InventoryAttemptResult | undefined;
+  let updated: Order | null;
+  if (authority === "admin_manual") {
+    updated = await withOrderWriteLock(externalReference, async () => {
+      const stored = await getJson<StoredOrder>(orderKey(externalReference));
+      if (!stored) return null;
+      const current = ensureOrderDefaults(stored);
+      const decision = evaluatePaymentTransition({
+        current: current.paymentStatus,
+        requested: "confirmed",
+        paymentMethod: current.paymentMethod,
+        authority,
+      });
+      if (!decision.allowed) {
+        throw new PaymentTransitionBlockedError(decision.reason);
+      }
+      if (decision.replay) return current;
 
-  let inventoryPatch: Partial<Order> = {};
-  if (shouldAttemptInventoryAutomatically(current)) {
-    const inventoryResult = await attemptInventoryForPaidOrder(current);
-    inventoryPatch = inventoryResultToOrderPatch(inventoryResult);
-    await reportInventoryAttempt(externalReference, inventoryResult, "payment_approval");
-  } else {
-    logEvent("info", "inventory.automatic_attempt_skipped", {
-      orderId: externalReference,
-      inventoryStatus: current.inventoryStatus ?? "legacy_deducted",
+      let inventoryPatch: Partial<Order> = {};
+      if (shouldAttemptInventoryAutomatically(current)) {
+        inventoryResult = await attemptInventoryForPaidOrder(current);
+        inventoryPatch = inventoryResultToOrderPatch(inventoryResult);
+      }
+
+      return persistOrderUpdateWithinLock(
+        externalReference,
+        current,
+        {
+          status: "approved",
+          paymentStatus: "confirmed",
+          mpPaymentId: input.paymentId,
+          mpStatus: input.mpStatus,
+          approvedAt: input.approvedAt ?? Date.now(),
+          receiptOutboxVersion: 1,
+          ...inventoryPatch,
+        },
+        {
+          syncSheet: current.salesSheetDeferredUntilApprovedAt ? false : undefined,
+          paymentAuthority: authority,
+        }
+      );
     });
+  } else {
+    const current = await getOrder(externalReference);
+    if (!current) return null;
+    let inventoryPatch: Partial<Order> = {};
+    if (shouldAttemptInventoryAutomatically(current)) {
+      inventoryResult = await attemptInventoryForPaidOrder(current);
+      inventoryPatch = inventoryResultToOrderPatch(inventoryResult);
+    }
+    updated = await updateOrder(
+      externalReference,
+      {
+        status: "approved",
+        paymentStatus: "confirmed",
+        mpPaymentId: input.paymentId,
+        mpStatus: input.mpStatus,
+        approvedAt: input.approvedAt ?? Date.now(),
+        ...(current.paymentStatus !== "confirmed" ? { receiptOutboxVersion: 1 as const } : {}),
+        ...inventoryPatch,
+      },
+      {
+        syncSheet: current.salesSheetDeferredUntilApprovedAt ? false : undefined,
+        paymentAuthority: authority,
+      }
+    );
   }
 
-  const updated = await updateOrder(
-    externalReference,
-    {
-      status: "approved",
-      paymentStatus: "confirmed",
-      mpPaymentId: input.paymentId,
-      mpStatus: input.mpStatus,
-      approvedAt: input.approvedAt ?? Date.now(),
-      ...(current.paymentStatus !== "confirmed" ? { receiptOutboxVersion: 1 as const } : {}),
-      ...inventoryPatch,
-    },
-    { syncSheet: current?.salesSheetDeferredUntilApprovedAt ? false : undefined }
-  );
+  if (inventoryResult) {
+    await reportInventoryAttempt(externalReference, inventoryResult, "payment_approval");
+  } else if (updated && updated.paymentStatus === "confirmed" && authority !== "admin_manual") {
+    logEvent("info", "inventory.automatic_attempt_skipped", {
+      orderId: externalReference,
+      inventoryStatus: updated.inventoryStatus ?? "legacy_deducted",
+    });
+  }
 
   const salesSheetResult = updated?.salesSheetDeferredUntilApprovedAt
     ? await appendApprovedOrderToSalesSheet(updated)
@@ -728,17 +903,22 @@ export async function reconcileMercadoPagoPaymentObservationBatch(
       inventoryPatch = inventoryResultToOrderPatch(inventoryResult);
     }
 
-    const { order: updated } = mergeOrderUpdate(current, {
-      status: aggregate.status,
-      paymentStatus: aggregate.paymentStatus,
-      mpPaymentId: aggregate.mpPaymentId,
-      mpStatus: aggregate.mpStatus,
-      mpPaymentLedger: aggregate.mpPaymentLedger,
-      mpPaymentAttentionCode: aggregate.mpPaymentAttentionCode,
-      approvedAt: aggregate.approvedAt,
-      ...(firstEffectiveApproval ? { receiptOutboxVersion: 1 as const } : {}),
-      ...inventoryPatch,
-    });
+    const { order: updated } = mergeOrderUpdate(
+      current,
+      {
+        status: aggregate.status,
+        paymentStatus: aggregate.paymentStatus,
+        mpPaymentId: aggregate.mpPaymentId,
+        mpStatus: aggregate.mpStatus,
+        mpPaymentLedger: aggregate.mpPaymentLedger,
+        mpPaymentAttentionCode: aggregate.mpPaymentAttentionCode,
+        approvedAt: aggregate.approvedAt,
+        ...(firstEffectiveApproval ? { receiptOutboxVersion: 1 as const } : {}),
+        ...inventoryPatch,
+      },
+      Date.now(),
+      "mp_authoritative"
+    );
     // This is the batch's only durable financial order write.
     await persistOrder(
       orderKey(externalReference),
@@ -860,13 +1040,14 @@ export async function retryPaidOrderInventory(externalReference: string): Promis
 
 export async function markRejected(
   externalReference: string,
-  input: { paymentId?: string; mpStatus: string }
+  input: { paymentId?: string; mpStatus: string },
+  authority: PaymentTransitionAuthority
 ): Promise<Order | null> {
   return markTerminalPaymentState(externalReference, {
     status: "rejected",
     paymentId: input.paymentId,
     mpStatus: input.mpStatus,
-  });
+  }, authority);
 }
 
 export async function markTerminalPaymentState(
@@ -875,48 +1056,56 @@ export async function markTerminalPaymentState(
     status: Extract<OrderStatus, "rejected" | "cancelled" | "refunded" | "charged_back">;
     paymentId?: string;
     mpStatus: string;
-  }
+  },
+  authority: PaymentTransitionAuthority
 ): Promise<Order | null> {
-  return updateOrder(externalReference, {
-    status: input.status,
-    paymentStatus: statusToPaymentStatus(input.status),
-    ...(input.paymentId ? { mpPaymentId: input.paymentId } : {}),
-    mpStatus: input.mpStatus,
-    notes: undefined,
-  });
+  return updateOrder(
+    externalReference,
+    {
+      status: input.status,
+      paymentStatus: statusToPaymentStatus(input.status),
+      ...(input.paymentId ? { mpPaymentId: input.paymentId } : {}),
+      mpStatus: input.mpStatus,
+      notes: undefined,
+    },
+    { paymentAuthority: authority }
+  );
 }
 
 export async function markCancelled(
   externalReference: string,
-  input: { paymentId?: string; mpStatus: string }
+  input: { paymentId?: string; mpStatus: string },
+  authority: PaymentTransitionAuthority
 ): Promise<Order | null> {
   return markTerminalPaymentState(externalReference, {
     status: "cancelled",
     paymentId: input.paymentId,
     mpStatus: input.mpStatus,
-  });
+  }, authority);
 }
 
 export async function markRefunded(
   externalReference: string,
-  input: { paymentId?: string; mpStatus: string }
+  input: { paymentId?: string; mpStatus: string },
+  authority: PaymentTransitionAuthority
 ): Promise<Order | null> {
   return markTerminalPaymentState(externalReference, {
     status: "refunded",
     paymentId: input.paymentId,
     mpStatus: input.mpStatus,
-  });
+  }, authority);
 }
 
 export async function markChargedBack(
   externalReference: string,
-  input: { paymentId?: string; mpStatus: string }
+  input: { paymentId?: string; mpStatus: string },
+  authority: PaymentTransitionAuthority
 ): Promise<Order | null> {
   return markTerminalPaymentState(externalReference, {
     status: "charged_back",
     paymentId: input.paymentId,
     mpStatus: input.mpStatus,
-  });
+  }, authority);
 }
 
 export function paymentStatusFromOrderStatus(status: OrderStatus): OrderPaymentStatus {
@@ -931,5 +1120,5 @@ export async function markPreferenceCreated(
   return updateOrder(externalReference, {
     status: input.status ?? "preference_created",
     mpPreferenceId: input.preferenceId,
-  }, options);
+  }, { ...options, paymentAuthority: "system" });
 }

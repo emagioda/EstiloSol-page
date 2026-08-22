@@ -10,9 +10,9 @@ import { invalidateProductsCatalogCache } from "@/src/server/catalog/getProducts
 import { ensurePurchaseReceiptEventSafely } from "@/src/server/emailOutbox/service";
 import { logEvent } from "@/src/server/observability/log";
 import {
+  assertAdminPaymentTransitionRequest,
   getOrder,
   markApproved,
-  markTerminalPaymentState,
   retryPaidOrderInventory,
   updateOrder,
 } from "@/src/server/orders/store";
@@ -32,6 +32,13 @@ import {
 } from "@/src/server/orders/fulfillmentCompletion";
 import type { Order, OrderPaymentStatus, OrderShippingStatus, OrderStatus } from "@/src/server/orders/types";
 import {
+  evaluateAdminPaymentTransitionRequest,
+  getPaymentTransitionBlockMessage,
+  PAYMENT_TRANSITION_BLOCK_REASONS,
+  PaymentTransitionBlockedError,
+  type PaymentTransitionBlockReason,
+} from "@/src/server/orders/paymentTransition";
+import {
   parseFallbackOrderFulfillment,
   parseFallbackOrderItems,
 } from "@/src/server/orders/sheetFallback";
@@ -41,10 +48,10 @@ import {
 } from "@/src/server/payments/mpClient";
 import {
   amountMatches,
-  terminalOrderStatusFromMpStatus,
   type MpPaymentResponse,
   type MpSearchPayment,
 } from "@/src/server/payments/shared";
+import { reconcileMercadoPagoPayment } from "@/src/server/payments/reconciliation";
 import {
   getOrderRowById,
   updateOrderRowInSalesSheet,
@@ -129,15 +136,6 @@ const orderStatusFromPaymentStatus = (paymentStatus: OrderPaymentStatus): OrderS
   return "pending";
 };
 
-const terminalOrderStatusFromPaymentStatus = (
-  paymentStatus: OrderPaymentStatus
-): Extract<OrderStatus, "cancelled" | "refunded" | "charged_back"> | null => {
-  if (paymentStatus === "cancelled") return "cancelled";
-  if (paymentStatus === "refunded") return "refunded";
-  if (paymentStatus === "charged_back") return "charged_back";
-  return null;
-};
-
 type MpPaymentForValidation = MpPaymentResponse | MpSearchPayment;
 
 const isApprovedMpPaymentForOrder = (
@@ -164,28 +162,49 @@ const assertMercadoPagoApproval = async (
   externalReference: string,
   expectedTotal: number,
   paymentId?: string
-): Promise<{ paymentId: string; mpStatus: string }> => {
-  const accessToken = env.getRequiredServer("MP_ACCESS_TOKEN");
+): Promise<{
+  payment: MpPaymentForValidation;
+  source: "verify_payment_id" | "verify_search";
+  fallbackPaymentId?: string;
+}> => {
+  let accessToken: string;
+  try {
+    accessToken = env.getRequiredServer("MP_ACCESS_TOKEN");
+  } catch {
+    throw new PaymentTransitionBlockedError(
+      PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
+    );
+  }
   const normalizedPaymentId = String(paymentId || "").trim();
 
   if (normalizedPaymentId && /^\d+$/.test(normalizedPaymentId)) {
-    const { response, data } = await fetchPaymentByIdFromMp(normalizedPaymentId, accessToken);
-    if (!response.ok || !data) {
-      throw new Error("No se pudo verificar el pago en Mercado Pago.");
-    }
-    const mpStatus = String(data.status || "").trim().toLowerCase();
-    const terminalStatus = terminalOrderStatusFromMpStatus(mpStatus);
-    if (terminalStatus) {
-      throw new Error(`Mercado Pago informa estado final no aprobable: ${mpStatus}.`);
-    }
-    if (isApprovedMpPaymentForOrder(data, externalReference, expectedTotal)) {
-      return { paymentId: String(data.id || normalizedPaymentId), mpStatus };
+    try {
+      const { response, data } = await fetchPaymentByIdFromMp(normalizedPaymentId, accessToken);
+      if (response.ok && data && isApprovedMpPaymentForOrder(data, externalReference, expectedTotal)) {
+        return {
+          payment: data,
+          source: "verify_payment_id",
+          fallbackPaymentId: normalizedPaymentId,
+        };
+      }
+    } catch {
+      // Search by exact external reference below before failing closed.
     }
   }
 
-  const { response, data } = await searchPaymentsByExternalReference(externalReference, accessToken);
+  let searchResult: Awaited<ReturnType<typeof searchPaymentsByExternalReference>>;
+  try {
+    searchResult = await searchPaymentsByExternalReference(externalReference, accessToken);
+  } catch {
+    throw new PaymentTransitionBlockedError(
+      PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
+    );
+  }
+  const { response, data } = searchResult;
   if (!response.ok || !data) {
-    throw new Error("No se pudo buscar el pago en Mercado Pago.");
+    throw new PaymentTransitionBlockedError(
+      PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
+    );
   }
 
   const approvedPayment = (data.results || []).find((payment) =>
@@ -193,21 +212,14 @@ const assertMercadoPagoApproval = async (
   );
   if (approvedPayment) {
     return {
-      paymentId: String(approvedPayment.id || normalizedPaymentId),
-      mpStatus: String(approvedPayment.status || "approved").trim().toLowerCase(),
+      payment: approvedPayment,
+      source: "verify_search",
+      fallbackPaymentId: String(approvedPayment.id || normalizedPaymentId),
     };
   }
-
-  const terminalPayment = (data.results || []).find((payment) =>
-    terminalOrderStatusFromMpStatus(String(payment.status || ""))
+  throw new PaymentTransitionBlockedError(
+    PAYMENT_TRANSITION_BLOCK_REASONS.mercadoPagoNotApproved
   );
-  if (terminalPayment) {
-    throw new Error(
-      `Mercado Pago informa estado final no aprobable: ${String(terminalPayment.status || "desconocido")}.`
-    );
-  }
-
-  throw new Error("Mercado Pago no confirma un pago aprobado para esta orden.");
 };
 
 const buildFallbackOrderFromSheet = (
@@ -271,6 +283,9 @@ type AdminOrderUpdateResult = {
   inventoryStatus?: Order["inventoryStatus"];
   shippingStatus: OrderShippingStatus;
   shippingBlocked: boolean;
+  paymentBlocked?: boolean;
+  paymentBlockReason?: PaymentTransitionBlockReason;
+  paymentBlockMessage?: string;
   completionBlockReason?: FulfillmentCompletionBlockReason;
   completionBlockMessage?: string;
 };
@@ -345,6 +360,203 @@ const inventoryPatchFromAttempt = async (order: Order) => {
   return { result, patch: inventoryResultToOrderPatch(result) };
 };
 
+const shippingResultFields = (result: Awaited<ReturnType<typeof persistRequestedShippingStatus>>) => ({
+  shippingStatus: result.order.shippingStatus,
+  shippingBlocked: result.shippingBlocked,
+  ...(result.completionBlockReason
+    ? {
+        completionBlockReason: result.completionBlockReason,
+        completionBlockMessage: result.completionBlockMessage,
+      }
+    : {}),
+});
+
+const persistFallbackShippingStatus = async ({
+  order,
+  requestedShippingStatus,
+  persist = true,
+}: {
+  order: Order;
+  requestedShippingStatus: OrderShippingStatus;
+  persist?: boolean;
+}): Promise<Awaited<ReturnType<typeof persistRequestedShippingStatus>>> => {
+  if (isTrustedHistoricalCompletion(order)) {
+    return { order, shippingBlocked: false };
+  }
+
+  const completionDecision =
+    requestedShippingStatus === "completed"
+      ? evaluateFulfillmentCompletion({ ...order, shippingStatus: "completed" })
+      : { allowed: true as const };
+  const completionBlockReason = completionDecision.allowed
+    ? undefined
+    : completionDecision.reason;
+  const shippingStatus = completionBlockReason ? "in_process" : requestedShippingStatus;
+  if (shippingStatus === order.shippingStatus) {
+    return {
+      order,
+      ...(completionBlockReason
+        ? completionBlockFields(completionBlockReason)
+        : { shippingBlocked: false }),
+    };
+  }
+
+  const updatedAt = Date.now();
+  if (persist) {
+    await updateOrderRowInSalesSheet(order.externalReference, {
+      shippingStatus,
+      updatedAt,
+    });
+  }
+  return {
+    order: { ...order, shippingStatus, updatedAt },
+    ...(completionBlockReason
+      ? completionBlockFields(completionBlockReason)
+      : { shippingBlocked: false }),
+  };
+};
+
+const reconcileVerifiedMercadoPagoApproval = async (order: Order): Promise<Order> => {
+  const verified = await assertMercadoPagoApproval(
+    order.externalReference,
+    order.total,
+    order.mpPaymentId
+  );
+  let reconciliation: Awaited<ReturnType<typeof reconcileMercadoPagoPayment>>;
+  try {
+    reconciliation = await reconcileMercadoPagoPayment({
+      externalReference: order.externalReference,
+      payment: verified.payment,
+      source: verified.source,
+      fallbackPaymentId: verified.fallbackPaymentId,
+    });
+  } catch {
+    throw new PaymentTransitionBlockedError(
+      PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
+    );
+  }
+
+  if (reconciliation.outcome !== "reconciled") {
+    throw new PaymentTransitionBlockedError(
+      PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
+    );
+  }
+  if (reconciliation.order.paymentStatus !== "confirmed") {
+    throw new PaymentTransitionBlockedError(
+      PAYMENT_TRANSITION_BLOCK_REASONS.terminalRequiresCorrection
+    );
+  }
+  return reconciliation.order;
+};
+
+const applySheetFallbackOrderStatusesUpdate = async ({
+  orderId,
+  paymentStatus,
+  shippingStatus,
+}: {
+  orderId: string;
+  paymentStatus: OrderPaymentStatus;
+  shippingStatus: OrderShippingStatus;
+}): Promise<AdminOrderUpdateResult> => {
+  const sheetOrder = await getOrderRowById(orderId);
+  if (!sheetOrder) throw new Error("Pedido no encontrado.");
+
+  const currentOrder = buildFallbackOrderFromSheet(
+    sheetOrder,
+    sheetOrder.paymentStatus,
+    sheetOrder.shippingStatus
+  );
+  const decision = evaluateAdminPaymentTransitionRequest({
+    current: currentOrder.paymentStatus,
+    requested: paymentStatus,
+    paymentMethod: currentOrder.paymentMethod,
+  });
+  if (!decision.allowed) throw new PaymentTransitionBlockedError(decision.reason);
+
+  if (decision.replay) {
+    const shippingResult = await persistFallbackShippingStatus({
+      order: currentOrder,
+      requestedShippingStatus: shippingStatus,
+    });
+    return {
+      orderId,
+      inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
+      ...shippingResultFields(shippingResult),
+    };
+  }
+
+  if (decision.authority === "mp_authoritative") {
+    const reconciledOrder = await reconcileVerifiedMercadoPagoApproval(currentOrder);
+    const shippingResult = await persistRequestedShippingStatus({
+      orderId,
+      previousOrder: currentOrder,
+      currentOrder: reconciledOrder,
+      requestedShippingStatus: shippingStatus,
+    });
+    return {
+      orderId,
+      inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
+      ...shippingResultFields(shippingResult),
+    };
+  }
+
+  const approvedAt = Date.now();
+  const paymentId = currentOrder.mpPaymentId || `manual-${approvedAt}`;
+  const confirmationOrder: Order = {
+    ...currentOrder,
+    status: "approved",
+    paymentStatus: "confirmed",
+    mpPaymentId: paymentId,
+    mpStatus: "manual_confirmed",
+    approvedAt,
+  };
+  let inventoryAttempt: InventoryAttemptResult | null = null;
+  let inventoryPatch: Partial<Order> = {};
+  if (shouldAttemptInventoryAutomatically(confirmationOrder)) {
+    const attempted = await inventoryPatchFromAttempt(confirmationOrder);
+    inventoryAttempt = attempted.result;
+    inventoryPatch = attempted.patch;
+  }
+  const paidOrder = { ...confirmationOrder, ...inventoryPatch };
+  const shippingResult = await persistFallbackShippingStatus({
+    order: paidOrder,
+    requestedShippingStatus: shippingStatus,
+    persist: false,
+  });
+
+  await updateOrderRowInSalesSheet(orderId, {
+    paymentStatus: "confirmed",
+    shippingStatus: shippingResult.order.shippingStatus,
+    orderStatus: "approved",
+    mpStatus: "manual_confirmed",
+    mpPaymentId: paymentId,
+    approvedAt,
+    receiptOutboxVersion: 1,
+    ...(inventoryAttempt
+      ? {
+          inventoryStatus: inventoryPatch.inventoryStatus ?? null,
+          inventoryIssueCode: inventoryPatch.inventoryIssueCode ?? null,
+          inventoryIssueAt: inventoryPatch.inventoryIssueAt ?? null,
+          stockDeductedAt: inventoryPatch.stockDeductedAt,
+        }
+      : {}),
+    updatedAt: Date.now(),
+  });
+
+  if (!sheetOrder.receiptEmailSentAt) {
+    await ensurePurchaseReceiptEventSafely({
+      order: shippingResult.order,
+      paymentId,
+      approvedAt,
+    });
+  }
+  return {
+    orderId,
+    inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
+    ...shippingResultFields(shippingResult),
+  };
+};
+
 const applyOrderStatusesUpdate = async ({
   orderId,
   paymentStatus,
@@ -354,227 +566,68 @@ const applyOrderStatusesUpdate = async ({
   paymentStatus: OrderPaymentStatus;
   shippingStatus: OrderShippingStatus;
 }): Promise<AdminOrderUpdateResult> => {
-  const currentOrder = await getOrder(orderId);
-
-  if (!currentOrder) {
-    const sheetOrder = await getOrderRowById(orderId);
-    if (!sheetOrder) {
-      throw new Error("Pedido no encontrado.");
-    }
-
-    const previousFallbackOrder = buildFallbackOrderFromSheet(
-      sheetOrder,
-      sheetOrder.paymentStatus,
-      sheetOrder.shippingStatus
-    );
-    const fallbackOrder = buildFallbackOrderFromSheet(sheetOrder, paymentStatus, shippingStatus);
-
-    const wasConfirmed = sheetOrder.paymentStatus === "confirmed";
-
-    let verifiedPaymentId = fallbackOrder.mpPaymentId;
-    let verifiedMpStatus = fallbackOrder.mpStatus;
-    let inventoryAttempt: InventoryAttemptResult | null = null;
-    let inventoryPatch: Partial<Order> = {};
-
-    if (paymentStatus === "confirmed") {
-      if (fallbackOrder.paymentMethod === "mercadopago" && !wasConfirmed) {
-        const verified = await assertMercadoPagoApproval(
-          fallbackOrder.externalReference,
-          fallbackOrder.total,
-          fallbackOrder.mpPaymentId
-        );
-        verifiedPaymentId = verified.paymentId;
-        verifiedMpStatus = verified.mpStatus;
-      }
-
-      const isFirstApprovalAttempt = !wasConfirmed || fallbackOrder.inventoryStatus === "pending";
-      if (isFirstApprovalAttempt && shouldAttemptInventoryAutomatically(fallbackOrder)) {
-        const attempted = await inventoryPatchFromAttempt(fallbackOrder);
-        inventoryAttempt = attempted.result;
-        inventoryPatch = attempted.patch;
-      }
-    }
-
-    const resolvedFallbackOrder = { ...fallbackOrder, ...inventoryPatch };
-    const historicalCompletion = isTrustedHistoricalCompletion(previousFallbackOrder);
-    const completionDecision =
-      shippingStatus === "completed" && !historicalCompletion
-        ? evaluateFulfillmentCompletion({ ...resolvedFallbackOrder, shippingStatus: "completed" })
-        : { allowed: true as const };
-    const completionBlockReason = completionDecision.allowed
-      ? undefined
-      : completionDecision.reason;
-    const resolvedShippingStatus = historicalCompletion
-      ? "completed"
-      : shippingStatus === "completed" && completionBlockReason
-        ? "in_process"
-        : shippingStatus;
-
-    const approvedAt = paymentStatus === "confirmed" && !wasConfirmed ? Date.now() : null;
-    await updateOrderRowInSalesSheet(orderId, {
-      paymentStatus,
-      shippingStatus: resolvedShippingStatus,
-      orderStatus: orderStatusFromPaymentStatus(paymentStatus),
-      ...(verifiedMpStatus ? { mpStatus: verifiedMpStatus } : {}),
-      ...(verifiedPaymentId ? { mpPaymentId: verifiedPaymentId } : {}),
-      ...(approvedAt ? { approvedAt } : {}),
-      ...(approvedAt ? { receiptOutboxVersion: 1 as const } : {}),
-      ...(inventoryAttempt
-        ? {
-            inventoryStatus: inventoryPatch.inventoryStatus ?? null,
-            inventoryIssueCode: inventoryPatch.inventoryIssueCode ?? null,
-            inventoryIssueAt: inventoryPatch.inventoryIssueAt ?? null,
-            stockDeductedAt: inventoryPatch.stockDeductedAt,
-          }
-        : {}),
-      updatedAt: Date.now(),
-    });
-
-    if (paymentStatus === "confirmed" && !wasConfirmed && !sheetOrder.receiptEmailSentAt) {
-      const paymentId =
-        fallbackOrder.paymentMethod === "mercadopago"
-          ? verifiedPaymentId
-          : verifiedPaymentId || `manual-${approvedAt!}`;
-      if (paymentId && approvedAt) {
-        await ensurePurchaseReceiptEventSafely({
-          order: {
-            ...resolvedFallbackOrder,
-            paymentStatus: "confirmed",
-            shippingStatus: resolvedShippingStatus,
-            approvedAt,
-            mpPaymentId: paymentId,
-          },
-          paymentId,
-          approvedAt,
-        });
-      }
-    }
-    return {
-      orderId,
-      inventoryStatus: resolveOrderInventoryStatus(resolvedFallbackOrder),
-      shippingStatus: resolvedShippingStatus,
-      ...(completionBlockReason
-        ? completionBlockFields(completionBlockReason)
-        : { shippingBlocked: false }),
-    };
+  const lockedRequest = await assertAdminPaymentTransitionRequest(orderId, paymentStatus);
+  if (!lockedRequest) {
+    return applySheetFallbackOrderStatusesUpdate({ orderId, paymentStatus, shippingStatus });
   }
+  const currentOrder = lockedRequest.order;
 
-  const wasConfirmed = currentOrder.paymentStatus === "confirmed";
-
-  if (paymentStatus === "confirmed") {
-    const approvedAt = wasConfirmed ? currentOrder.approvedAt ?? Date.now() : Date.now();
-    let paymentId = currentOrder.mpPaymentId || `manual-${approvedAt}`;
-    let mpStatus = currentOrder.mpStatus || "manual_confirmed";
-
-    if (
-      currentOrder.paymentMethod === "mercadopago" &&
-      (!wasConfirmed || !currentOrder.mpPaymentId || currentOrder.mpPaymentId.startsWith("manual-"))
-    ) {
-      const verified = await assertMercadoPagoApproval(
-        currentOrder.externalReference,
-        currentOrder.total,
-        currentOrder.mpPaymentId
-      );
-      paymentId = verified.paymentId;
-      mpStatus = verified.mpStatus;
-    }
-
-    const needsApprovalProcessing = !wasConfirmed || currentOrder.inventoryStatus === "pending";
-    const approvedOrder = needsApprovalProcessing
-      ? await markApproved(orderId, {
-          paymentId,
-          mpStatus,
-          approvedAt,
-        })
-      : currentOrder;
-    if (!approvedOrder || approvedOrder.paymentStatus !== "confirmed") {
-      throw new Error("No se pudo persistir la confirmación del pago.");
-    }
-
+  if (lockedRequest.decision.replay) {
     const shippingResult = await persistRequestedShippingStatus({
       orderId,
       previousOrder: currentOrder,
-      currentOrder: approvedOrder,
-      requestedShippingStatus: shippingStatus,
-    });
-
-    if (!wasConfirmed && !currentOrder.receiptEmailSentAt) {
-      await ensurePurchaseReceiptEventSafely({
-        order: {
-          ...currentOrder,
-          paymentStatus: "confirmed",
-          approvedAt,
-          mpPaymentId: paymentId,
-        },
-        paymentId,
-        approvedAt,
-      });
-    }
-    return {
-      orderId,
-      inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
-      shippingStatus: shippingResult.order.shippingStatus,
-      shippingBlocked: shippingResult.shippingBlocked,
-      ...(shippingResult.completionBlockReason
-        ? {
-            completionBlockReason: shippingResult.completionBlockReason,
-            completionBlockMessage: shippingResult.completionBlockMessage,
-          }
-        : {}),
-    };
-  }
-
-  const terminalStatus = terminalOrderStatusFromPaymentStatus(paymentStatus);
-  if (terminalStatus) {
-    const terminalOrder = await markTerminalPaymentState(orderId, {
-      status: terminalStatus,
-      paymentId: currentOrder.mpPaymentId,
-      mpStatus: currentOrder.mpStatus || terminalStatus,
-    });
-    if (!terminalOrder) throw new Error("No se pudo persistir el estado final del pago.");
-    const shippingResult = await persistRequestedShippingStatus({
-      orderId,
-      previousOrder: currentOrder,
-      currentOrder: terminalOrder,
+      currentOrder,
       requestedShippingStatus: shippingStatus,
     });
     return {
       orderId,
       inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
-      shippingStatus: shippingResult.order.shippingStatus,
-      shippingBlocked: shippingResult.shippingBlocked,
-      ...(shippingResult.completionBlockReason
-        ? {
-            completionBlockReason: shippingResult.completionBlockReason,
-            completionBlockMessage: shippingResult.completionBlockMessage,
-          }
-        : {}),
+      ...shippingResultFields(shippingResult),
     };
   }
 
-  const pendingOrder = await updateOrder(orderId, {
-    paymentStatus,
-    status: "pending",
-    mpStatus: "pending",
-  });
-  if (!pendingOrder) throw new Error("No se pudo persistir el estado del pago.");
+  if (lockedRequest.decision.authority === "mp_authoritative") {
+    const reconciledOrder = await reconcileVerifiedMercadoPagoApproval(currentOrder);
+    const shippingResult = await persistRequestedShippingStatus({
+      orderId,
+      previousOrder: currentOrder,
+      currentOrder: reconciledOrder,
+      requestedShippingStatus: shippingStatus,
+    });
+    return {
+      orderId,
+      inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
+      ...shippingResultFields(shippingResult),
+    };
+  }
+
+  const approvedAt = Date.now();
+  const paymentId = currentOrder.mpPaymentId || `manual-${approvedAt}`;
+  const approvedOrder = await markApproved(
+    orderId,
+    { paymentId, mpStatus: "manual_confirmed", approvedAt },
+    "admin_manual"
+  );
+  if (!approvedOrder || approvedOrder.paymentStatus !== "confirmed") {
+    throw new Error("No se pudo persistir la confirmación del pago.");
+  }
   const shippingResult = await persistRequestedShippingStatus({
     orderId,
     previousOrder: currentOrder,
-    currentOrder: pendingOrder,
+    currentOrder: approvedOrder,
     requestedShippingStatus: shippingStatus,
   });
+  if (!currentOrder.receiptEmailSentAt) {
+    await ensurePurchaseReceiptEventSafely({
+      order: shippingResult.order,
+      paymentId,
+      approvedAt,
+    });
+  }
   return {
     orderId,
     inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
-    shippingStatus: shippingResult.order.shippingStatus,
-    shippingBlocked: shippingResult.shippingBlocked,
-    ...(shippingResult.completionBlockReason
-      ? {
-          completionBlockReason: shippingResult.completionBlockReason,
-          completionBlockMessage: shippingResult.completionBlockMessage,
-        }
-      : {}),
+    ...shippingResultFields(shippingResult),
   };
 };
 
@@ -683,17 +736,33 @@ export async function saveOrderStatusesBatchAction(
       throw new Error("Invalid batch order update payload");
     }
 
-    results.push(await applyOrderStatusesUpdate({
-      orderId,
-      paymentStatus: paymentStatusRaw,
-      shippingStatus: shippingStatusRaw,
-    }));
+    try {
+      results.push(await applyOrderStatusesUpdate({
+        orderId,
+        paymentStatus: paymentStatusRaw,
+        shippingStatus: shippingStatusRaw,
+      }));
+    } catch (error) {
+      if (!(error instanceof PaymentTransitionBlockedError)) throw error;
+      const currentOrder = await getOrder(orderId);
+      const sheetOrder = currentOrder ? null : await getOrderRowById(orderId);
+      results.push({
+        orderId,
+        inventoryStatus: currentOrder?.inventoryStatus ?? sheetOrder?.inventoryStatus,
+        shippingStatus:
+          currentOrder?.shippingStatus ?? sheetOrder?.shippingStatus ?? shippingStatusRaw,
+        shippingBlocked: false,
+        paymentBlocked: true,
+        paymentBlockReason: error.reason,
+        paymentBlockMessage: getPaymentTransitionBlockMessage(error.reason),
+      });
+    }
   }
 
   revalidatePath("/admin");
   revalidatePath("/admin/ventas");
 
-  return { ok: true, results };
+  return { ok: results.every((result) => !result.paymentBlocked), results };
 }
 
 export async function updateCatalogProductAction(formData: FormData) {

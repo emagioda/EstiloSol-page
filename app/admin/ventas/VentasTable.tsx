@@ -7,6 +7,7 @@ import {
   saveOrderStatusesBatchAction,
 } from "@/app/admin/actions";
 import type { AdminOrderSheetRow } from "@/src/server/sheets/repository";
+import { isAdminPaymentStatusSelectable } from "@/src/server/orders/paymentTransition";
 import { useBodyScrollLock } from "@/src/core/presentation/hooks/useBodyScrollLock";
 import {
   canCompleteShipping,
@@ -170,6 +171,15 @@ const paymentStatusOptions: Array<{ value: PaymentStatus; label: string }> = [
   { value: "refunded", label: "Reintegrado" },
   { value: "charged_back", label: "Contracargo" },
 ];
+
+const getAdminPaymentStatusOptions = (order: AdminOrderSheetRow) =>
+  paymentStatusOptions.filter((option) =>
+    isAdminPaymentStatusSelectable({
+      current: order.paymentStatus,
+      requested: option.value,
+      paymentMethod: order.paymentMethod,
+    })
+  );
 
 const shippingStatusOptions: Array<{ value: ShippingStatus; label: string }> = [
   { value: "in_process", label: "En proceso" },
@@ -737,13 +747,13 @@ export default function VentasTable({ orders }: VentasTableProps) {
     try {
       if (pendingOrderUpdates.length > 0) {
         const result = await saveOrderStatusesBatchAction(pendingOrderUpdates);
-        const completionBlockMessage = result.results.find(
-          (entry) => entry.completionBlockMessage
-        )?.completionBlockMessage;
-        if (completionBlockMessage) {
+        const blockMessage =
+          result.results.find((entry) => entry.paymentBlockMessage)?.paymentBlockMessage ??
+          result.results.find((entry) => entry.completionBlockMessage)?.completionBlockMessage;
+        if (blockMessage) {
           skipLeaveGuardRef.current = false;
           setIsSavingBeforeLeave(false);
-          setLeaveDialogError(completionBlockMessage);
+          setLeaveDialogError(blockMessage);
           return;
         }
       }
@@ -815,14 +825,15 @@ export default function VentasTable({ orders }: VentasTableProps) {
 
     try {
       const result = await saveOrderStatusesBatchAction([{ orderId, ...draft }]);
-      const completionBlockMessage = result.results[0]?.completionBlockMessage;
-      if (completionBlockMessage) {
+      const paymentBlockMessage = result.results[0]?.paymentBlockMessage;
+      const blockMessage = paymentBlockMessage ?? result.results[0]?.completionBlockMessage;
+      if (blockMessage) {
         skipLeaveGuardRef.current = false;
         setIsPersistingSale(false);
         setSaveDialogState({
           mode: "info",
-          title: "La venta quedó En proceso",
-          description: completionBlockMessage,
+          title: paymentBlockMessage ? "Cambio de pago bloqueado" : "La venta quedó En proceso",
+          description: blockMessage,
           reloadOnClose: true,
         });
         return;
@@ -845,16 +856,21 @@ export default function VentasTable({ orders }: VentasTableProps) {
 
     try {
       const result = await saveOrderStatusesBatchAction(pendingOrderUpdates);
-      const completionBlockMessage = result.results.find(
+      const paymentBlockMessage = result.results.find(
+        (entry) => entry.paymentBlockMessage
+      )?.paymentBlockMessage;
+      const blockMessage = paymentBlockMessage ?? result.results.find(
         (entry) => entry.completionBlockMessage
       )?.completionBlockMessage;
-      if (completionBlockMessage) {
+      if (blockMessage) {
         skipLeaveGuardRef.current = false;
         setIsPersistingSale(false);
         setSaveDialogState({
           mode: "info",
-          title: "Algunas ventas quedaron En proceso",
-          description: completionBlockMessage,
+          title: paymentBlockMessage
+            ? "Algunos cambios de pago fueron bloqueados"
+            : "Algunas ventas quedaron En proceso",
+          description: blockMessage,
           reloadOnClose: true,
         });
         return;
@@ -1208,21 +1224,15 @@ export default function VentasTable({ orders }: VentasTableProps) {
                           }
                           className={`block h-8 w-full appearance-none rounded-lg border px-2 pr-6 text-xs font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.32)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] ${paymentBadgeClass[draft.paymentStatus]}`}
                         >
-                          <option value="pending" className={paymentOptionClass.pending}>
-                            Pendiente
-                          </option>
-                          <option value="confirmed" className={paymentOptionClass.confirmed}>
-                            Confirmado
-                          </option>
-                          <option value="cancelled" className={paymentOptionClass.cancelled}>
-                            Cancelado
-                          </option>
-                          <option value="refunded" className={paymentOptionClass.refunded}>
-                            Reintegrado
-                          </option>
-                          <option value="charged_back" className={paymentOptionClass.charged_back}>
-                            Contracargo
-                          </option>
+                          {getAdminPaymentStatusOptions(order).map((option) => (
+                            <option
+                              key={option.value}
+                              value={option.value}
+                              className={paymentOptionClass[option.value]}
+                            >
+                              {option.label}
+                            </option>
+                          ))}
                         </select>
                         <span
                           className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[11px] text-[var(--brand-violet-950)]/70"
@@ -1374,7 +1384,7 @@ export default function VentasTable({ orders }: VentasTableProps) {
                   value={editingDraft?.paymentStatus ?? editingOrder.paymentStatus}
                 />
                 <div className="grid grid-cols-3 gap-1.5">
-                  {paymentStatusOptions.map((option) => {
+                  {getAdminPaymentStatusOptions(editingOrder).map((option) => {
                     const isActive =
                       (editingDraft?.paymentStatus ?? editingOrder.paymentStatus) === option.value;
                     return (

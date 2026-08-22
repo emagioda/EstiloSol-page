@@ -19,6 +19,7 @@ vi.mock("@/src/server/observability/metrics", () => ({
 }));
 
 import {
+  assertAdminPaymentTransitionRequest,
   createOrder,
   ensureOrderDurableInSalesSheet,
   getOrder,
@@ -88,7 +89,7 @@ const approve = (order: Order) =>
     paymentId: `payment-${sequence}`,
     mpStatus: "approved",
     approvedAt: Date.now(),
-  });
+  }, "mp_authoritative");
 
 const deferred = () => {
   let resolve!: () => void;
@@ -148,7 +149,7 @@ describe("PR 2 order store inventory state", () => {
     const updated = await markApproved(order.externalReference, {
       paymentId: "legacy-payment",
       mpStatus: "approved",
-    });
+    }, "mp_authoritative");
     expect(updated?.receiptOutboxVersion).toBeUndefined();
     expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
       order.externalReference,
@@ -319,7 +320,11 @@ describe("PR 2 order store inventory state", () => {
       stockDeductedAt: 123,
     });
     await createOrder(order);
-    const updated = await transition(order.externalReference, { paymentId: "pay", mpStatus: expectedStatus });
+    const updated = await transition(
+      order.externalReference,
+      { paymentId: "pay", mpStatus: expectedStatus },
+      "mp_authoritative"
+    );
     expect(updated).toMatchObject({ inventoryStatus: "deducted", stockDeductedAt: 123 });
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
   });
@@ -416,12 +421,20 @@ describe("AUD3 H07 store fulfillment invariant", () => {
     });
     await createOrder(order);
 
-    await markRefunded(order.externalReference, { paymentId: "pay", mpStatus: "refunded" });
+    await markRefunded(
+      order.externalReference,
+      { paymentId: "pay", mpStatus: "refunded" },
+      "mp_authoritative"
+    );
     await expect(getOrder(order.externalReference)).resolves.toMatchObject({
       paymentStatus: "refunded",
       shippingStatus: "completed",
     });
-    await markChargedBack(order.externalReference, { paymentId: "pay", mpStatus: "charged_back" });
+    await markChargedBack(
+      order.externalReference,
+      { paymentId: "pay", mpStatus: "charged_back" },
+      "mp_authoritative"
+    );
     await expect(getOrder(order.externalReference)).resolves.toMatchObject({
       paymentStatus: "charged_back",
       shippingStatus: "completed",
@@ -449,7 +462,7 @@ describe("AUD3 H07 store fulfillment invariant", () => {
       inventoryStatus: "deducted",
       stockDeductedAt: 100,
       shippingStatus: "completed",
-    })).toThrow(/Volvé a indicar Finalizado/);
+    }, Date.now(), "system")).toThrow(/Volvé a indicar Finalizado/);
   });
 });
 
@@ -661,7 +674,7 @@ describe("PR 2 recoverable Sheets synchronization", () => {
       inventoryIssueCode: "SHEETS_UNAVAILABLE",
       inventoryIssueAt: 123,
       stockDeductedAt: undefined,
-    });
+    }, { paymentAuthority: "system" });
 
     expect(updated).toMatchObject({
       paymentStatus: "confirmed",
@@ -942,9 +955,17 @@ describe("PR 2 monotonic deducted persistence", () => {
       }
     });
 
-    const firstUpdate = updateOrder(firstOrder.externalReference, { mpStatus: "first" });
+    const firstUpdate = updateOrder(
+      firstOrder.externalReference,
+      { mpStatus: "first" },
+      { paymentAuthority: "system" }
+    );
     await firstSheetSyncEntered.promise;
-    const secondUpdate = updateOrder(secondOrder.externalReference, { mpStatus: "second" });
+    const secondUpdate = updateOrder(
+      secondOrder.externalReference,
+      { mpStatus: "second" },
+      { paymentAuthority: "system" }
+    );
     await expect(secondUpdate).resolves.toMatchObject({ mpStatus: "second" });
     releaseFirstSheetSync.resolve();
     await firstUpdate;
@@ -977,7 +998,7 @@ describe("PR 2 monotonic deducted persistence", () => {
     const webhookApproval = markApproved(order.externalReference, {
       paymentId: "webhook-payment",
       mpStatus: "approved",
-    });
+    }, "mp_authoritative");
     await webhookApproval;
     releaseRetry.resolve();
     await retry;
@@ -1012,12 +1033,12 @@ describe("PR 2 monotonic deducted persistence", () => {
     const verifyPayment = markApproved(order.externalReference, {
       paymentId: "verify-payment-id",
       mpStatus: "approved",
-    });
+    }, "mp_authoritative");
     await verifyAttemptEntered.promise;
     const webhook = markApproved(order.externalReference, {
       paymentId: "webhook-payment-id",
       mpStatus: "approved",
-    });
+    }, "mp_authoritative");
     await webhook;
     releaseVerifyTimeout.resolve();
     await verifyPayment;
@@ -1045,12 +1066,148 @@ describe("PR 2 monotonic deducted persistence", () => {
         stockDeductedAt: 500,
       });
       await createOrder(order);
-      await transition(order.externalReference, { paymentId: "pay", mpStatus: status });
+      await transition(
+        order.externalReference,
+        { paymentId: "pay", mpStatus: status },
+        "mp_authoritative"
+      );
       expect(await getOrder(order.externalReference)).toMatchObject({
         inventoryStatus: "deducted",
         stockDeductedAt: 500,
       });
     }
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+  });
+});
+
+describe("AUD3 H07-B locked payment authority", () => {
+  it.each(["cash", "transfer"] as const)(
+    "AUD3-H07B-STORE-01 allows Admin %s pending to confirmed",
+    async (paymentMethod) => {
+      const order = makeOrder({ paymentMethod });
+      await createOrder(order);
+
+      const updated = await markApproved(
+        order.externalReference,
+        { paymentId: "manual-1", mpStatus: "manual_confirmed", approvedAt: 200 },
+        "admin_manual"
+      );
+
+      expect(updated).toMatchObject({
+        status: "approved",
+        paymentStatus: "confirmed",
+        approvedAt: 200,
+        receiptOutboxVersion: 1,
+      });
+    }
+  );
+
+  it("AUD3-H07B-STORE-02 blocks direct Admin MP confirmation before inventory", async () => {
+    const order = makeOrder({ paymentMethod: "mercadopago" });
+    await createOrder(order);
+
+    await expect(markApproved(
+      order.externalReference,
+      { paymentId: "mp-1", mpStatus: "approved" },
+      "admin_manual"
+    )).rejects.toMatchObject({
+      reason: "PAYMENT_PROVIDER_AUTHORITY_REQUIRED",
+    });
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      paymentStatus: "pending",
+    });
+  });
+
+  it("AUD3-H07B-REPLAY-01 keeps approvedAt and skips inventory on Admin replay", async () => {
+    const order = makeOrder({
+      paymentMethod: "cash",
+      status: "approved",
+      paymentStatus: "confirmed",
+      approvedAt: 100,
+      inventoryStatus: "pending",
+      receiptOutboxVersion: 1,
+    });
+    await createOrder(order);
+
+    const replay = await markApproved(
+      order.externalReference,
+      { paymentId: "manual-new", mpStatus: "manual_confirmed", approvedAt: 300 },
+      "admin_manual"
+    );
+
+    expect(replay).toMatchObject({ approvedAt: 100, paymentStatus: "confirmed" });
+    expect(replay?.mpPaymentId).toBe(order.mpPaymentId);
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H07B-STORE-03 rejects a financial patch without authority", async () => {
+    const order = makeOrder({ paymentMethod: "cash" });
+    await createOrder(order);
+
+    await expect(updateOrder(order.externalReference, {
+      status: "approved",
+      paymentStatus: "confirmed",
+    })).rejects.toMatchObject({ reason: "PAYMENT_TRANSITION_AUTHORITY_REQUIRED" });
+  });
+
+  it("AUD3-H07B-STORE-04 blocks an Admin metadata-only financial bypass", async () => {
+    const order = makeOrder({ paymentMethod: "mercadopago" });
+    await createOrder(order);
+
+    await expect(updateOrder(
+      order.externalReference,
+      { mpStatus: "refunded" },
+      { paymentAuthority: "admin_manual" }
+    )).rejects.toMatchObject({ reason: "PAYMENT_TRANSITION_NOT_ALLOWED" });
+  });
+
+  it("AUD3-H07B-STALE-01 blocks stale pending after provider approval", async () => {
+    const order = makeOrder({ paymentMethod: "mercadopago" });
+    await createOrder(order);
+    await reconcileMercadoPagoPaymentObservationBatch(order.externalReference, [{
+      paymentId: "mp-approved",
+      status: "approved",
+      amount: order.total,
+      currency: "ARS",
+      observedAt: 100,
+    }]);
+
+    await expect(assertAdminPaymentTransitionRequest(
+      order.externalReference,
+      "pending"
+    )).rejects.toMatchObject({ reason: "PAYMENT_CONFIRMED_CANNOT_BE_DOWNGRADED" });
+  });
+
+  it.each(["refunded", "charged_back"] as const)(
+    "AUD3-H07B-STALE-02/03 blocks stale confirmed after %s",
+    async (terminalStatus) => {
+      const order = makeOrder({
+        paymentMethod: "mercadopago",
+        status: terminalStatus,
+        paymentStatus: terminalStatus,
+      });
+      await createOrder(order);
+
+      await expect(assertAdminPaymentTransitionRequest(
+        order.externalReference,
+        "confirmed"
+      )).rejects.toMatchObject({ reason: "PAYMENT_TERMINAL_REQUIRES_CORRECTION" });
+    }
+  );
+
+  it("AUD3-H07B-STALE-04 blocks a stale cash downgrade after another tab confirms", async () => {
+    const order = makeOrder({ paymentMethod: "cash" });
+    await createOrder(order);
+    await markApproved(
+      order.externalReference,
+      { paymentId: "manual-a", mpStatus: "manual_confirmed" },
+      "admin_manual"
+    );
+
+    await expect(assertAdminPaymentTransitionRequest(
+      order.externalReference,
+      "pending"
+    )).rejects.toMatchObject({ reason: "PAYMENT_CONFIRMED_CANNOT_BE_DOWNGRADED" });
   });
 });
