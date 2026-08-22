@@ -311,4 +311,140 @@ describe("Admin Mercado Pago complete discovery", () => {
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
     expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
+
+  it("AUD3-H07B-MP-PRECEDENCE-01 lets search approval replace a pending direct observation", async () => {
+    const paymentId = "11001";
+    const order = await makeOrder({ mpPaymentId: paymentId });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(mpPayment(order, paymentId, "pending")))
+      .mockResolvedValueOnce(jsonResponse(searchPage(1, 0, [
+        mpPayment(order, paymentId, "approved"),
+      ])));
+
+    const result = await confirm(order);
+    await flushScheduledTasks();
+
+    expect(result.order).toMatchObject({
+      status: "approved",
+      paymentStatus: "confirmed",
+      mpPaymentLedger: {
+        [paymentId]: expect.objectContaining({ status: "approved" }),
+      },
+    });
+    expect(result.activeApprovedPaymentIds).toEqual([paymentId]);
+    expect(prepareProtectedPaymentDurability).toHaveBeenCalledTimes(1);
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-H07B-MP-PRECEDENCE-02 applies a search refund after durable direct approval", async () => {
+    const paymentId = "11002";
+    const order = await makeOrder({ mpPaymentId: paymentId });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(mpPayment(order, paymentId, "approved")))
+      .mockResolvedValueOnce(jsonResponse(searchPage(1, 0, [
+        mpPayment(order, paymentId, "refunded"),
+      ])));
+
+    await expect(confirm(order)).rejects.toMatchObject({
+      reason: PAYMENT_TRANSITION_BLOCK_REASONS.terminalRequiresCorrection,
+    });
+    await flushScheduledTasks();
+    const stored = await getOrder(order.externalReference);
+
+    expect(stored).toMatchObject({
+      status: "refunded",
+      paymentStatus: "refunded",
+      inventoryStatus: "deducted",
+      mpPaymentLedger: {
+        [paymentId]: expect.objectContaining({
+          status: "refunded",
+          approvedAt: expect.any(Number),
+        }),
+      },
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-H07B-MP-PRECEDENCE-03 applies a search chargeback after durable direct approval", async () => {
+    const paymentId = "11003";
+    const order = await makeOrder({ mpPaymentId: paymentId });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(mpPayment(order, paymentId, "approved")))
+      .mockResolvedValueOnce(jsonResponse(searchPage(1, 0, [
+        mpPayment(order, paymentId, "charged_back"),
+      ])));
+
+    await expect(confirm(order)).rejects.toMatchObject({
+      reason: PAYMENT_TRANSITION_BLOCK_REASONS.terminalRequiresCorrection,
+    });
+    await flushScheduledTasks();
+    const stored = await getOrder(order.externalReference);
+
+    expect(stored).toMatchObject({
+      status: "charged_back",
+      paymentStatus: "charged_back",
+      inventoryStatus: "deducted",
+      mpPaymentLedger: {
+        [paymentId]: expect.objectContaining({
+          status: "charged_back",
+          approvedAt: expect.any(Number),
+        }),
+      },
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-H07B-MP-PRECEDENCE-04 preserves approval history against stale search rejection", async () => {
+    const paymentId = "11004";
+    const order = await makeOrder({ mpPaymentId: paymentId });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(mpPayment(order, paymentId, "approved")))
+      .mockResolvedValueOnce(jsonResponse(searchPage(1, 0, [
+        mpPayment(order, paymentId, "rejected"),
+      ])));
+
+    const result = await confirm(order);
+    await flushScheduledTasks();
+
+    expect(result.order).toMatchObject({
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      mpPaymentLedger: {
+        [paymentId]: expect.objectContaining({
+          status: "rejected",
+          approvedAt: expect.any(Number),
+        }),
+      },
+    });
+    expect(result.activeApprovedPaymentIds).toEqual([paymentId]);
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUD3-H07B-MP-PRECEDENCE-05 appends direct approval when search omits its ID", async () => {
+    const paymentId = "11005";
+    const order = await makeOrder({ mpPaymentId: paymentId });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(mpPayment(order, paymentId, "approved")))
+      .mockResolvedValueOnce(jsonResponse(searchPage(0, 0, [])));
+
+    const result = await confirm(order);
+    await flushScheduledTasks();
+
+    expect(result.order).toMatchObject({
+      status: "approved",
+      paymentStatus: "confirmed",
+      mpPaymentLedger: {
+        [paymentId]: expect.objectContaining({ status: "approved" }),
+      },
+    });
+    expect(result.activeApprovedPaymentIds).toEqual([paymentId]);
+    expect(prepareProtectedPaymentDurability).toHaveBeenCalledTimes(2);
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
+  });
 });

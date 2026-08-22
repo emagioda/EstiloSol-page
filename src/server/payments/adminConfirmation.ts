@@ -85,6 +85,7 @@ export async function reconcileAdminMercadoPagoConfirmation(input: {
   accessToken: string;
 }): Promise<AdminMercadoPagoConfirmationResult> {
   const stagedPayments = new Map<string, StagedPaymentObservation>();
+  let stagedDirectPayment: StagedPaymentObservation | null = null;
   let validationOrder = input.order;
   let protectedDirectOrder: Order | null = null;
   const exactPaymentId = String(input.order.mpPaymentId ?? "").trim();
@@ -98,11 +99,11 @@ export async function reconcileAdminMercadoPagoConfirmation(input: {
         isValidPaymentForOrder(direct.data, input.order, exactPaymentId)
       ) {
         const directId = normalizedPaymentId(direct.data, exactPaymentId);
-        stagedPayments.set(directId, {
+        stagedDirectPayment = {
           payment: direct.data,
           source: "verify_payment_id",
           fallbackPaymentId: exactPaymentId,
-        });
+        };
 
         if (isApprovedPaymentForOrder(direct.data, input.order, exactPaymentId)) {
           try {
@@ -167,6 +168,16 @@ export async function reconcileAdminMercadoPagoConfirmation(input: {
     throw providerAuthorityRequired();
   }
 
+  if (stagedDirectPayment) {
+    const directPaymentId = normalizedPaymentId(
+      stagedDirectPayment.payment,
+      stagedDirectPayment.fallbackPaymentId
+    );
+    if (isValidPaymentId(directPaymentId) && !stagedPayments.has(directPaymentId)) {
+      stagedPayments.set(directPaymentId, stagedDirectPayment);
+    }
+  }
+
   const observations = Array.from(stagedPayments.values());
   const hasApprovedPayment = observations.some((observation) =>
     isApprovedPaymentForOrder(
@@ -175,7 +186,7 @@ export async function reconcileAdminMercadoPagoConfirmation(input: {
       observation.fallbackPaymentId
     )
   );
-  if (!hasApprovedPayment) {
+  if (!hasApprovedPayment && !protectedDirectOrder) {
     throw new PaymentTransitionBlockedError(
       PAYMENT_TRANSITION_BLOCK_REASONS.mercadoPagoNotApproved
     );
