@@ -13,16 +13,15 @@ vi.mock("@/src/server/emailOutbox/service", () => ({
 }));
 
 vi.mock("@/src/server/orders/store", () => ({
+  assertAdminPaymentTransitionRequest: vi.fn(),
   getOrder: vi.fn(),
   markApproved: vi.fn(),
-  markTerminalPaymentState: vi.fn(),
   retryPaidOrderInventory: vi.fn(),
   updateOrder: vi.fn(),
 }));
 
-vi.mock("@/src/server/payments/mpClient", () => ({
-  fetchPaymentByIdFromMp: vi.fn(),
-  searchPaymentsByExternalReference: vi.fn(),
+vi.mock("@/src/server/payments/adminConfirmation", () => ({
+  reconcileAdminMercadoPagoConfirmation: vi.fn(),
 }));
 
 vi.mock("@/src/server/sheets/repository", () => ({
@@ -37,9 +36,9 @@ import {
   saveOrderStatusesBatchAction,
 } from "@/app/admin/actions";
 import {
+  assertAdminPaymentTransitionRequest,
   getOrder,
   markApproved,
-  markTerminalPaymentState,
   retryPaidOrderInventory,
   updateOrder,
 } from "@/src/server/orders/store";
@@ -49,7 +48,12 @@ import {
   getOrderRowById,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
-import { searchPaymentsByExternalReference } from "@/src/server/payments/mpClient";
+import { reconcileAdminMercadoPagoConfirmation } from "@/src/server/payments/adminConfirmation";
+import {
+  evaluateAdminPaymentTransitionRequest,
+  PAYMENT_TRANSITION_BLOCK_REASONS,
+  PaymentTransitionBlockedError,
+} from "@/src/server/orders/paymentTransition";
 import { parseFallbackOrderItems } from "@/src/server/orders/sheetFallback";
 import {
   FULFILLMENT_COMPLETION_BLOCK_REASONS,
@@ -129,11 +133,19 @@ const save = (orderId: string, paymentStatus = "confirmed", shippingStatus = "in
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.MP_ACCESS_TOKEN = "test-token";
+  vi.mocked(reconcileAdminMercadoPagoConfirmation).mockReset();
   vi.mocked(updateOrder).mockImplementation(async (_id, patch) => baseOrder(patch));
-  vi.mocked(markTerminalPaymentState).mockImplementation(async (_id, input) => baseOrder({
-    status: input.status,
-    paymentStatus: input.status === "refunded" ? "refunded" : input.status === "charged_back" ? "charged_back" : "cancelled",
-  }));
+  vi.mocked(assertAdminPaymentTransitionRequest).mockImplementation(async (id, requested) => {
+    const order = await vi.mocked(getOrder)(id);
+    if (!order) return null;
+    const decision = evaluateAdminPaymentTransitionRequest({
+      current: order.paymentStatus,
+      requested,
+      paymentMethod: order.paymentMethod,
+    });
+    if (!decision.allowed) throw new PaymentTransitionBlockedError(decision.reason);
+    return { order, decision };
+  });
   vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
   vi.mocked(decrementProductsStockInSheet).mockResolvedValue({
     deduped: false,
@@ -343,31 +355,44 @@ describe("PR 2 Sheets fallback", () => {
   it("does not enroll an already-confirmed legacy Sheets order on Admin resave", async () => {
     vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({ paymentStatus: "confirmed" }));
     await save("sheet-order-1");
-    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
-      "sheet-order-1",
-      expect.not.objectContaining({ receiptOutboxVersion: 1 }),
-    );
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
     expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 
-  it("PR2-FALLBACK-02 Mercado Pago fallback verifies payment before stock", async () => {
+  it("PR2-FALLBACK-02 Mercado Pago fallback uses canonical reconciliation", async () => {
     vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({ paymentMethod: "mercadopago" }));
-    vi.mocked(searchPaymentsByExternalReference).mockResolvedValue({
-      response: new Response("{}", { status: 200 }),
-      data: { results: [{
-        id: "pay-1",
-        status: "approved",
-        external_reference: "sheet-order-1",
-        transaction_amount: 1000,
-        currency_id: "ARS",
-      }] },
+    const reconciled = baseOrder({
+      externalReference: "sheet-order-1",
+      paymentMethod: "mercadopago",
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+      mpPaymentId: "pay-1",
+      mpStatus: "approved",
+      mpPaymentLedger: {
+        "pay-1": {
+          paymentId: "pay-1",
+          status: "approved",
+          amount: 1000,
+          currency: "ARS",
+          firstSeenAt: 10,
+          lastSeenAt: 10,
+          approvedAt: 10,
+        },
+      },
+    });
+    vi.mocked(reconcileAdminMercadoPagoConfirmation).mockResolvedValue({
+      order: reconciled,
+      activeApprovedPaymentIds: ["pay-1"],
+      discoveryComplete: true,
     });
     await save("sheet-order-1");
-    expect(searchPaymentsByExternalReference).toHaveBeenCalled();
-    expect(decrementProductsStockInSheet).toHaveBeenCalled();
-    expect(vi.mocked(searchPaymentsByExternalReference).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(decrementProductsStockInSheet).mock.invocationCallOrder[0]!
-    );
+    expect(reconcileAdminMercadoPagoConfirmation).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: "test-token",
+      order: expect.objectContaining({ externalReference: "sheet-order-1" }),
+    }));
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
   });
 
   it("PR2-FALLBACK-03 existing stock timestamp avoids another decrement", async () => {
@@ -469,7 +494,7 @@ describe("AUD3 H07 Admin fulfillment completion", () => {
     });
   });
 
-  it("ADMIN-05 preserves a valid historical completion through a refund", async () => {
+  it("ADMIN-05 blocks an ordinary refund without changing historical completion", async () => {
     const current = baseOrder({
       status: "approved",
       paymentStatus: "confirmed",
@@ -477,13 +502,12 @@ describe("AUD3 H07 Admin fulfillment completion", () => {
       inventoryStatus: "deducted",
       stockDeductedAt: 10,
     });
-    const refunded = { ...current, status: "refunded" as const, paymentStatus: "refunded" as const };
     vi.mocked(getOrder).mockResolvedValue(current);
-    vi.mocked(markTerminalPaymentState).mockResolvedValue(refunded);
 
     expect((await save(current.externalReference, "refunded", "completed")).results[0]).toMatchObject({
       shippingStatus: "completed",
-      shippingBlocked: false,
+      paymentBlocked: true,
+      paymentBlockReason: "PAYMENT_CONFIRMED_CANNOT_BE_DOWNGRADED",
     });
     expect(updateOrder).not.toHaveBeenCalled();
   });
@@ -596,7 +620,7 @@ describe("AUD3 H07 Admin fulfillment completion", () => {
     });
   });
 
-  it("FALLBACK-H07-05 preserves valid historical completion through a terminal financial update", async () => {
+  it("FALLBACK-H07-05 blocks a terminal financial update and preserves completion", async () => {
     vi.mocked(getOrder).mockResolvedValue(null);
     vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
       paymentStatus: "confirmed",
@@ -607,8 +631,10 @@ describe("AUD3 H07 Admin fulfillment completion", () => {
 
     expect((await save("sheet-order-1", "refunded", "in_process")).results[0]).toMatchObject({
       shippingStatus: "completed",
-      shippingBlocked: false,
+      paymentBlocked: true,
+      paymentBlockReason: "PAYMENT_CONFIRMED_CANNOT_BE_DOWNGRADED",
     });
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
   });
 
   it("BATCH-01 applies the same policy independently to valid and blocked rows", async () => {
@@ -645,5 +671,186 @@ describe("AUD3 H07 Admin fulfillment completion", () => {
       shippingStatus: "delivered",
     }])).rejects.toThrow("Invalid batch order update payload");
     expect(updateOrder).not.toHaveBeenCalled();
+  });
+});
+
+describe("AUD3 H07-B Admin payment authority", () => {
+  it.each(["pending", "cancelled", "refunded", "charged_back"] as const)(
+    "AUD3-H07B-ADMIN-03/05 blocks confirmed to %s",
+    async (requested) => {
+      const current = baseOrder({
+        paymentMethod: "cash",
+        status: "approved",
+        paymentStatus: "confirmed",
+        approvedAt: 100,
+      });
+      vi.mocked(getOrder).mockResolvedValue(current);
+
+      expect((await save(current.externalReference, requested)).results[0]).toMatchObject({
+        paymentBlocked: true,
+        paymentBlockReason: "PAYMENT_CONFIRMED_CANNOT_BE_DOWNGRADED",
+      });
+      expect(markApproved).not.toHaveBeenCalled();
+      expect(updateOrder).not.toHaveBeenCalled();
+      expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ["cancelled", "confirmed"],
+    ["refunded", "pending"],
+    ["charged_back", "confirmed"],
+  ] as const)(
+    "AUD3-H07B-ADMIN-06/07 blocks %s to %s",
+    async (currentStatus, requested) => {
+      const current = baseOrder({
+        paymentMethod: "transfer",
+        status: currentStatus,
+        paymentStatus: currentStatus,
+      });
+      vi.mocked(getOrder).mockResolvedValue(current);
+
+      expect((await save(current.externalReference, requested)).results[0]).toMatchObject({
+        paymentBlocked: true,
+        paymentBlockReason: "PAYMENT_TERMINAL_REQUIRES_CORRECTION",
+      });
+    }
+  );
+
+  it("AUD3-H07B-REPLAY-01 confirmed replay is financially inert", async () => {
+    const current = baseOrder({
+      paymentMethod: "cash",
+      status: "approved",
+      paymentStatus: "confirmed",
+      approvedAt: 100,
+      inventoryStatus: "pending",
+    });
+    vi.mocked(getOrder).mockResolvedValue(current);
+
+    await save(current.externalReference, "confirmed", "in_process");
+    expect(markApproved).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
+    expect(updateOrder).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H07B-MP-01 routes verified approval through canonical ledger reconciliation", async () => {
+    const current = baseOrder({ paymentMethod: "mercadopago" });
+    const reconciled = baseOrder({
+      paymentMethod: "mercadopago",
+      status: "approved",
+      paymentStatus: "confirmed",
+      mpPaymentId: "pay-admin-1",
+      mpStatus: "approved",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+      receiptOutboxVersion: 1,
+      mpPaymentLedger: {
+        "pay-admin-1": {
+          paymentId: "pay-admin-1",
+          status: "approved",
+          amount: 1000,
+          currency: "ARS",
+          firstSeenAt: 10,
+          lastSeenAt: 10,
+          approvedAt: 10,
+        },
+      },
+    });
+    vi.mocked(getOrder).mockResolvedValue(current);
+    vi.mocked(reconcileAdminMercadoPagoConfirmation).mockResolvedValue({
+      order: reconciled,
+      activeApprovedPaymentIds: ["pay-admin-1"],
+      discoveryComplete: true,
+    });
+
+    const result = await save(current.externalReference, "confirmed");
+    expect(result.results[0]).toMatchObject({ inventoryStatus: "deducted" });
+    expect(reconcileAdminMercadoPagoConfirmation).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: "test-token",
+      order: expect.objectContaining({ externalReference: current.externalReference }),
+    }));
+    expect(markApproved).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H07B-MP-02 fails closed when MP does not report approval", async () => {
+    const current = baseOrder({ paymentMethod: "mercadopago" });
+    vi.mocked(getOrder).mockResolvedValue(current);
+    vi.mocked(reconcileAdminMercadoPagoConfirmation).mockRejectedValue(
+      new PaymentTransitionBlockedError(
+        PAYMENT_TRANSITION_BLOCK_REASONS.mercadoPagoNotApproved
+      )
+    );
+
+    expect((await save(current.externalReference, "confirmed")).results[0]).toMatchObject({
+      paymentBlocked: true,
+      paymentBlockReason: "PAYMENT_MP_NOT_APPROVED",
+      paymentBlockMessage: "Mercado Pago no informa este pago como aprobado.",
+    });
+    expect(markApproved).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H07B-FALLBACK-03 blocks a Sheet-only confirmed downgrade", async () => {
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
+      paymentMethod: "cash",
+      paymentStatus: "confirmed",
+    }));
+
+    expect((await save("sheet-order-1", "pending")).results[0]).toMatchObject({
+      paymentBlocked: true,
+      paymentBlockReason: "PAYMENT_CONFIRMED_CANNOT_BE_DOWNGRADED",
+    });
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H07B-FALLBACK-06 fails closed when canonical MP authority is unavailable", async () => {
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
+      paymentMethod: "mercadopago",
+    }));
+    vi.mocked(reconcileAdminMercadoPagoConfirmation).mockRejectedValue(
+      new PaymentTransitionBlockedError(
+        PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
+      )
+    );
+
+    expect((await save("sheet-order-1", "confirmed")).results[0]).toMatchObject({
+      paymentBlocked: true,
+      paymentBlockReason: "PAYMENT_PROVIDER_AUTHORITY_REQUIRED",
+    });
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+  });
+
+  it("AUD3-H07B-BATCH-02 blocks the second duplicate transition", async () => {
+    let current = baseOrder({ externalReference: "duplicate", paymentMethod: "cash" });
+    vi.mocked(getOrder).mockImplementation(async () => current);
+    vi.mocked(markApproved).mockImplementation(async () => {
+      current = {
+        ...current,
+        status: "approved",
+        paymentStatus: "confirmed",
+        approvedAt: 100,
+        inventoryStatus: "deducted",
+        stockDeductedAt: 100,
+      };
+      return current;
+    });
+
+    const result = await saveOrderStatusesBatchAction([
+      { orderId: "duplicate", paymentStatus: "confirmed", shippingStatus: "in_process" },
+      { orderId: "duplicate", paymentStatus: "pending", shippingStatus: "in_process" },
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.results[0]).not.toHaveProperty("paymentBlocked");
+    expect(result.results[1]).toMatchObject({
+      paymentBlocked: true,
+      paymentBlockReason: "PAYMENT_CONFIRMED_CANNOT_BE_DOWNGRADED",
+    });
+    expect(current.paymentStatus).toBe("confirmed");
+    expect(markApproved).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
   });
 });
