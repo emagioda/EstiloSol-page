@@ -42,16 +42,7 @@ import {
   parseFallbackOrderFulfillment,
   parseFallbackOrderItems,
 } from "@/src/server/orders/sheetFallback";
-import {
-  fetchPaymentByIdFromMp,
-  searchPaymentsByExternalReference,
-} from "@/src/server/payments/mpClient";
-import {
-  amountMatches,
-  type MpPaymentResponse,
-  type MpSearchPayment,
-} from "@/src/server/payments/shared";
-import { reconcileMercadoPagoPayment } from "@/src/server/payments/reconciliation";
+import { reconcileAdminMercadoPagoConfirmation } from "@/src/server/payments/adminConfirmation";
 import {
   getOrderRowById,
   updateOrderRowInSalesSheet,
@@ -134,92 +125,6 @@ const orderStatusFromPaymentStatus = (paymentStatus: OrderPaymentStatus): OrderS
   if (paymentStatus === "refunded") return "refunded";
   if (paymentStatus === "charged_back") return "charged_back";
   return "pending";
-};
-
-type MpPaymentForValidation = MpPaymentResponse | MpSearchPayment;
-
-const isApprovedMpPaymentForOrder = (
-  payment: MpPaymentForValidation | null,
-  externalReference: string,
-  expectedTotal: number
-) => {
-  if (!payment) return false;
-  const status = String(payment.status || "").trim().toLowerCase();
-  const paymentRef = String(payment.external_reference || "").trim();
-  const currency = String(payment.currency_id || "").trim().toUpperCase();
-  const amount = Number(payment.transaction_amount);
-
-  return (
-    status === "approved" &&
-    paymentRef === externalReference &&
-    currency === "ARS" &&
-    Number.isFinite(amount) &&
-    amountMatches(amount, expectedTotal)
-  );
-};
-
-const assertMercadoPagoApproval = async (
-  externalReference: string,
-  expectedTotal: number,
-  paymentId?: string
-): Promise<{
-  payment: MpPaymentForValidation;
-  source: "verify_payment_id" | "verify_search";
-  fallbackPaymentId?: string;
-}> => {
-  let accessToken: string;
-  try {
-    accessToken = env.getRequiredServer("MP_ACCESS_TOKEN");
-  } catch {
-    throw new PaymentTransitionBlockedError(
-      PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
-    );
-  }
-  const normalizedPaymentId = String(paymentId || "").trim();
-
-  if (normalizedPaymentId && /^\d+$/.test(normalizedPaymentId)) {
-    try {
-      const { response, data } = await fetchPaymentByIdFromMp(normalizedPaymentId, accessToken);
-      if (response.ok && data && isApprovedMpPaymentForOrder(data, externalReference, expectedTotal)) {
-        return {
-          payment: data,
-          source: "verify_payment_id",
-          fallbackPaymentId: normalizedPaymentId,
-        };
-      }
-    } catch {
-      // Search by exact external reference below before failing closed.
-    }
-  }
-
-  let searchResult: Awaited<ReturnType<typeof searchPaymentsByExternalReference>>;
-  try {
-    searchResult = await searchPaymentsByExternalReference(externalReference, accessToken);
-  } catch {
-    throw new PaymentTransitionBlockedError(
-      PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
-    );
-  }
-  const { response, data } = searchResult;
-  if (!response.ok || !data) {
-    throw new PaymentTransitionBlockedError(
-      PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
-    );
-  }
-
-  const approvedPayment = (data.results || []).find((payment) =>
-    isApprovedMpPaymentForOrder(payment, externalReference, expectedTotal)
-  );
-  if (approvedPayment) {
-    return {
-      payment: approvedPayment,
-      source: "verify_search",
-      fallbackPaymentId: String(approvedPayment.id || normalizedPaymentId),
-    };
-  }
-  throw new PaymentTransitionBlockedError(
-    PAYMENT_TRANSITION_BLOCK_REASONS.mercadoPagoNotApproved
-  );
 };
 
 const buildFallbackOrderFromSheet = (
@@ -417,36 +322,24 @@ const persistFallbackShippingStatus = async ({
 };
 
 const reconcileVerifiedMercadoPagoApproval = async (order: Order): Promise<Order> => {
-  const verified = await assertMercadoPagoApproval(
-    order.externalReference,
-    order.total,
-    order.mpPaymentId
-  );
-  let reconciliation: Awaited<ReturnType<typeof reconcileMercadoPagoPayment>>;
+  let accessToken: string;
   try {
-    reconciliation = await reconcileMercadoPagoPayment({
-      externalReference: order.externalReference,
-      payment: verified.payment,
-      source: verified.source,
-      fallbackPaymentId: verified.fallbackPaymentId,
-    });
+    accessToken = env.getRequiredServer("MP_ACCESS_TOKEN");
   } catch {
     throw new PaymentTransitionBlockedError(
       PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
     );
   }
 
-  if (reconciliation.outcome !== "reconciled") {
+  try {
+    const result = await reconcileAdminMercadoPagoConfirmation({ order, accessToken });
+    return result.order;
+  } catch (error) {
+    if (error instanceof PaymentTransitionBlockedError) throw error;
     throw new PaymentTransitionBlockedError(
       PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
     );
   }
-  if (reconciliation.order.paymentStatus !== "confirmed") {
-    throw new PaymentTransitionBlockedError(
-      PAYMENT_TRANSITION_BLOCK_REASONS.terminalRequiresCorrection
-    );
-  }
-  return reconciliation.order;
 };
 
 const applySheetFallbackOrderStatusesUpdate = async ({

@@ -20,13 +20,8 @@ vi.mock("@/src/server/orders/store", () => ({
   updateOrder: vi.fn(),
 }));
 
-vi.mock("@/src/server/payments/reconciliation", () => ({
-  reconcileMercadoPagoPayment: vi.fn(),
-}));
-
-vi.mock("@/src/server/payments/mpClient", () => ({
-  fetchPaymentByIdFromMp: vi.fn(),
-  searchPaymentsByExternalReference: vi.fn(),
+vi.mock("@/src/server/payments/adminConfirmation", () => ({
+  reconcileAdminMercadoPagoConfirmation: vi.fn(),
 }));
 
 vi.mock("@/src/server/sheets/repository", () => ({
@@ -53,10 +48,10 @@ import {
   getOrderRowById,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
-import { searchPaymentsByExternalReference } from "@/src/server/payments/mpClient";
-import { reconcileMercadoPagoPayment } from "@/src/server/payments/reconciliation";
+import { reconcileAdminMercadoPagoConfirmation } from "@/src/server/payments/adminConfirmation";
 import {
   evaluateAdminPaymentTransitionRequest,
+  PAYMENT_TRANSITION_BLOCK_REASONS,
   PaymentTransitionBlockedError,
 } from "@/src/server/orders/paymentTransition";
 import { parseFallbackOrderItems } from "@/src/server/orders/sheetFallback";
@@ -138,6 +133,7 @@ const save = (orderId: string, paymentStatus = "confirmed", shippingStatus = "in
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.MP_ACCESS_TOKEN = "test-token";
+  vi.mocked(reconcileAdminMercadoPagoConfirmation).mockReset();
   vi.mocked(updateOrder).mockImplementation(async (_id, patch) => baseOrder(patch));
   vi.mocked(assertAdminPaymentTransitionRequest).mockImplementation(async (id, requested) => {
     const order = await vi.mocked(getOrder)(id);
@@ -365,50 +361,36 @@ describe("PR 2 Sheets fallback", () => {
 
   it("PR2-FALLBACK-02 Mercado Pago fallback uses canonical reconciliation", async () => {
     vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({ paymentMethod: "mercadopago" }));
-    vi.mocked(searchPaymentsByExternalReference).mockResolvedValue({
-      response: new Response("{}", { status: 200 }),
-      data: { results: [{
-        id: "pay-1",
-        status: "approved",
-        external_reference: "sheet-order-1",
-        transaction_amount: 1000,
-        currency_id: "ARS",
-      }] },
-    });
-    vi.mocked(reconcileMercadoPagoPayment).mockResolvedValue({
-      outcome: "reconciled",
-      order: baseOrder({
-        externalReference: "sheet-order-1",
-        paymentMethod: "mercadopago",
-        status: "approved",
-        paymentStatus: "confirmed",
-        inventoryStatus: "deducted",
-        stockDeductedAt: 10,
-        mpPaymentId: "pay-1",
-        mpStatus: "approved",
-        mpPaymentLedger: {
-          "pay-1": {
-            paymentId: "pay-1",
-            status: "approved",
-            amount: 1000,
-            currency: "ARS",
-            firstSeenAt: 10,
-            lastSeenAt: 10,
-            approvedAt: 10,
-          },
-        },
-      }),
-      paymentId: "pay-1",
+    const reconciled = baseOrder({
+      externalReference: "sheet-order-1",
+      paymentMethod: "mercadopago",
       status: "approved",
-      duplicate: false,
-      firstEffectiveApproval: true,
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+      mpPaymentId: "pay-1",
+      mpStatus: "approved",
+      mpPaymentLedger: {
+        "pay-1": {
+          paymentId: "pay-1",
+          status: "approved",
+          amount: 1000,
+          currency: "ARS",
+          firstSeenAt: 10,
+          lastSeenAt: 10,
+          approvedAt: 10,
+        },
+      },
+    });
+    vi.mocked(reconcileAdminMercadoPagoConfirmation).mockResolvedValue({
+      order: reconciled,
       activeApprovedPaymentIds: ["pay-1"],
+      discoveryComplete: true,
     });
     await save("sheet-order-1");
-    expect(searchPaymentsByExternalReference).toHaveBeenCalled();
-    expect(reconcileMercadoPagoPayment).toHaveBeenCalledWith(expect.objectContaining({
-      externalReference: "sheet-order-1",
-      source: "verify_search",
+    expect(reconcileAdminMercadoPagoConfirmation).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: "test-token",
+      order: expect.objectContaining({ externalReference: "sheet-order-1" }),
     }));
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
   });
@@ -775,31 +757,17 @@ describe("AUD3 H07-B Admin payment authority", () => {
       },
     });
     vi.mocked(getOrder).mockResolvedValue(current);
-    vi.mocked(searchPaymentsByExternalReference).mockResolvedValue({
-      response: new Response("{}", { status: 200 }),
-      data: { results: [{
-        id: "pay-admin-1",
-        status: "approved",
-        external_reference: current.externalReference,
-        transaction_amount: current.total,
-        currency_id: "ARS",
-      }] },
-    });
-    vi.mocked(reconcileMercadoPagoPayment).mockResolvedValue({
-      outcome: "reconciled",
+    vi.mocked(reconcileAdminMercadoPagoConfirmation).mockResolvedValue({
       order: reconciled,
-      paymentId: "pay-admin-1",
-      status: "approved",
-      duplicate: false,
-      firstEffectiveApproval: true,
       activeApprovedPaymentIds: ["pay-admin-1"],
+      discoveryComplete: true,
     });
 
     const result = await save(current.externalReference, "confirmed");
     expect(result.results[0]).toMatchObject({ inventoryStatus: "deducted" });
-    expect(reconcileMercadoPagoPayment).toHaveBeenCalledWith(expect.objectContaining({
-      externalReference: current.externalReference,
-      source: "verify_search",
+    expect(reconcileAdminMercadoPagoConfirmation).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: "test-token",
+      order: expect.objectContaining({ externalReference: current.externalReference }),
     }));
     expect(markApproved).not.toHaveBeenCalled();
     expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
@@ -808,17 +776,18 @@ describe("AUD3 H07-B Admin payment authority", () => {
   it("AUD3-H07B-MP-02 fails closed when MP does not report approval", async () => {
     const current = baseOrder({ paymentMethod: "mercadopago" });
     vi.mocked(getOrder).mockResolvedValue(current);
-    vi.mocked(searchPaymentsByExternalReference).mockResolvedValue({
-      response: new Response("{}", { status: 200 }),
-      data: { results: [] },
-    });
+    vi.mocked(reconcileAdminMercadoPagoConfirmation).mockRejectedValue(
+      new PaymentTransitionBlockedError(
+        PAYMENT_TRANSITION_BLOCK_REASONS.mercadoPagoNotApproved
+      )
+    );
 
     expect((await save(current.externalReference, "confirmed")).results[0]).toMatchObject({
       paymentBlocked: true,
       paymentBlockReason: "PAYMENT_MP_NOT_APPROVED",
       paymentBlockMessage: "Mercado Pago no informa este pago como aprobado.",
     });
-    expect(reconcileMercadoPagoPayment).not.toHaveBeenCalled();
+    expect(markApproved).not.toHaveBeenCalled();
   });
 
   it("AUD3-H07B-FALLBACK-03 blocks a Sheet-only confirmed downgrade", async () => {
@@ -840,22 +809,11 @@ describe("AUD3 H07-B Admin payment authority", () => {
     vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
       paymentMethod: "mercadopago",
     }));
-    vi.mocked(searchPaymentsByExternalReference).mockResolvedValue({
-      response: new Response("{}", { status: 200 }),
-      data: { results: [{
-        id: "pay-fallback",
-        status: "approved",
-        external_reference: "sheet-order-1",
-        transaction_amount: 1000,
-        currency_id: "ARS",
-      }] },
-    });
-    vi.mocked(reconcileMercadoPagoPayment).mockResolvedValue({
-      outcome: "recovery_attention",
-      paymentId: "pay-fallback",
-      status: "approved",
-      order: null,
-    });
+    vi.mocked(reconcileAdminMercadoPagoConfirmation).mockRejectedValue(
+      new PaymentTransitionBlockedError(
+        PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
+      )
+    );
 
     expect((await save("sheet-order-1", "confirmed")).results[0]).toMatchObject({
       paymentBlocked: true,
