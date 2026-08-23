@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   retryOrderInventoryAction,
   saveOrderStatusesBatchAction,
+  type AdminOrderUpdateInput,
 } from "@/app/admin/actions";
 import type { AdminOrderSheetRow } from "@/src/server/sheets/repository";
 import { isAdminPaymentStatusSelectable } from "@/src/server/orders/paymentTransition";
@@ -21,6 +22,10 @@ import {
   orderRequiresAttention,
 } from "./inventoryUi";
 import FinancialAttentionFlag from "./FinancialAttentionFlag";
+import {
+  buildAdminOrderStatusUpdate,
+  summarizeAdminOrderOutcomes,
+} from "./statusIntentUi";
 
 type VentasTableProps = {
   orders: AdminOrderSheetRow[];
@@ -50,11 +55,7 @@ type FilterOption<T extends string> = {
   label: string;
 };
 
-type PendingOrderUpdate = {
-  orderId: string;
-  paymentStatus: PaymentStatus;
-  shippingStatus: ShippingStatus;
-};
+type PendingOrderUpdate = AdminOrderUpdateInput;
 
 type SaveDialogState =
   | {
@@ -500,13 +501,8 @@ export default function VentasTable({ orders }: VentasTableProps) {
           shippingStatus: order.shippingStatus,
         };
 
-        if (hasChanges(order, draft)) {
-          accumulator.push({
-            orderId: order.orderId,
-            paymentStatus: draft.paymentStatus,
-            shippingStatus: draft.shippingStatus,
-          });
-        }
+        const update = buildAdminOrderStatusUpdate(order, draft);
+        if (update) accumulator.push(update);
         return accumulator;
       }, []),
     [orders, draftByOrder]
@@ -747,13 +743,10 @@ export default function VentasTable({ orders }: VentasTableProps) {
     try {
       if (pendingOrderUpdates.length > 0) {
         const result = await saveOrderStatusesBatchAction(pendingOrderUpdates);
-        const blockMessage =
-          result.results.find((entry) => entry.paymentBlockMessage)?.paymentBlockMessage ??
-          result.results.find((entry) => entry.completionBlockMessage)?.completionBlockMessage;
-        if (blockMessage) {
+        if (!result.ok) {
           skipLeaveGuardRef.current = false;
           setIsSavingBeforeLeave(false);
-          setLeaveDialogError(blockMessage);
+          setLeaveDialogError(summarizeAdminOrderOutcomes(result.results));
           return;
         }
       }
@@ -824,17 +817,32 @@ export default function VentasTable({ orders }: VentasTableProps) {
     setIsPersistingSale(true);
 
     try {
-      const result = await saveOrderStatusesBatchAction([{ orderId, ...draft }]);
-      const paymentBlockMessage = result.results[0]?.paymentBlockMessage;
-      const blockMessage = paymentBlockMessage ?? result.results[0]?.completionBlockMessage;
-      if (blockMessage) {
+      const order = orders.find((entry) => entry.orderId === orderId);
+      const update = order ? buildAdminOrderStatusUpdate(order, draft) : null;
+      if (!update) throw new Error("No pending Admin status intent");
+      const result = await saveOrderStatusesBatchAction([update]);
+      if (!result.ok) {
+        const outcome = result.results[0];
+        const conflict = outcome?.status === "conflict";
+        const paymentBlocked = Boolean(outcome?.paymentBlockMessage);
         skipLeaveGuardRef.current = false;
         setIsPersistingSale(false);
         setSaveDialogState({
           mode: "info",
-          title: paymentBlockMessage ? "Cambio de pago bloqueado" : "La venta quedó En proceso",
-          description: blockMessage,
-          reloadOnClose: true,
+          title: conflict
+            ? "La venta cambió"
+            : paymentBlocked
+              ? "Cambio de pago bloqueado"
+              : outcome?.status === "failure"
+                ? "No pudimos guardar"
+                : "La venta quedó En proceso",
+          description: conflict
+            ? outcome.message ?? "Este pedido cambió desde que abriste la pantalla. Revisá el estado actual antes de guardar nuevamente."
+            : outcome?.paymentBlockMessage ??
+              outcome?.completionBlockMessage ??
+              outcome?.message ??
+              summarizeAdminOrderOutcomes(result.results),
+          reloadOnClose: conflict || outcome?.status === "business_block",
         });
         return;
       }
@@ -856,22 +864,20 @@ export default function VentasTable({ orders }: VentasTableProps) {
 
     try {
       const result = await saveOrderStatusesBatchAction(pendingOrderUpdates);
-      const paymentBlockMessage = result.results.find(
-        (entry) => entry.paymentBlockMessage
-      )?.paymentBlockMessage;
-      const blockMessage = paymentBlockMessage ?? result.results.find(
-        (entry) => entry.completionBlockMessage
-      )?.completionBlockMessage;
-      if (blockMessage) {
+      if (!result.ok) {
+        const hasConflict = result.results.some((entry) => entry.status === "conflict");
+        const hasPaymentBlock = result.results.some((entry) => entry.paymentBlockMessage);
         skipLeaveGuardRef.current = false;
         setIsPersistingSale(false);
         setSaveDialogState({
           mode: "info",
-          title: paymentBlockMessage
+          title: hasConflict
+            ? "Algunas ventas cambiaron"
+            : hasPaymentBlock
             ? "Algunos cambios de pago fueron bloqueados"
-            : "Algunas ventas quedaron En proceso",
-          description: blockMessage,
-          reloadOnClose: true,
+            : "Algunos cambios no se guardaron",
+          description: summarizeAdminOrderOutcomes(result.results),
+          reloadOnClose: hasConflict || result.results.some((entry) => entry.status === "business_block"),
         });
         return;
       }
@@ -891,8 +897,10 @@ export default function VentasTable({ orders }: VentasTableProps) {
     if (pendingOrderUpdates.length === 0 || isPersistingSale) return;
 
     const confirmsPayment = pendingOrderUpdates.some((update) => {
-      const order = orders.find((entry) => entry.orderId === update.orderId);
-      return order?.paymentStatus !== "confirmed" && update.paymentStatus === "confirmed";
+      return (
+        update.changedFields.includes("paymentStatus") &&
+        update.requestedPaymentStatus === "confirmed"
+      );
     });
 
     if (confirmsPayment) {

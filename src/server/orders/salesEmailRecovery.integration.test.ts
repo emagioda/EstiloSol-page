@@ -92,8 +92,9 @@ describe("AUD3-H06-E enrolled sales projection and email recovery", () => {
 
     const confirmation = await saveOrderStatusesBatchAction([{
       orderId: original.externalReference,
-      paymentStatus: "confirmed",
-      shippingStatus: "in_process",
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
     }]);
 
     expect(confirmation).toMatchObject({

@@ -11,6 +11,7 @@ export const FULFILLMENT_COMPLETION_BLOCK_REASONS = {
   pickupIncomplete: "PICKUP_INCOMPLETE",
   deliveryMethodInvalid: "DELIVERY_METHOD_INVALID",
   requiresReconfirmation: "FULFILLMENT_REQUIRES_RECONFIRMATION",
+  completedReopenNotAllowed: "SHIPPING_COMPLETED_REOPEN_NOT_ALLOWED",
 } as const;
 
 export type FulfillmentCompletionBlockReason =
@@ -150,6 +151,9 @@ export const getFulfillmentCompletionBlockMessage = (
   }
   if (reason === FULFILLMENT_COMPLETION_BLOCK_REASONS.requiresReconfirmation) {
     return "La venta fue corregida y quedó En proceso. Volvé a indicar Finalizado.";
+  }
+  if (reason === FULFILLMENT_COMPLETION_BLOCK_REASONS.completedReopenNotAllowed) {
+    return "Una venta finalizada no puede reabrirse desde la edición normal.";
   }
   return "Datos/totales históricos incompletos.";
 };

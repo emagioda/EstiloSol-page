@@ -348,7 +348,7 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
   });
 
   vm.runInContext(
-    `${scriptSource}\n;globalThis.__inventoryApi = { normalizeStockItems_, inventoryDemandFingerprint_, resolveInventoryJournal_, planStockDecrement_, buildAtomicInventoryRequests_, commitAtomicInventoryRequests_, handleAppendRow, handleDecrementStock, handleAppendOrderAndDecrementStock, normalizeProduct, buildProductsPayloadObject, ensureRecoverySchema_, handleUpsertRecoverySnapshot_, handleAppendRecoveryPaymentEvent_, handleClaimRecoveryWork_, handleMarkRecoveryWork_, doGet, doPost };`,
+    `${scriptSource}\n;globalThis.__inventoryApi = { normalizeStockItems_, inventoryDemandFingerprint_, resolveInventoryJournal_, planStockDecrement_, buildAtomicInventoryRequests_, commitAtomicInventoryRequests_, handleAppendRow, handleApplyAdminOrderStatusIntent_, handleDecrementStock, handleAppendOrderAndDecrementStock, normalizeProduct, buildProductsPayloadObject, ensureRecoverySchema_, handleUpsertRecoverySnapshot_, handleAppendRecoveryPaymentEvent_, handleClaimRecoveryWork_, handleMarkRecoveryWork_, doGet, doPost };`,
     context,
   );
 
@@ -811,6 +811,194 @@ describe("Apps Script authoritative inventory planning", () => {
       expect(payload.items[0].authoritative_active).toBe(expected);
     },
   );
+});
+
+describe("AUD3 H07-C1 Apps Script conditional Admin mutation", () => {
+  const salesHeaders = [
+    "nro_de_compra",
+    "estado_de_pago",
+    "estado_de_envio",
+    "payment_method_code",
+    "status",
+    "mp_status",
+    "mp_payment_id",
+    "approved_at",
+    "receipt_outbox_version",
+    "inventory_status",
+    "stock_deducted_at",
+    "total",
+    "subtotal_productos",
+    "descuento",
+    "costo_envio",
+    "total_final",
+    "delivery_method_code",
+    "pickup_point_id",
+    "pickup_point_name",
+    "pickup_point_address",
+    "pickup_point_reference",
+    "fulfillment_summary",
+    "updated_at",
+  ];
+  const salesRow = (overrides: Record<number, unknown> = {}) => {
+    const row: unknown[] = [
+      "order-h07c1",
+      "Pendiente",
+      "En proceso",
+      "cash",
+      "created",
+      "pending",
+      "",
+      "",
+      "",
+      "pending",
+      "",
+      1000,
+      1000,
+      0,
+      0,
+      1000,
+      "pickup",
+      "pickup-1",
+      "Estilo Sol",
+      "San Martín 123",
+      "Mostrador",
+      "Retiro en Estilo Sol",
+      "",
+    ];
+    Object.entries(overrides).forEach(([index, value]) => { row[Number(index)] = value; });
+    return row;
+  };
+  const postIntent = (
+    harness: ReturnType<typeof createHarness>,
+    intent: Record<string, unknown>,
+  ) => {
+    const output = harness.api.doPost({
+      postData: { contents: JSON.stringify({
+        action: "applyAdminOrderStatusIntent",
+        token: "admin-token",
+        sheet: "ventas",
+        orderId: "order-h07c1",
+        manualPaymentId: "manual-order-h07c1",
+        manualApprovedAt: 100,
+        intent,
+      }) },
+    }) as { getContent: () => string };
+    return JSON.parse(output.getContent()) as Record<string, unknown>;
+  };
+
+  it("H07C1-FALLBACK-02 claims cash under ScriptLock before any inventory call", () => {
+    const harness = createHarness([], { salesHeaders, salesRows: [salesRow()] });
+    const originalHeaders = salesHeaders.slice();
+    const result = postIntent(harness, {
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "applied",
+      paymentApplied: true,
+      current: { paymentStatus: "confirmed", shippingStatus: "in_process" },
+      mpPaymentId: "manual-order-h07c1",
+    });
+    expect(harness.locks).toEqual({ waited: 1, released: 1 });
+    expect(harness.stockWrites()).toHaveLength(0);
+    expect(harness.states.get("ventas")?.headers).toEqual(originalHeaders);
+  });
+
+  it("H07C1-FALLBACK-01 returns current truth and performs no mutation on conflict", () => {
+    const harness = createHarness([], {
+      salesHeaders,
+      salesRows: [salesRow({ 1: "Cancelado" })],
+    });
+    const result = postIntent(harness, {
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      code: "ORDER_STATE_CHANGED",
+      current: { paymentStatus: "cancelled", shippingStatus: "in_process" },
+    });
+    expect(harness.writes).toHaveLength(0);
+  });
+
+  it("H07C1-FALLBACK-03 replays the exact target without alternate metadata", () => {
+    const harness = createHarness([], {
+      salesHeaders,
+      salesRows: [salesRow({
+        1: "Confirmado",
+        4: "approved",
+        5: "manual_confirmed",
+        6: "manual-order-h07c1",
+        7: new Date(100).toISOString(),
+      })],
+    });
+    const result = postIntent(harness, {
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "idempotent_replay",
+      paymentApplied: false,
+      mpPaymentId: "manual-order-h07c1",
+    });
+    expect(harness.writes).toHaveLength(0);
+  });
+
+  it("H07C1-SHIP-01 applies shipping-only intent using current H07-A state", () => {
+    const harness = createHarness([], {
+      salesHeaders,
+      salesRows: [salesRow({
+        1: "Confirmado",
+        9: "deducted",
+        10: new Date(100).toISOString(),
+      })],
+    });
+    const result = postIntent(harness, {
+      changedFields: ["shippingStatus"],
+      expectedShippingStatus: "in_process",
+      requestedShippingStatus: "completed",
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "applied",
+      shippingApplied: true,
+      current: { paymentStatus: "confirmed", shippingStatus: "completed" },
+    });
+  });
+
+  it("H07C1-FALLBACK-05 rejects a mixed conflict before partial mutation", () => {
+    const harness = createHarness([], {
+      salesHeaders,
+      salesRows: [salesRow({ 1: "Cancelado" })],
+    });
+    const result = postIntent(harness, {
+      changedFields: ["paymentStatus", "shippingStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+      expectedShippingStatus: "in_process",
+      requestedShippingStatus: "completed",
+    });
+    expect(result).toMatchObject({ ok: false, code: "ORDER_STATE_CHANGED" });
+    expect(harness.writes).toHaveLength(0);
+  });
+
+  it("H07C1-INTENT-04 rejects duplicate fields without adding headers", () => {
+    const harness = createHarness([], { salesHeaders, salesRows: [salesRow()] });
+    const result = postIntent(harness, {
+      changedFields: ["paymentStatus", "paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    });
+    expect(result).toMatchObject({ ok: false, code: "INVALID_ADMIN_ORDER_STATUS_INTENT" });
+    expect(harness.writes).toHaveLength(0);
+    expect(harness.states.get("ventas")?.headers).toEqual(salesHeaders);
+  });
 });
 
 describe("AUD3-H06 Apps Script recovery journal", () => {

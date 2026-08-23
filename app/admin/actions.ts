@@ -10,29 +10,31 @@ import { invalidateProductsCatalogCache } from "@/src/server/catalog/getProducts
 import { ensurePurchaseReceiptEventSafely } from "@/src/server/emailOutbox/service";
 import { logEvent } from "@/src/server/observability/log";
 import {
-  assertAdminPaymentTransitionRequest,
+  applyAdminOrderStatusIntent,
   getOrder,
-  markApproved,
   retryPaidOrderInventory,
-  updateOrder,
 } from "@/src/server/orders/store";
+import {
+  ADMIN_ORDER_STATE_CHANGED,
+  ADMIN_ORDER_STATE_CHANGED_MESSAGE,
+  AdminOrderStateChangedError,
+  assertValidAdminOrderStatusIntent,
+  type AdminOrderStatusIntent,
+  type AdminStatusField,
+} from "@/src/server/orders/adminIntent";
 import {
   attemptInventoryForPaidOrder,
   inventoryResultToOrderPatch,
   resolveOrderInventoryStatus,
   shouldAttemptInventoryAutomatically,
-  type InventoryAttemptResult,
 } from "@/src/server/orders/inventory";
 import {
-  evaluateFulfillmentCompletion,
-  FulfillmentCompletionBlockedError,
   getFulfillmentCompletionBlockMessage,
   isTrustedHistoricalCompletion,
   type FulfillmentCompletionBlockReason,
 } from "@/src/server/orders/fulfillmentCompletion";
 import type { Order, OrderPaymentStatus, OrderShippingStatus, OrderStatus } from "@/src/server/orders/types";
 import {
-  evaluateAdminPaymentTransitionRequest,
   getPaymentTransitionBlockMessage,
   PAYMENT_TRANSITION_BLOCK_REASONS,
   PaymentTransitionBlockedError,
@@ -44,6 +46,7 @@ import {
 } from "@/src/server/orders/sheetFallback";
 import { reconcileAdminMercadoPagoConfirmation } from "@/src/server/payments/adminConfirmation";
 import {
+  applyAdminOrderStatusIntentInSalesSheet,
   getOrderRowById,
   updateOrderRowInSalesSheet,
   updateProductRowInSheet,
@@ -175,6 +178,16 @@ const buildFallbackOrderFromSheet = (
     updatedAt: Date.now(),
     mpPaymentId,
     mpStatus,
+    approvedAt: (() => {
+      const value = raw.approved_at ?? raw.fecha_pago;
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string" && value.trim()) return Date.parse(value) || undefined;
+      return undefined;
+    })(),
+    receiptOutboxVersion:
+      raw.receipt_outbox_version === 1 || String(raw.receipt_outbox_version || "").trim() === "1"
+        ? 1
+        : undefined,
     customer: {
       ...(sheetOrder.customerName ? { name: sheetOrder.customerName } : {}),
       ...(sheetOrder.whatsapp ? { phone: sheetOrder.whatsapp } : {}),
@@ -183,8 +196,21 @@ const buildFallbackOrderFromSheet = (
   };
 };
 
-type AdminOrderUpdateResult = {
+export type AdminOrderUpdateInput = {
   orderId: string;
+  changedFields: AdminStatusField[];
+  expectedPaymentStatus?: OrderPaymentStatus;
+  expectedShippingStatus?: OrderShippingStatus;
+  requestedPaymentStatus?: OrderPaymentStatus;
+  requestedShippingStatus?: OrderShippingStatus;
+};
+
+type AdminOrderOutcomeStatus = "success" | "business_block" | "conflict" | "failure";
+
+export type AdminOrderUpdateResult = {
+  orderId: string;
+  status: AdminOrderOutcomeStatus;
+  paymentStatus: OrderPaymentStatus;
   inventoryStatus?: Order["inventoryStatus"];
   shippingStatus: OrderShippingStatus;
   shippingBlocked: boolean;
@@ -193,65 +219,8 @@ type AdminOrderUpdateResult = {
   paymentBlockMessage?: string;
   completionBlockReason?: FulfillmentCompletionBlockReason;
   completionBlockMessage?: string;
-};
-
-const completionBlockFields = (reason: FulfillmentCompletionBlockReason) => ({
-  shippingBlocked: true,
-  completionBlockReason: reason,
-  completionBlockMessage: getFulfillmentCompletionBlockMessage(reason),
-});
-
-const persistRequestedShippingStatus = async ({
-  orderId,
-  previousOrder,
-  currentOrder,
-  requestedShippingStatus,
-}: {
-  orderId: string;
-  previousOrder: Order;
-  currentOrder: Order;
-  requestedShippingStatus: OrderShippingStatus;
-}): Promise<{
-  order: Order;
-  shippingBlocked: boolean;
-  completionBlockReason?: FulfillmentCompletionBlockReason;
-  completionBlockMessage?: string;
-}> => {
-  if (isTrustedHistoricalCompletion(previousOrder)) {
-    return { order: currentOrder, shippingBlocked: false };
-  }
-
-  if (requestedShippingStatus === "in_process") {
-    const order =
-      currentOrder.shippingStatus === "in_process"
-        ? currentOrder
-        : (await updateOrder(orderId, { shippingStatus: "in_process" })) ?? currentOrder;
-    return { order, shippingBlocked: false };
-  }
-
-  const completionDecision = evaluateFulfillmentCompletion({
-    ...currentOrder,
-    shippingStatus: "completed",
-  });
-  if (!completionDecision.allowed) {
-    const order =
-      currentOrder.shippingStatus === "in_process"
-        ? currentOrder
-        : (await updateOrder(orderId, { shippingStatus: "in_process" })) ?? currentOrder;
-    return { order, ...completionBlockFields(completionDecision.reason) };
-  }
-
-  try {
-    const order =
-      currentOrder.shippingStatus === "completed"
-        ? currentOrder
-        : (await updateOrder(orderId, { shippingStatus: "completed" })) ?? currentOrder;
-    return { order, shippingBlocked: false };
-  } catch (error) {
-    if (!(error instanceof FulfillmentCompletionBlockedError)) throw error;
-    const newestOrder = (await getOrder(orderId)) ?? currentOrder;
-    return { order: newestOrder, ...completionBlockFields(error.reason) };
-  }
+  code?: string;
+  message?: string;
 };
 
 const inventoryPatchFromAttempt = async (order: Order) => {
@@ -263,62 +232,6 @@ const inventoryPatchFromAttempt = async (order: Order) => {
     ...(result.status === "deducted" ? { deduped: result.deduped } : { issueCode: result.issueCode }),
   });
   return { result, patch: inventoryResultToOrderPatch(result) };
-};
-
-const shippingResultFields = (result: Awaited<ReturnType<typeof persistRequestedShippingStatus>>) => ({
-  shippingStatus: result.order.shippingStatus,
-  shippingBlocked: result.shippingBlocked,
-  ...(result.completionBlockReason
-    ? {
-        completionBlockReason: result.completionBlockReason,
-        completionBlockMessage: result.completionBlockMessage,
-      }
-    : {}),
-});
-
-const persistFallbackShippingStatus = async ({
-  order,
-  requestedShippingStatus,
-  persist = true,
-}: {
-  order: Order;
-  requestedShippingStatus: OrderShippingStatus;
-  persist?: boolean;
-}): Promise<Awaited<ReturnType<typeof persistRequestedShippingStatus>>> => {
-  if (isTrustedHistoricalCompletion(order)) {
-    return { order, shippingBlocked: false };
-  }
-
-  const completionDecision =
-    requestedShippingStatus === "completed"
-      ? evaluateFulfillmentCompletion({ ...order, shippingStatus: "completed" })
-      : { allowed: true as const };
-  const completionBlockReason = completionDecision.allowed
-    ? undefined
-    : completionDecision.reason;
-  const shippingStatus = completionBlockReason ? "in_process" : requestedShippingStatus;
-  if (shippingStatus === order.shippingStatus) {
-    return {
-      order,
-      ...(completionBlockReason
-        ? completionBlockFields(completionBlockReason)
-        : { shippingBlocked: false }),
-    };
-  }
-
-  const updatedAt = Date.now();
-  if (persist) {
-    await updateOrderRowInSalesSheet(order.externalReference, {
-      shippingStatus,
-      updatedAt,
-    });
-  }
-  return {
-    order: { ...order, shippingStatus, updatedAt },
-    ...(completionBlockReason
-      ? completionBlockFields(completionBlockReason)
-      : { shippingBlocked: false }),
-  };
 };
 
 const reconcileVerifiedMercadoPagoApproval = async (order: Order): Promise<Order> => {
@@ -342,205 +255,184 @@ const reconcileVerifiedMercadoPagoApproval = async (order: Order): Promise<Order
   }
 };
 
-const applySheetFallbackOrderStatusesUpdate = async ({
-  orderId,
-  paymentStatus,
-  shippingStatus,
+const resultFromOrder = ({
+  order,
+  status = "success",
+  shippingBlocked = false,
+  completionBlockReason,
 }: {
-  orderId: string;
-  paymentStatus: OrderPaymentStatus;
-  shippingStatus: OrderShippingStatus;
-}): Promise<AdminOrderUpdateResult> => {
-  const sheetOrder = await getOrderRowById(orderId);
+  order: Order;
+  status?: AdminOrderOutcomeStatus;
+  shippingBlocked?: boolean;
+  completionBlockReason?: FulfillmentCompletionBlockReason;
+}): AdminOrderUpdateResult => ({
+  orderId: order.externalReference,
+  status,
+  paymentStatus: order.paymentStatus,
+  inventoryStatus: resolveOrderInventoryStatus(order),
+  shippingStatus: order.shippingStatus,
+  shippingBlocked,
+  ...(completionBlockReason
+    ? {
+        completionBlockReason,
+        completionBlockMessage: getFulfillmentCompletionBlockMessage(completionBlockReason),
+      }
+    : {}),
+});
+
+const applySheetFallbackOrderStatusesUpdate = async (
+  orderId: string,
+  intent: AdminOrderStatusIntent
+): Promise<AdminOrderUpdateResult> => {
+  let sheetResult = await applyAdminOrderStatusIntentInSalesSheet(orderId, intent);
+  if (sheetResult.outcome === "provider_confirmation_required") {
+    const providerSheetOrder = await getOrderRowById(orderId);
+    if (!providerSheetOrder) throw new Error("Pedido no encontrado.");
+    const providerOrder = buildFallbackOrderFromSheet(
+      providerSheetOrder,
+      providerSheetOrder.paymentStatus,
+      providerSheetOrder.shippingStatus
+    );
+    await reconcileVerifiedMercadoPagoApproval(providerOrder);
+    sheetResult = await applyAdminOrderStatusIntentInSalesSheet(orderId, intent);
+    if (sheetResult.outcome === "provider_confirmation_required") {
+      throw new PaymentTransitionBlockedError(
+        PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
+      );
+    }
+  }
+  const paymentWasApplied = sheetResult.paymentApplied;
+  const paymentBlockReason = sheetResult.paymentBlockReason;
+  let completionBlockReason = sheetResult.completionBlockReason;
+
+  let sheetOrder = await getOrderRowById(orderId);
   if (!sheetOrder) throw new Error("Pedido no encontrado.");
-
-  const currentOrder = buildFallbackOrderFromSheet(
+  let canonicalOrder = buildFallbackOrderFromSheet(
     sheetOrder,
-    sheetOrder.paymentStatus,
-    sheetOrder.shippingStatus
+    sheetResult.current.paymentStatus,
+    sheetResult.current.shippingStatus
   );
-  const decision = evaluateAdminPaymentTransitionRequest({
-    current: currentOrder.paymentStatus,
-    requested: paymentStatus,
-    paymentMethod: currentOrder.paymentMethod,
-  });
-  if (!decision.allowed) throw new PaymentTransitionBlockedError(decision.reason);
 
-  if (decision.replay) {
-    const shippingResult = await persistFallbackShippingStatus({
-      order: currentOrder,
-      requestedShippingStatus: shippingStatus,
+  if (paymentWasApplied && shouldAttemptInventoryAutomatically(canonicalOrder)) {
+    const { patch } = await inventoryPatchFromAttempt(canonicalOrder);
+    await updateOrderRowInSalesSheet(orderId, {
+      inventoryStatus: patch.inventoryStatus ?? null,
+      inventoryIssueCode: patch.inventoryIssueCode ?? null,
+      inventoryIssueAt: patch.inventoryIssueAt ?? null,
+      stockDeductedAt: patch.stockDeductedAt ?? null,
+      updatedAt: Date.now(),
     });
-    return {
-      orderId,
-      inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
-      ...shippingResultFields(shippingResult),
+    canonicalOrder = { ...canonicalOrder, ...patch };
+  }
+
+  if (sheetResult.shippingDeferred) {
+    const shippingIntent: AdminOrderStatusIntent = {
+      changedFields: ["shippingStatus"],
+      expectedShippingStatus: intent.expectedShippingStatus,
+      requestedShippingStatus: intent.requestedShippingStatus,
+    };
+    sheetResult = await applyAdminOrderStatusIntentInSalesSheet(orderId, shippingIntent);
+    completionBlockReason = sheetResult.completionBlockReason;
+    sheetOrder = await getOrderRowById(orderId);
+    if (!sheetOrder) throw new Error("Pedido no encontrado.");
+    canonicalOrder = buildFallbackOrderFromSheet(
+      sheetOrder,
+      sheetResult.current.paymentStatus,
+      sheetResult.current.shippingStatus
+    );
+  } else {
+    canonicalOrder = {
+      ...canonicalOrder,
+      paymentStatus: sheetResult.current.paymentStatus,
+      shippingStatus: sheetResult.current.shippingStatus,
     };
   }
 
-  if (decision.authority === "mp_authoritative") {
-    const reconciledOrder = await reconcileVerifiedMercadoPagoApproval(currentOrder);
-    const shippingResult = await persistRequestedShippingStatus({
-      orderId,
-      previousOrder: currentOrder,
-      currentOrder: reconciledOrder,
-      requestedShippingStatus: shippingStatus,
-    });
+  if (paymentWasApplied && !sheetOrder.receiptEmailSentAt) {
+    const paymentId = canonicalOrder.mpPaymentId || sheetResult.mpPaymentId;
+    const approvedAt = canonicalOrder.approvedAt || sheetResult.approvedAt;
+    if (!paymentId || !approvedAt) {
+      throw new Error("No se pudo recuperar la identidad canónica del pago manual.");
+    }
+    await ensurePurchaseReceiptEventSafely({ order: canonicalOrder, paymentId, approvedAt });
+  }
+
+  if (paymentBlockReason) {
     return {
-      orderId,
-      inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
-      ...shippingResultFields(shippingResult),
+      ...resultFromOrder({ order: canonicalOrder, status: "business_block" }),
+      paymentBlocked: true,
+      paymentBlockReason,
+      paymentBlockMessage: getPaymentTransitionBlockMessage(paymentBlockReason),
     };
   }
-
-  const approvedAt = Date.now();
-  const paymentId = currentOrder.mpPaymentId || `manual-${approvedAt}`;
-  const confirmationOrder: Order = {
-    ...currentOrder,
-    status: "approved",
-    paymentStatus: "confirmed",
-    mpPaymentId: paymentId,
-    mpStatus: "manual_confirmed",
-    approvedAt,
-  };
-  let inventoryAttempt: InventoryAttemptResult | null = null;
-  let inventoryPatch: Partial<Order> = {};
-  if (shouldAttemptInventoryAutomatically(confirmationOrder)) {
-    const attempted = await inventoryPatchFromAttempt(confirmationOrder);
-    inventoryAttempt = attempted.result;
-    inventoryPatch = attempted.patch;
-  }
-  const paidOrder = { ...confirmationOrder, ...inventoryPatch };
-  const shippingResult = await persistFallbackShippingStatus({
-    order: paidOrder,
-    requestedShippingStatus: shippingStatus,
-    persist: false,
+  return resultFromOrder({
+    order: canonicalOrder,
+    status: completionBlockReason ? "business_block" : "success",
+    shippingBlocked: Boolean(completionBlockReason),
+    completionBlockReason,
   });
-
-  await updateOrderRowInSalesSheet(orderId, {
-    paymentStatus: "confirmed",
-    shippingStatus: shippingResult.order.shippingStatus,
-    orderStatus: "approved",
-    mpStatus: "manual_confirmed",
-    mpPaymentId: paymentId,
-    approvedAt,
-    receiptOutboxVersion: 1,
-    ...(inventoryAttempt
-      ? {
-          inventoryStatus: inventoryPatch.inventoryStatus ?? null,
-          inventoryIssueCode: inventoryPatch.inventoryIssueCode ?? null,
-          inventoryIssueAt: inventoryPatch.inventoryIssueAt ?? null,
-          stockDeductedAt: inventoryPatch.stockDeductedAt,
-        }
-      : {}),
-    updatedAt: Date.now(),
-  });
-
-  if (!sheetOrder.receiptEmailSentAt) {
-    await ensurePurchaseReceiptEventSafely({
-      order: shippingResult.order,
-      paymentId,
-      approvedAt,
-    });
-  }
-  return {
-    orderId,
-    inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
-    ...shippingResultFields(shippingResult),
-  };
 };
 
-const applyOrderStatusesUpdate = async ({
-  orderId,
-  paymentStatus,
-  shippingStatus,
-}: {
-  orderId: string;
-  paymentStatus: OrderPaymentStatus;
-  shippingStatus: OrderShippingStatus;
-}): Promise<AdminOrderUpdateResult> => {
-  const lockedRequest = await assertAdminPaymentTransitionRequest(orderId, paymentStatus);
-  if (!lockedRequest) {
-    return applySheetFallbackOrderStatusesUpdate({ orderId, paymentStatus, shippingStatus });
-  }
-  const currentOrder = lockedRequest.order;
+const applyOrderStatusesUpdate = async (
+  orderId: string,
+  intent: AdminOrderStatusIntent
+): Promise<AdminOrderUpdateResult> => {
+  let application = await applyAdminOrderStatusIntent(orderId, intent);
+  if (!application) return applySheetFallbackOrderStatusesUpdate(orderId, intent);
 
-  if (lockedRequest.decision.replay) {
-    const shippingResult = await persistRequestedShippingStatus({
-      orderId,
-      previousOrder: currentOrder,
-      currentOrder,
-      requestedShippingStatus: shippingStatus,
-    });
-    return {
-      orderId,
-      inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
-      ...shippingResultFields(shippingResult),
-    };
+  if (application.outcome === "provider_confirmation_required") {
+    await reconcileVerifiedMercadoPagoApproval(application.order);
+    application = await applyAdminOrderStatusIntent(orderId, intent);
+    if (!application || application.outcome === "provider_confirmation_required") {
+      throw new Error("No se pudo aplicar el estado confirmado por Mercado Pago.");
+    }
   }
 
-  if (lockedRequest.decision.authority === "mp_authoritative") {
-    const reconciledOrder = await reconcileVerifiedMercadoPagoApproval(currentOrder);
-    const shippingResult = await persistRequestedShippingStatus({
-      orderId,
-      previousOrder: currentOrder,
-      currentOrder: reconciledOrder,
-      requestedShippingStatus: shippingStatus,
-    });
-    return {
-      orderId,
-      inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
-      ...shippingResultFields(shippingResult),
-    };
+  if (application.receiptEnrollmentRequired) {
+    const paymentId = application.order.mpPaymentId;
+    const approvedAt = application.order.approvedAt;
+    if (!paymentId || !approvedAt) {
+      throw new Error("No se pudo recuperar la identidad canónica del pago manual.");
+    }
+    await ensurePurchaseReceiptEventSafely({ order: application.order, paymentId, approvedAt });
   }
 
-  const approvedAt = Date.now();
-  const paymentId = currentOrder.mpPaymentId || `manual-${approvedAt}`;
-  const approvedOrder = await markApproved(
-    orderId,
-    { paymentId, mpStatus: "manual_confirmed", approvedAt },
-    "admin_manual"
-  );
-  if (!approvedOrder || approvedOrder.paymentStatus !== "confirmed") {
-    throw new Error("No se pudo persistir la confirmación del pago.");
-  }
-  const shippingResult = await persistRequestedShippingStatus({
-    orderId,
-    previousOrder: currentOrder,
-    currentOrder: approvedOrder,
-    requestedShippingStatus: shippingStatus,
+  return resultFromOrder({
+    order: application.order,
+    status: application.shippingBlocked ? "business_block" : "success",
+    shippingBlocked: application.shippingBlocked,
+    completionBlockReason: application.completionBlockReason,
   });
-  if (!currentOrder.receiptEmailSentAt) {
-    await ensurePurchaseReceiptEventSafely({
-      order: shippingResult.order,
-      paymentId,
-      approvedAt,
-    });
-  }
-  return {
-    orderId,
-    inventoryStatus: resolveOrderInventoryStatus(shippingResult.order),
-    ...shippingResultFields(shippingResult),
-  };
 };
 
 export async function updateOrderStatusesAction(formData: FormData) {
   await requireAdminSession();
 
   const orderId = String(formData.get("orderId") || "").trim();
-  const paymentStatus = parsePaymentStatus(formData.get("paymentStatus"));
-  const shippingStatus = parseShippingStatus(formData.get("shippingStatus"));
+  const changedFields = formData
+    .getAll("changedFields")
+    .flatMap((value) => String(value).split(","))
+    .map((value) => value.trim())
+    .filter(Boolean) as AdminStatusField[];
   const redirectTo = resolveAdminRedirectPath(formData.get("redirectTo"), "/admin/ventas");
+  const expectedPaymentStatus = parsePaymentStatus(formData.get("expectedPaymentStatus"));
+  const expectedShippingStatus = parseShippingStatus(formData.get("expectedShippingStatus"));
+  const requestedPaymentStatus = parsePaymentStatus(formData.get("requestedPaymentStatus"));
+  const requestedShippingStatus = parseShippingStatus(formData.get("requestedShippingStatus"));
+  const intent: AdminOrderStatusIntent = {
+    changedFields,
+    ...(expectedPaymentStatus ? { expectedPaymentStatus } : {}),
+    ...(expectedShippingStatus ? { expectedShippingStatus } : {}),
+    ...(requestedPaymentStatus ? { requestedPaymentStatus } : {}),
+    ...(requestedShippingStatus ? { requestedShippingStatus } : {}),
+  };
 
-  if (!orderId || !paymentStatus || !shippingStatus) {
+  if (!orderId) {
     throw new Error("Invalid order update payload");
   }
+  assertValidAdminOrderStatusIntent(intent);
 
-  await applyOrderStatusesUpdate({
-    orderId,
-    paymentStatus,
-    shippingStatus,
-  });
+  await applyOrderStatusesUpdate(orderId, intent);
 
   revalidatePath("/admin");
   revalidatePath("/admin/ventas");
@@ -607,11 +499,7 @@ export async function retryOrderInventoryAction(orderIdInput: string) {
 }
 
 export async function saveOrderStatusesBatchAction(
-  updates: Array<{
-    orderId: string;
-    paymentStatus: string;
-    shippingStatus: string;
-  }>
+  updates: AdminOrderUpdateInput[]
 ) {
   await requireAdminSession();
 
@@ -619,35 +507,104 @@ export async function saveOrderStatusesBatchAction(
     throw new Error("Invalid batch order update payload");
   }
 
-  const results: AdminOrderUpdateResult[] = [];
-  for (const update of updates) {
+  const validated = updates.map((update) => {
     const orderId = String(update?.orderId || "").trim();
-    const paymentStatusRaw = String(update?.paymentStatus || "");
-    const shippingStatusRaw = String(update?.shippingStatus || "");
-
-    if (!orderId || !isPaymentStatus(paymentStatusRaw) || !isShippingStatus(shippingStatusRaw)) {
+    const changedFields = Array.isArray(update?.changedFields)
+      ? update.changedFields.map((field) => String(field)) as AdminStatusField[]
+      : [];
+    const intent: AdminOrderStatusIntent = {
+      changedFields,
+      ...(Object.prototype.hasOwnProperty.call(update || {}, "expectedPaymentStatus")
+        ? { expectedPaymentStatus: update.expectedPaymentStatus }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(update || {}, "expectedShippingStatus")
+        ? { expectedShippingStatus: update.expectedShippingStatus }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(update || {}, "requestedPaymentStatus")
+        ? { requestedPaymentStatus: update.requestedPaymentStatus }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(update || {}, "requestedShippingStatus")
+        ? { requestedShippingStatus: update.requestedShippingStatus }
+        : {}),
+    };
+    if (
+      !orderId ||
+      ("expectedPaymentStatus" in intent && !isPaymentStatus(String(intent.expectedPaymentStatus))) ||
+      ("requestedPaymentStatus" in intent && !isPaymentStatus(String(intent.requestedPaymentStatus))) ||
+      ("expectedShippingStatus" in intent && !isShippingStatus(String(intent.expectedShippingStatus))) ||
+      ("requestedShippingStatus" in intent && !isShippingStatus(String(intent.requestedShippingStatus)))
+    ) {
       throw new Error("Invalid batch order update payload");
     }
+    assertValidAdminOrderStatusIntent(intent);
+    return { orderId, intent };
+  });
 
+  const seenOrderIds = new Set<string>();
+  for (const update of validated) {
+    if (seenOrderIds.has(update.orderId)) {
+      throw new Error("El lote contiene pedidos duplicados. No se guardó ningún cambio.");
+    }
+    seenOrderIds.add(update.orderId);
+  }
+
+  const results: AdminOrderUpdateResult[] = [];
+  for (const update of validated) {
     try {
-      results.push(await applyOrderStatusesUpdate({
-        orderId,
-        paymentStatus: paymentStatusRaw,
-        shippingStatus: shippingStatusRaw,
-      }));
+      results.push(await applyOrderStatusesUpdate(update.orderId, update.intent));
     } catch (error) {
-      if (!(error instanceof PaymentTransitionBlockedError)) throw error;
-      const currentOrder = await getOrder(orderId);
-      const sheetOrder = currentOrder ? null : await getOrderRowById(orderId);
+      if (error instanceof AdminOrderStateChangedError) {
+        results.push({
+          orderId: update.orderId,
+          status: "conflict",
+          code: ADMIN_ORDER_STATE_CHANGED,
+          message: ADMIN_ORDER_STATE_CHANGED_MESSAGE,
+          paymentStatus: error.current.paymentStatus,
+          shippingStatus: error.current.shippingStatus,
+          shippingBlocked: false,
+        });
+        continue;
+      }
+
+      let currentOrder: Order | null = null;
+      let sheetOrder: AdminOrderSheetRow | null = null;
+      try {
+        currentOrder = await getOrder(update.orderId);
+        if (!currentOrder) sheetOrder = await getOrderRowById(update.orderId);
+      } catch {
+        // The original per-Order failure is the authoritative outcome.
+      }
+      const fallbackPayment = update.intent.requestedPaymentStatus ??
+        update.intent.expectedPaymentStatus ?? "pending";
+      const fallbackShipping = update.intent.requestedShippingStatus ??
+        update.intent.expectedShippingStatus ?? "in_process";
+      const paymentStatus = currentOrder?.paymentStatus ?? sheetOrder?.paymentStatus ?? fallbackPayment;
+      const shippingStatus = currentOrder?.shippingStatus ?? sheetOrder?.shippingStatus ?? fallbackShipping;
+      const inventoryStatus = currentOrder?.inventoryStatus ?? sheetOrder?.inventoryStatus;
+
+      if (error instanceof PaymentTransitionBlockedError) {
+        results.push({
+          orderId: update.orderId,
+          status: "business_block",
+          paymentStatus,
+          inventoryStatus,
+          shippingStatus,
+          shippingBlocked: false,
+          paymentBlocked: true,
+          paymentBlockReason: error.reason,
+          paymentBlockMessage: getPaymentTransitionBlockMessage(error.reason),
+        });
+        continue;
+      }
+
       results.push({
-        orderId,
-        inventoryStatus: currentOrder?.inventoryStatus ?? sheetOrder?.inventoryStatus,
-        shippingStatus:
-          currentOrder?.shippingStatus ?? sheetOrder?.shippingStatus ?? shippingStatusRaw,
+        orderId: update.orderId,
+        status: "failure",
+        paymentStatus,
+        inventoryStatus,
+        shippingStatus,
         shippingBlocked: false,
-        paymentBlocked: true,
-        paymentBlockReason: error.reason,
-        paymentBlockMessage: getPaymentTransitionBlockMessage(error.reason),
+        message: "No se pudo guardar este pedido. Revisá el estado actual e intentá nuevamente.",
       });
     }
   }
@@ -655,7 +612,7 @@ export async function saveOrderStatusesBatchAction(
   revalidatePath("/admin");
   revalidatePath("/admin/ventas");
 
-  return { ok: results.every((result) => !result.paymentBlocked), results };
+  return { ok: results.every((result) => result.status === "success"), results };
 }
 
 export async function updateCatalogProductAction(formData: FormData) {

@@ -20,6 +20,7 @@ import {
   FULFILLMENT_COMPLETION_BLOCK_REASONS,
   FulfillmentCompletionBlockedError,
   isTrustedHistoricalCompletion,
+  type FulfillmentCompletionBlockReason,
 } from "./fulfillmentCompletion";
 import {
   evaluateAdminPaymentTransitionRequest,
@@ -34,6 +35,11 @@ import {
   removePendingSalesSheetOrder,
 } from "./salesSheetSync";
 import type { Order, OrderPaymentStatus, OrderStatus } from "./types";
+import {
+  AdminOrderStateChangedError,
+  evaluateAdminStatusIntent,
+  type AdminOrderStatusIntent,
+} from "./adminIntent";
 import {
   applyMercadoPagoPaymentObservation,
   MULTIPLE_APPROVED_MP_PAYMENTS,
@@ -705,6 +711,178 @@ export async function assertAdminPaymentTransitionRequest(
     }
     return { order, decision };
   });
+}
+
+export type AdminOrderStatusIntentApplication = {
+  order: Order;
+  outcome: "applied" | "idempotent_replay" | "provider_confirmation_required";
+  paymentApplied: boolean;
+  shippingApplied: boolean;
+  receiptEnrollmentRequired: boolean;
+  shippingBlocked: boolean;
+  completionBlockReason?: FulfillmentCompletionBlockReason;
+};
+
+export async function applyAdminOrderStatusIntent(
+  externalReference: string,
+  intent: AdminOrderStatusIntent
+): Promise<AdminOrderStatusIntentApplication | null> {
+  let inventoryResult: InventoryAttemptResult | undefined;
+  const lockedResult = await withOrderWriteLock(externalReference, async () => {
+    const stored = await getJson<StoredOrder>(orderKey(externalReference));
+    if (!stored) return null;
+    const current = ensureOrderDefaults(stored);
+    const precondition = evaluateAdminStatusIntent(current, intent);
+    if (precondition.outcome === "conflict") {
+      throw new AdminOrderStateChangedError(externalReference, precondition.current);
+    }
+    if (precondition.outcome === "idempotent_replay") {
+      return {
+        order: current,
+        outcome: "idempotent_replay" as const,
+        paymentApplied: false,
+        shippingApplied: false,
+        receiptEnrollmentRequired: false,
+        shippingBlocked: false,
+      };
+    }
+
+    const paymentChanged = intent.changedFields.includes("paymentStatus");
+    const shippingChanged = intent.changedFields.includes("shippingStatus");
+    const requestedPaymentStatus = intent.requestedPaymentStatus;
+    const requestedShippingStatus = intent.requestedShippingStatus;
+    let paymentDecision: Extract<AdminPaymentTransitionRequestDecision, { allowed: true }> | undefined;
+    if (paymentChanged && requestedPaymentStatus) {
+      const decision = evaluateAdminPaymentTransitionRequest({
+        current: current.paymentStatus,
+        requested: requestedPaymentStatus,
+        paymentMethod: current.paymentMethod,
+      });
+      if (!decision.allowed) throw new PaymentTransitionBlockedError(decision.reason);
+      paymentDecision = decision;
+      if (decision.authority === "mp_authoritative" && !decision.replay) {
+        return {
+          order: current,
+          outcome: "provider_confirmation_required" as const,
+          paymentApplied: false,
+          shippingApplied: false,
+          receiptEnrollmentRequired: false,
+          shippingBlocked: false,
+        };
+      }
+    }
+
+    const paymentApplied = Boolean(paymentDecision && !paymentDecision.replay);
+    const patch: OrderPatch = {};
+    let paymentAuthority: PaymentTransitionAuthority | undefined;
+    if (paymentApplied) {
+      const approvedAt = Date.now();
+      const paymentId = current.mpPaymentId || `manual-${externalReference}`;
+      let inventoryPatch: Partial<Order> = {};
+      if (shouldAttemptInventoryAutomatically(current)) {
+        inventoryResult = await attemptInventoryForPaidOrder(current);
+        inventoryPatch = inventoryResultToOrderPatch(inventoryResult);
+      }
+      Object.assign(patch, {
+        status: "approved" as const,
+        paymentStatus: "confirmed" as const,
+        mpPaymentId: paymentId,
+        mpStatus: "manual_confirmed",
+        approvedAt,
+        receiptOutboxVersion: 1 as const,
+        ...inventoryPatch,
+      });
+      paymentAuthority = "admin_manual";
+    }
+
+    const projectedOrder: Order = {
+      ...current,
+      ...patch,
+      externalReference: current.externalReference,
+      createdAt: current.createdAt,
+    };
+    let shippingApplied = false;
+    let shippingBlocked = false;
+    let completionBlockReason: FulfillmentCompletionBlockReason | undefined;
+    if (shippingChanged && requestedShippingStatus) {
+      if (
+        requestedShippingStatus === "in_process" &&
+        isTrustedHistoricalCompletion(current)
+      ) {
+        shippingBlocked = true;
+        completionBlockReason =
+          FULFILLMENT_COMPLETION_BLOCK_REASONS.completedReopenNotAllowed;
+      } else if (requestedShippingStatus === "completed") {
+        const completionDecision = evaluateFulfillmentCompletion({
+          ...projectedOrder,
+          shippingStatus: "completed",
+        });
+        if (completionDecision.allowed) {
+          patch.shippingStatus = "completed";
+          shippingApplied = current.shippingStatus !== "completed";
+        } else {
+          shippingBlocked = true;
+          completionBlockReason = completionDecision.reason;
+        }
+      } else {
+        patch.shippingStatus = "in_process";
+        shippingApplied = current.shippingStatus !== "in_process";
+      }
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return {
+        order: current,
+        outcome: "applied" as const,
+        paymentApplied,
+        shippingApplied,
+        receiptEnrollmentRequired: paymentApplied,
+        shippingBlocked,
+        ...(completionBlockReason ? { completionBlockReason } : {}),
+      };
+    }
+
+    const order = await persistOrderUpdateWithinLock(
+      externalReference,
+      current,
+      patch,
+      {
+        syncSheet: paymentApplied && current.salesSheetDeferredUntilApprovedAt ? false : undefined,
+        ...(paymentAuthority ? { paymentAuthority } : {}),
+      }
+    );
+    return {
+      order,
+      outcome: "applied" as const,
+      paymentApplied,
+      shippingApplied,
+      receiptEnrollmentRequired: paymentApplied,
+      shippingBlocked,
+      ...(completionBlockReason ? { completionBlockReason } : {}),
+    };
+  });
+
+  if (!lockedResult) return null;
+  if (inventoryResult) {
+    await reportInventoryAttempt(externalReference, inventoryResult, "payment_approval");
+  }
+  if (!lockedResult.paymentApplied || !lockedResult.order.salesSheetDeferredUntilApprovedAt) {
+    return lockedResult;
+  }
+
+  const salesSheetResult = await appendApprovedOrderToSalesSheet(lockedResult.order);
+  let approvedOrder = salesSheetResult.order;
+  if (
+    approvedOrder &&
+    privacyPolicy.minimizeApprovedOrderPII &&
+    (!approvedOrder.salesSheetDeferredUntilApprovedAt || salesSheetResult.synced)
+  ) {
+    approvedOrder = (await updateOrder(externalReference, {
+      customer: privacyPolicy.anonymizeCustomer(approvedOrder.customer),
+      notes: undefined,
+    }, { syncSheet: false })) ?? approvedOrder;
+  }
+  return { ...lockedResult, order: approvedOrder };
 }
 
 export async function markApproved(

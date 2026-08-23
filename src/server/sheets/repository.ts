@@ -10,6 +10,14 @@ import type {
   OrderPaymentStatus,
   OrderShippingStatus,
 } from "@/src/server/orders/types";
+import {
+  ADMIN_ORDER_STATE_CHANGED,
+  AdminOrderStateChangedError,
+  type AdminOrderStatusIntent,
+  type AdminOrderCurrentState,
+} from "@/src/server/orders/adminIntent";
+import type { PaymentTransitionBlockReason } from "@/src/server/orders/paymentTransition";
+import type { FulfillmentCompletionBlockReason } from "@/src/server/orders/fulfillmentCompletion";
 import type { StockStatus } from "@/src/features/shop/domain/entities/Product";
 import {
   InventoryOperationError,
@@ -107,6 +115,18 @@ export type AdminOrderSheetRow = {
   salesSheetSyncPending?: boolean;
   financialAttentionCode?: string;
   raw: SheetRow;
+};
+
+export type AdminSheetStatusIntentResult = {
+  outcome: "applied" | "idempotent_replay" | "business_block" | "provider_confirmation_required";
+  current: AdminOrderCurrentState;
+  paymentApplied: boolean;
+  shippingApplied: boolean;
+  shippingDeferred: boolean;
+  paymentBlockReason?: PaymentTransitionBlockReason;
+  completionBlockReason?: FulfillmentCompletionBlockReason;
+  mpPaymentId?: string;
+  approvedAt?: number;
 };
 
 export type AdminProductSheetRow = {
@@ -437,6 +457,17 @@ async function postMutation(
 
     const data = (await response.json().catch(() => null)) as SheetsMutationResponse | null;
     if (!response.ok || !data || data.ok === false) {
+      if (
+        data?.code === ADMIN_ORDER_STATE_CHANGED &&
+        data.current &&
+        typeof data.current === "object"
+      ) {
+        const current = data.current as Record<string, unknown>;
+        const paymentStatus = parsePaymentStatus(current.paymentStatus);
+        const shippingStatus = parseShippingStatus(current.shippingStatus);
+        const orderId = typeof data.orderId === "string" ? data.orderId : "";
+        throw new AdminOrderStateChangedError(orderId, { paymentStatus, shippingStatus });
+      }
       const message = data?.error ||
         (!response.ok ? `Sheets mutation failed with status ${response.status}` : "Sheets mutation failed");
       if (isInventoryErrorCode(data?.code)) {
@@ -474,6 +505,58 @@ async function postMutation(
     });
     throw error;
   }
+}
+
+export async function applyAdminOrderStatusIntentInSalesSheet(
+  orderId: string,
+  intent: AdminOrderStatusIntent
+): Promise<AdminSheetStatusIntentResult> {
+  const response = await postMutation({
+    action: "applyAdminOrderStatusIntent",
+    sheet: SALES_SHEET_NAME,
+    orderId,
+    intent,
+    manualPaymentId: `manual-${orderId}`,
+    manualApprovedAt: Date.now(),
+  }, "admin");
+
+  const currentRaw = response.current;
+  if (!currentRaw || typeof currentRaw !== "object") {
+    throw new Error("Invalid Admin status intent response");
+  }
+  const current = currentRaw as Record<string, unknown>;
+  const outcome = response.outcome;
+  if (
+    outcome !== "applied" &&
+    outcome !== "idempotent_replay" &&
+    outcome !== "business_block" &&
+    outcome !== "provider_confirmation_required"
+  ) {
+    throw new Error("Invalid Admin status intent response");
+  }
+
+  return {
+    outcome,
+    current: {
+      paymentStatus: parsePaymentStatus(current.paymentStatus),
+      shippingStatus: parseShippingStatus(current.shippingStatus),
+    },
+    paymentApplied: response.paymentApplied === true,
+    shippingApplied: response.shippingApplied === true,
+    shippingDeferred: response.shippingDeferred === true,
+    ...(typeof response.paymentBlockReason === "string"
+      ? { paymentBlockReason: response.paymentBlockReason as PaymentTransitionBlockReason }
+      : {}),
+    ...(typeof response.completionBlockReason === "string"
+      ? { completionBlockReason: response.completionBlockReason as FulfillmentCompletionBlockReason }
+      : {}),
+    ...(typeof response.mpPaymentId === "string" && response.mpPaymentId.trim()
+      ? { mpPaymentId: response.mpPaymentId.trim() }
+      : {}),
+    ...(typeof response.approvedAt === "number" && Number.isFinite(response.approvedAt)
+      ? { approvedAt: response.approvedAt }
+      : {}),
+  };
 }
 
 const normalizeStockMutationItems = (
