@@ -85,6 +85,7 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
   ];
   const salesRows: unknown[][] = options.salesRows ?? [];
   const writes: WriteRecord[] = [];
+  const directWrites: WriteRecord[] = [];
   const batchCalls: Array<{ requests: Array<Record<string, unknown>> }> = [];
   const logs: Array<Record<string, unknown>> = [];
   let batchFailure = options.batchFailure;
@@ -162,7 +163,9 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
         } else {
           state.rows[row - 2][column - 1] = value;
         }
-        writes.push({ sheet: state.name, row, column, value });
+        const write = { sheet: state.name, row, column, value };
+        writes.push(write);
+        directWrites.push(write);
       },
       setValues: (values: unknown[][]) => {
         values.forEach((sourceRow, rowOffset) => {
@@ -362,6 +365,7 @@ const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => 
     productRows,
     salesRows,
     writes,
+    directWrites,
     stockWrites,
     locks,
     batchCalls,
@@ -998,6 +1002,194 @@ describe("AUD3 H07-C1 Apps Script conditional Admin mutation", () => {
     expect(result).toMatchObject({ ok: false, code: "INVALID_ADMIN_ORDER_STATUS_INTENT" });
     expect(harness.writes).toHaveLength(0);
     expect(harness.states.get("ventas")?.headers).toEqual(salesHeaders);
+  });
+
+  it("H07C1-CLAIM-ATOMIC-01 commits every canonical and alias field in one batch", () => {
+    const aliasHeaders = [
+      ...salesHeaders,
+      "payment_status",
+      "order_status",
+      "estado_mp",
+      "id_pago_mp",
+      "fecha_pago",
+      "actualizado_en",
+    ];
+    const harness = createHarness([], {
+      salesHeaders: aliasHeaders,
+      salesRows: [salesRow()],
+    });
+
+    const result = postIntent(harness, {
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    });
+
+    const committedRow = harness.states.get("ventas")?.rows[0] ?? [];
+    const valuesByHeader = Object.fromEntries(
+      aliasHeaders.map((header, index) => [header, committedRow[index]])
+    );
+    expect(result).toMatchObject({ ok: true, paymentApplied: true });
+    expect(harness.batchCalls).toHaveLength(1);
+    expect(harness.batchCalls[0].requests).toHaveLength(13);
+    expect(valuesByHeader).toMatchObject({
+      estado_de_pago: "Confirmado",
+      payment_status: "Confirmado",
+      status: "approved",
+      order_status: "approved",
+      mp_status: "manual_confirmed",
+      estado_mp: "manual_confirmed",
+      mp_payment_id: "manual-order-h07c1",
+      id_pago_mp: "manual-order-h07c1",
+      approved_at: new Date(100).toISOString(),
+      fecha_pago: new Date(100).toISOString(),
+      receipt_outbox_version: 1,
+    });
+    expect(valuesByHeader.updated_at).toEqual(valuesByHeader.actualizado_en);
+    expect(String(valuesByHeader.updated_at)).not.toBe("");
+    expect(harness.directWrites).toHaveLength(0);
+  });
+
+  it("H07C1-CLAIM-ATOMIC-02 leaves the pending row unchanged when the batch fails", () => {
+    const originalRow = salesRow();
+    const harness = createHarness([], {
+      batchFailure: "before-commit",
+      salesHeaders,
+      salesRows: [originalRow.slice()],
+    });
+
+    const result = postIntent(harness, {
+      changedFields: ["paymentStatus", "shippingStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+      expectedShippingStatus: "in_process",
+      requestedShippingStatus: "completed",
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(harness.batchCalls).toHaveLength(1);
+    expect(harness.states.get("ventas")?.rows[0]).toEqual(originalRow);
+    expect(harness.writes).toHaveLength(0);
+    expect(harness.stockWrites()).toHaveLength(0);
+  });
+
+  it("H07C1-CLAIM-ATOMIC-03 exposes the complete canonical claim after response loss", () => {
+    const harness = createHarness([], {
+      batchFailure: "after-commit",
+      salesHeaders,
+      salesRows: [salesRow()],
+    });
+    const intent = {
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    };
+
+    const lostResponse = postIntent(harness, intent);
+    const retry = postIntent(harness, intent);
+
+    expect(lostResponse).toMatchObject({ ok: false });
+    expect(retry).toMatchObject({
+      ok: true,
+      outcome: "idempotent_replay",
+      paymentApplied: false,
+      current: { paymentStatus: "confirmed" },
+      mpPaymentId: "manual-order-h07c1",
+      approvedAt: 100,
+    });
+    expect(harness.batchCalls).toHaveLength(1);
+    expect(harness.states.get("ventas")?.rows[0]).toEqual(expect.arrayContaining([
+      "Confirmado",
+      "approved",
+      "manual_confirmed",
+      "manual-order-h07c1",
+      new Date(100).toISOString(),
+      1,
+    ]));
+  });
+
+  it("H07C1-CLAIM-ATOMIC-04 serializes concurrent confirmations into one identity", () => {
+    const harness = createHarness([], { salesHeaders, salesRows: [salesRow()] });
+    const intent = {
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    };
+
+    const first = postIntent(harness, intent);
+    const second = postIntent(harness, intent);
+
+    expect(first).toMatchObject({
+      outcome: "applied",
+      paymentApplied: true,
+      mpPaymentId: "manual-order-h07c1",
+      approvedAt: 100,
+    });
+    expect(second).toMatchObject({
+      outcome: "idempotent_replay",
+      paymentApplied: false,
+      mpPaymentId: "manual-order-h07c1",
+      approvedAt: 100,
+    });
+    expect(harness.locks).toEqual({ waited: 2, released: 2 });
+    expect(harness.batchCalls).toHaveLength(1);
+    expect(harness.stockWrites()).toHaveLength(0);
+  });
+
+  it("H07C1-CLAIM-ATOMIC-05 commits transfer confirmation through the same batch", () => {
+    const harness = createHarness([], {
+      salesHeaders,
+      salesRows: [salesRow({ 3: "transfer" })],
+    });
+
+    const result = postIntent(harness, {
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      paymentApplied: true,
+      mpPaymentId: "manual-order-h07c1",
+      approvedAt: 100,
+    });
+    expect(harness.batchCalls).toHaveLength(1);
+    expect(harness.directWrites).toHaveLength(0);
+  });
+
+  it("H07C1-CLAIM-ATOMIC-06 does not bless malformed confirmed legacy data", () => {
+    const harness = createHarness([], {
+      salesHeaders,
+      salesRows: [salesRow({ 1: "Confirmado", 4: "approved" })],
+    });
+
+    const result = postIntent(harness, {
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "idempotent_replay",
+      paymentApplied: false,
+      mpPaymentId: "",
+    });
+    expect(harness.batchCalls).toHaveLength(0);
+    expect(harness.writes).toHaveLength(0);
+  });
+
+  it("keeps the manual financial claim out of the direct Spreadsheet write path", () => {
+    const handlerStart = scriptSource.indexOf("function handleApplyAdminOrderStatusIntent_");
+    const shippingStart = scriptSource.indexOf(
+      "if (!paymentBlockReason && changed.shippingStatus",
+      handlerStart
+    );
+    const financialClaimSource = scriptSource.slice(handlerStart, shippingStart);
+
+    expect(financialClaimSource).toContain("commitAtomicAdminPaymentClaim_(claimRequests)");
+    expect(financialClaimSource).not.toContain("setAdminSalesValue_(sheet, rowNumber");
   });
 });
 

@@ -760,6 +760,37 @@ function requireAdminSalesColumn_(headers, candidates) {
   }
 }
 
+function appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, candidates, value) {
+  const normalizedCandidates = candidates.map(function(candidate) { return compactKey(candidate); });
+  headers.forEach(function(header, columnIndex) {
+    if (normalizedCandidates.indexOf(compactKey(header)) === -1) return;
+    requests.push(sheetsUpdateCellRequest_(sheetId, rowIndex, columnIndex, value));
+  });
+}
+
+function buildAtomicAdminPaymentClaimRequests_(sheet, rowNumber, headers, claim) {
+  const requests = [];
+  const sheetId = sheet.getSheetId();
+  const rowIndex = rowNumber - 1;
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["estado_de_pago", "payment_status", "estado_pago", "payment_state"], adminPaymentLabel_("confirmed"));
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["status", "order_status"], "approved");
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["mp_status", "estado_mp"], "manual_confirmed");
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["mp_payment_id", "id_pago_mp"], claim.paymentId);
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["approved_at", "fecha_pago"], claim.approvedAtIso);
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["receipt_outbox_version"], 1);
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["updated_at", "actualizado_en", "fecha_actualizacion"], claim.updatedAtIso);
+  return requests;
+}
+
+function commitAtomicAdminPaymentClaim_(requests) {
+  if (typeof Sheets === "undefined" || !Sheets.Spreadsheets || typeof Sheets.Spreadsheets.batchUpdate !== "function") {
+    throw new Error("Advanced Sheets service is required for atomic Admin payment claims");
+  }
+  const spreadsheetId = getScriptProperty_("SPREADSHEET_ID");
+  if (!spreadsheetId) throw new Error("Missing required Script Property: SPREADSHEET_ID");
+  Sheets.Spreadsheets.batchUpdate({ requests: requests }, spreadsheetId);
+}
+
 function adminPaymentStatusCode_(value) {
   const token = normalizeKey(value);
   if (token.indexOf("contracargo") !== -1 || token.indexOf("charge") !== -1) return "charged_back";
@@ -951,6 +982,8 @@ function handleApplyAdminOrderStatusIntent_(payload) {
   let shippingDeferred = false;
   let paymentBlockReason = "";
   let completionBlockReason = "";
+  let appliedPaymentId = "";
+  let appliedApprovedAt;
   if (changed.paymentStatus && paymentStatus !== intent.requestedPaymentStatus) {
     const method = adminPaymentMethodCode_(adminSalesValue_(headers, row, [
       "payment_method_code", "payment_method", "forma_de_pago", "metodo_pago"
@@ -981,14 +1014,16 @@ function handleApplyAdminOrderStatusIntent_(payload) {
       const approvedAt = Date.parse(String(approvedAtValue || "")) || Number(payload.manualApprovedAt) || Date.now();
       const existingPaymentId = String(adminSalesValue_(headers, row, ["mp_payment_id", "id_pago_mp"]) || "").trim();
       const paymentId = existingPaymentId || String(payload.manualPaymentId || ("manual-" + orderId));
-      setAdminSalesValue_(sheet, rowNumber, headers, ["estado_de_pago", "payment_status", "estado_pago", "payment_state"], adminPaymentLabel_("confirmed"));
-      setAdminSalesValue_(sheet, rowNumber, headers, ["status", "order_status"], "approved");
-      setAdminSalesValue_(sheet, rowNumber, headers, ["mp_status", "estado_mp"], "manual_confirmed");
-      setAdminSalesValue_(sheet, rowNumber, headers, ["mp_payment_id", "id_pago_mp"], paymentId);
-      setAdminSalesValue_(sheet, rowNumber, headers, ["approved_at", "fecha_pago"], new Date(approvedAt).toISOString());
-      setAdminSalesValue_(sheet, rowNumber, headers, ["receipt_outbox_version"], 1);
+      const claimRequests = buildAtomicAdminPaymentClaimRequests_(sheet, rowNumber, headers, {
+        paymentId: paymentId,
+        approvedAtIso: new Date(approvedAt).toISOString(),
+        updatedAtIso: new Date().toISOString()
+      });
+      commitAtomicAdminPaymentClaim_(claimRequests);
       paymentStatus = "confirmed";
       paymentApplied = true;
+      appliedPaymentId = paymentId;
+      appliedApprovedAt = approvedAt;
     }
   }
 
@@ -1013,14 +1048,14 @@ function handleApplyAdminOrderStatusIntent_(payload) {
       shippingApplied = true;
     }
   }
-  if (paymentApplied || shippingApplied) {
+  if (shippingApplied) {
     setAdminSalesValue_(sheet, rowNumber, headers, ["updated_at", "actualizado_en", "fecha_actualizacion"], new Date().toISOString());
   }
 
   const latestRow = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
   const latest = {
-    paymentStatus: adminPaymentStatusCode_(adminSalesValue_(headers, latestRow, ["estado_de_pago", "payment_status", "estado_pago", "payment_state"])),
-    shippingStatus: adminShippingStatusCode_(adminSalesValue_(headers, latestRow, ["estado_de_envio", "shipping_status", "estado_envio", "shipping_state"]))
+    paymentStatus: paymentStatus,
+    shippingStatus: shippingStatus
   };
   return {
     ok: true,
@@ -1032,8 +1067,12 @@ function handleApplyAdminOrderStatusIntent_(payload) {
     shippingDeferred: shippingDeferred,
     paymentBlockReason: paymentBlockReason || undefined,
     completionBlockReason: completionBlockReason || undefined,
-    mpPaymentId: String(adminSalesValue_(headers, latestRow, ["mp_payment_id", "id_pago_mp"]) || "").trim(),
-    approvedAt: Date.parse(String(adminSalesValue_(headers, latestRow, ["approved_at", "fecha_pago"]) || "")) || undefined
+    mpPaymentId: paymentApplied
+      ? appliedPaymentId
+      : String(adminSalesValue_(headers, latestRow, ["mp_payment_id", "id_pago_mp"]) || "").trim(),
+    approvedAt: paymentApplied
+      ? appliedApprovedAt
+      : Date.parse(String(adminSalesValue_(headers, latestRow, ["approved_at", "fecha_pago"]) || "")) || undefined
   };
 }
 
