@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyAdminOrderStatusIntentInSalesSheet,
   buildSalesSheetRow,
   decrementProductsStockInSheet,
   getOrdersForAdmin,
   parseInventoryStatus,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
+import { AdminOrderStateChangedError } from "@/src/server/orders/adminIntent";
 import { InventoryOperationError } from "@/src/server/inventory/errors";
 import type { Order } from "@/src/server/orders/types";
 
@@ -34,6 +36,69 @@ const baseOrder: Order = {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+describe("AUD3 H07-C1 Sheet Admin intent contract", () => {
+  it("sends field-specific expected state with the Admin token", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/admin");
+    vi.stubEnv("SHEETS_ADMIN_TOKEN", "admin-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        ok: true,
+        outcome: "applied",
+        current: { paymentStatus: "confirmed", shippingStatus: "in_process" },
+        paymentApplied: true,
+        shippingApplied: false,
+        shippingDeferred: false,
+        mpPaymentId: "manual-order-sheet",
+        approvedAt: 100,
+      }), { status: 200 }),
+    );
+
+    await applyAdminOrderStatusIntentInSalesSheet("order-sheet", {
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      action: "applyAdminOrderStatusIntent",
+      token: "admin-token",
+      orderId: "order-sheet",
+      intent: {
+        changedFields: ["paymentStatus"],
+        expectedPaymentStatus: "pending",
+        requestedPaymentStatus: "confirmed",
+      },
+    });
+    expect((body.intent as Record<string, unknown>)).not.toHaveProperty("requestedShippingStatus");
+  });
+
+  it("preserves the stable conflict code and latest statuses", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/admin");
+    vi.stubEnv("SHEETS_ADMIN_TOKEN", "admin-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        ok: false,
+        code: "ORDER_STATE_CHANGED",
+        error: "Order state changed",
+        orderId: "order-sheet",
+        current: { paymentStatus: "cancelled", shippingStatus: "completed" },
+      }), { status: 200 }),
+    );
+
+    const error = await applyAdminOrderStatusIntentInSalesSheet("order-sheet", {
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(AdminOrderStateChangedError);
+    expect(error).toMatchObject({
+      code: "ORDER_STATE_CHANGED",
+      orderId: "order-sheet",
+      current: { paymentStatus: "cancelled", shippingStatus: "completed" },
+    });
+  });
 });
 
 describe("buildSalesSheetRow", () => {

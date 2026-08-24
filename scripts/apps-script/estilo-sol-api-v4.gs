@@ -307,6 +307,7 @@ function getPostScope_(payload, action) {
     Boolean(payload.productId || payload.product_id);
 
   if ([
+    "apply_admin_order_status_intent",
     "ensure_recovery_schema",
     "upsert_recovery_snapshot",
     "get_recovery_snapshot",
@@ -735,6 +736,344 @@ function handleUpdateRow(payload) {
 
   if (isProductsSheet) clearCatalogCache_();
   return { ok: true, action: "updateRow", sheet: sheetName, updatedRows: matchedRows.length, rowNumbers: matchedRows };
+}
+
+function adminSalesValue_(headers, row, candidates) {
+  const column = findColumnIndex(headers, candidates);
+  return column === -1 ? "" : row[column];
+}
+
+function setAdminSalesValue_(sheet, rowNumber, headers, candidates, value) {
+  const normalizedCandidates = candidates.map(function(candidate) { return compactKey(candidate); });
+  let matched = false;
+  headers.forEach(function(header, index) {
+    if (normalizedCandidates.indexOf(compactKey(header)) === -1) return;
+    sheet.getRange(rowNumber, index + 1).setValue(toCellValue(value));
+    matched = true;
+  });
+  return matched;
+}
+
+function requireAdminSalesColumn_(headers, candidates) {
+  if (findColumnIndex(headers, candidates) === -1) {
+    throw new Error("Required ventas status column is missing");
+  }
+}
+
+function appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, candidates, value) {
+  const normalizedCandidates = candidates.map(function(candidate) { return compactKey(candidate); });
+  headers.forEach(function(header, columnIndex) {
+    if (normalizedCandidates.indexOf(compactKey(header)) === -1) return;
+    requests.push(sheetsUpdateCellRequest_(sheetId, rowIndex, columnIndex, value));
+  });
+}
+
+function buildAtomicAdminPaymentClaimRequests_(sheet, rowNumber, headers, claim) {
+  const requests = [];
+  const sheetId = sheet.getSheetId();
+  const rowIndex = rowNumber - 1;
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["estado_de_pago", "payment_status", "estado_pago", "payment_state"], adminPaymentLabel_("confirmed"));
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["status", "order_status"], "approved");
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["mp_status", "estado_mp"], "manual_confirmed");
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["mp_payment_id", "id_pago_mp"], claim.paymentId);
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["approved_at", "fecha_pago"], claim.approvedAtIso);
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["receipt_outbox_version"], 1);
+  appendAtomicAdminSalesValueRequests_(requests, sheetId, rowIndex, headers, ["updated_at", "actualizado_en", "fecha_actualizacion"], claim.updatedAtIso);
+  return requests;
+}
+
+function commitAtomicAdminPaymentClaim_(requests) {
+  if (typeof Sheets === "undefined" || !Sheets.Spreadsheets || typeof Sheets.Spreadsheets.batchUpdate !== "function") {
+    throw new Error("Advanced Sheets service is required for atomic Admin payment claims");
+  }
+  const spreadsheetId = getScriptProperty_("SPREADSHEET_ID");
+  if (!spreadsheetId) throw new Error("Missing required Script Property: SPREADSHEET_ID");
+  Sheets.Spreadsheets.batchUpdate({ requests: requests }, spreadsheetId);
+}
+
+function adminPaymentStatusCode_(value) {
+  const token = normalizeKey(value);
+  if (token.indexOf("contracargo") !== -1 || token.indexOf("charge") !== -1) return "charged_back";
+  if (token.indexOf("reintegr") !== -1 || token.indexOf("devol") !== -1 || token.indexOf("refund") !== -1) return "refunded";
+  if (token.indexOf("confirm") !== -1 || token.indexOf("aprobad") !== -1) return "confirmed";
+  if (token.indexOf("cancel") !== -1 || token.indexOf("rechaz") !== -1) return "cancelled";
+  return "pending";
+}
+
+function adminShippingStatusCode_(value) {
+  const token = normalizeKey(value);
+  return token.indexOf("final") !== -1 || token.indexOf("complet") !== -1 || token.indexOf("entreg") !== -1
+    ? "completed"
+    : "in_process";
+}
+
+function adminPaymentLabel_(status) {
+  if (status === "confirmed") return "Confirmado";
+  if (status === "cancelled") return "Cancelado";
+  if (status === "refunded") return "Reintegrado";
+  if (status === "charged_back") return "Contracargo";
+  return "Pendiente";
+}
+
+function adminShippingLabel_(status) {
+  return status === "completed" ? "Finalizado" : "En proceso";
+}
+
+function adminPaymentMethodCode_(value) {
+  const token = normalizeKey(value);
+  if (token.indexOf("mercado") !== -1) return "mercadopago";
+  if (token.indexOf("transfer") !== -1) return "transfer";
+  if (token.indexOf("cash") !== -1 || token.indexOf("efectivo") !== -1) return "cash";
+  return "";
+}
+
+function adminStatusIntentError_(message) {
+  const error = new Error(message || "Invalid Admin order status intent");
+  error.code = "INVALID_ADMIN_ORDER_STATUS_INTENT";
+  return error;
+}
+
+function parseAdminStatusIntent_(payload) {
+  const intent = payload.intent;
+  if (!intent || typeof intent !== "object" || Array.isArray(intent)) throw adminStatusIntentError_();
+  const fields = intent.changedFields;
+  if (!Array.isArray(fields) || fields.length === 0) throw adminStatusIntentError_();
+  const seen = {};
+  fields.forEach(function(field) {
+    if (field !== "paymentStatus" && field !== "shippingStatus") throw adminStatusIntentError_();
+    if (seen[field]) throw adminStatusIntentError_();
+    seen[field] = true;
+  });
+  if (Boolean(seen.paymentStatus) !== (
+    Object.prototype.hasOwnProperty.call(intent, "expectedPaymentStatus") &&
+    Object.prototype.hasOwnProperty.call(intent, "requestedPaymentStatus")
+  )) throw adminStatusIntentError_();
+  if (Boolean(seen.shippingStatus) !== (
+    Object.prototype.hasOwnProperty.call(intent, "expectedShippingStatus") &&
+    Object.prototype.hasOwnProperty.call(intent, "requestedShippingStatus")
+  )) throw adminStatusIntentError_();
+  if (seen.paymentStatus) {
+    const allowedPayment = ["pending", "confirmed", "cancelled", "refunded", "charged_back"];
+    if (allowedPayment.indexOf(intent.expectedPaymentStatus) === -1 || allowedPayment.indexOf(intent.requestedPaymentStatus) === -1) {
+      throw adminStatusIntentError_();
+    }
+  }
+  if (seen.shippingStatus) {
+    const allowedShipping = ["in_process", "completed"];
+    if (allowedShipping.indexOf(intent.expectedShippingStatus) === -1 || allowedShipping.indexOf(intent.requestedShippingStatus) === -1) {
+      throw adminStatusIntentError_();
+    }
+  }
+  return { intent: intent, changed: seen };
+}
+
+function adminNumber_(value) {
+  if (typeof value === "number" && isFinite(value)) return value;
+  const parsed = Number(String(value === undefined || value === null ? "" : value).replace(/[^0-9.-]+/g, ""));
+  return isFinite(parsed) ? parsed : NaN;
+}
+
+function adminTruthy_(value) {
+  const token = normalizeKey(value);
+  return value === true || value === 1 || token === "true" || token === "si" || token === "yes" || token === "1";
+}
+
+function adminHasText_(value) {
+  return String(value === undefined || value === null ? "" : value).trim().length > 0;
+}
+
+function adminCompletionBlockReason_(headers, row, paymentStatus) {
+  if (paymentStatus !== "confirmed") return "PAYMENT_NOT_CONFIRMED";
+  const inventory = normalizeKey(adminSalesValue_(headers, row, ["inventory_status"]));
+  if (inventory === "conflict" || inventory === "error") return "INVENTORY_REQUIRES_ATTENTION";
+  if (inventory !== "deducted") return "INVENTORY_NOT_DEDUCTED";
+
+  const total = adminNumber_(adminSalesValue_(headers, row, ["total", "total_final"]));
+  const subtotal = adminNumber_(adminSalesValue_(headers, row, ["subtotal_productos"]));
+  const discount = adminNumber_(adminSalesValue_(headers, row, ["descuento"]));
+  const shippingFee = adminNumber_(adminSalesValue_(headers, row, ["costo_envio"]));
+  const finalTotal = adminNumber_(adminSalesValue_(headers, row, ["total_final", "total"]));
+  const summary = adminSalesValue_(headers, row, ["fulfillment_summary"]);
+  if (
+    !isFinite(total) || !isFinite(subtotal) || !isFinite(discount) || !isFinite(shippingFee) || !isFinite(finalTotal) ||
+    total < 0 || subtotal < 0 || discount < 0 || shippingFee < 0 || finalTotal < 0 ||
+    Math.abs((subtotal - discount + shippingFee) - finalTotal) > 0.01 ||
+    Math.abs(finalTotal - total) > 0.01 || !adminHasText_(summary)
+  ) return "FULFILLMENT_TOTALS_INVALID";
+
+  const deliveryMethod = normalizeKey(adminSalesValue_(headers, row, [
+    "delivery_method_code", "delivery_method", "forma_de_entrega", "metodo_entrega"
+  ]));
+  if (deliveryMethod.indexOf("delivery") !== -1 || deliveryMethod.indexOf("domicilio") !== -1) {
+    if (
+      !adminHasText_(adminSalesValue_(headers, row, ["delivery_zone_id"])) ||
+      !adminHasText_(adminSalesValue_(headers, row, ["delivery_zone_name"])) ||
+      !adminTruthy_(adminSalesValue_(headers, row, ["delivery_inside_zone_confirmed"])) ||
+      !adminHasText_(adminSalesValue_(headers, row, ["delivery_address_street"])) ||
+      !adminHasText_(adminSalesValue_(headers, row, ["delivery_address_number"])) ||
+      !adminHasText_(adminSalesValue_(headers, row, ["delivery_address_between_streets"]))
+    ) return "DELIVERY_INCOMPLETE";
+    return "";
+  }
+  if (deliveryMethod.indexOf("pickup") !== -1 || deliveryMethod.indexOf("retiro") !== -1 || deliveryMethod.indexOf("encuentro") !== -1) {
+    if (
+      !adminHasText_(adminSalesValue_(headers, row, ["pickup_point_id"])) ||
+      !adminHasText_(adminSalesValue_(headers, row, ["pickup_point_name"])) ||
+      !adminHasText_(adminSalesValue_(headers, row, ["pickup_point_address"])) ||
+      !adminHasText_(adminSalesValue_(headers, row, ["pickup_point_reference"]))
+    ) return "PICKUP_INCOMPLETE";
+    return "";
+  }
+  return "DELIVERY_METHOD_INVALID";
+}
+
+function handleApplyAdminOrderStatusIntent_(payload) {
+  const parsed = parseAdminStatusIntent_(payload);
+  const intent = parsed.intent;
+  const changed = parsed.changed;
+  const orderId = String(payload.orderId || "").trim();
+  if (!orderId) throw adminStatusIntentError_();
+  const sheet = getSheetOrThrow(SHEET_SALES);
+  const headers = getHeaders(sheet);
+  requireAdminSalesColumn_(headers, ["estado_de_pago", "payment_status", "estado_pago", "payment_state"]);
+  requireAdminSalesColumn_(headers, ["estado_de_envio", "shipping_status", "estado_envio", "shipping_state"]);
+  const rowNumber = findOrderRowNumber_(sheet, headers, orderId);
+  if (rowNumber === -1) throw new Error("No row matched order id");
+  const row = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
+  let paymentStatus = adminPaymentStatusCode_(adminSalesValue_(headers, row, ["estado_de_pago", "payment_status", "estado_pago", "payment_state"]));
+  let shippingStatus = adminShippingStatusCode_(adminSalesValue_(headers, row, ["estado_de_envio", "shipping_status", "estado_envio", "shipping_state"]));
+  const current = { paymentStatus: paymentStatus, shippingStatus: shippingStatus };
+  let everyTargetAlreadySatisfied = true;
+  const fields = intent.changedFields;
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    const actual = current[field];
+    const expected = field === "paymentStatus" ? intent.expectedPaymentStatus : intent.expectedShippingStatus;
+    const requested = field === "paymentStatus" ? intent.requestedPaymentStatus : intent.requestedShippingStatus;
+    if (actual === expected) {
+      if (actual !== requested) everyTargetAlreadySatisfied = false;
+      continue;
+    }
+    if (actual === requested) continue;
+    return {
+      ok: false,
+      code: "ORDER_STATE_CHANGED",
+      error: "Order state changed",
+      orderId: orderId,
+      current: current
+    };
+  }
+  if (everyTargetAlreadySatisfied) {
+    return {
+      ok: true,
+      action: "applyAdminOrderStatusIntent",
+      outcome: "idempotent_replay",
+      current: current,
+      paymentApplied: false,
+      shippingApplied: false,
+      shippingDeferred: false,
+      mpPaymentId: String(adminSalesValue_(headers, row, ["mp_payment_id", "id_pago_mp"]) || "").trim(),
+      approvedAt: Date.parse(String(adminSalesValue_(headers, row, ["approved_at", "fecha_pago"]) || "")) || undefined
+    };
+  }
+
+  let paymentApplied = false;
+  let shippingApplied = false;
+  let shippingDeferred = false;
+  let paymentBlockReason = "";
+  let completionBlockReason = "";
+  let appliedPaymentId = "";
+  let appliedApprovedAt;
+  if (changed.paymentStatus && paymentStatus !== intent.requestedPaymentStatus) {
+    const method = adminPaymentMethodCode_(adminSalesValue_(headers, row, [
+      "payment_method_code", "payment_method", "forma_de_pago", "metodo_pago"
+    ]));
+    if (paymentStatus === "confirmed") paymentBlockReason = "PAYMENT_CONFIRMED_CANNOT_BE_DOWNGRADED";
+    else if (["cancelled", "refunded", "charged_back"].indexOf(paymentStatus) !== -1) paymentBlockReason = "PAYMENT_TERMINAL_REQUIRES_CORRECTION";
+    else if (method === "mercadopago") {
+      return {
+        ok: true,
+        action: "applyAdminOrderStatusIntent",
+        outcome: "provider_confirmation_required",
+        current: current,
+        paymentApplied: false,
+        shippingApplied: false,
+        shippingDeferred: false
+      };
+    }
+    else if (!(paymentStatus === "pending" && intent.requestedPaymentStatus === "confirmed" && (method === "cash" || method === "transfer"))) {
+      paymentBlockReason = "PAYMENT_TRANSITION_NOT_ALLOWED";
+    }
+    if (!paymentBlockReason) {
+      requireAdminSalesColumn_(headers, ["status", "order_status"]);
+      requireAdminSalesColumn_(headers, ["mp_status", "estado_mp"]);
+      requireAdminSalesColumn_(headers, ["mp_payment_id", "id_pago_mp"]);
+      requireAdminSalesColumn_(headers, ["approved_at", "fecha_pago"]);
+      requireAdminSalesColumn_(headers, ["receipt_outbox_version"]);
+      const approvedAtValue = adminSalesValue_(headers, row, ["approved_at", "fecha_pago"]);
+      const approvedAt = Date.parse(String(approvedAtValue || "")) || Number(payload.manualApprovedAt) || Date.now();
+      const existingPaymentId = String(adminSalesValue_(headers, row, ["mp_payment_id", "id_pago_mp"]) || "").trim();
+      const paymentId = existingPaymentId || String(payload.manualPaymentId || ("manual-" + orderId));
+      const claimRequests = buildAtomicAdminPaymentClaimRequests_(sheet, rowNumber, headers, {
+        paymentId: paymentId,
+        approvedAtIso: new Date(approvedAt).toISOString(),
+        updatedAtIso: new Date().toISOString()
+      });
+      commitAtomicAdminPaymentClaim_(claimRequests);
+      paymentStatus = "confirmed";
+      paymentApplied = true;
+      appliedPaymentId = paymentId;
+      appliedApprovedAt = approvedAt;
+    }
+  }
+
+  if (!paymentBlockReason && changed.shippingStatus && shippingStatus !== intent.requestedShippingStatus) {
+    if (shippingStatus === "completed" && intent.requestedShippingStatus === "in_process") {
+      completionBlockReason = "SHIPPING_COMPLETED_REOPEN_NOT_ALLOWED";
+    } else if (intent.requestedShippingStatus === "completed") {
+      const refreshedRow = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
+      const completionReason = adminCompletionBlockReason_(headers, refreshedRow, paymentStatus);
+      if (paymentApplied && completionReason === "INVENTORY_NOT_DEDUCTED") {
+        shippingDeferred = true;
+      } else if (completionReason) {
+        completionBlockReason = completionReason;
+      } else {
+        setAdminSalesValue_(sheet, rowNumber, headers, ["estado_de_envio", "shipping_status", "estado_envio", "shipping_state"], adminShippingLabel_("completed"));
+        shippingStatus = "completed";
+        shippingApplied = true;
+      }
+    } else {
+      setAdminSalesValue_(sheet, rowNumber, headers, ["estado_de_envio", "shipping_status", "estado_envio", "shipping_state"], adminShippingLabel_("in_process"));
+      shippingStatus = "in_process";
+      shippingApplied = true;
+    }
+  }
+  if (shippingApplied) {
+    setAdminSalesValue_(sheet, rowNumber, headers, ["updated_at", "actualizado_en", "fecha_actualizacion"], new Date().toISOString());
+  }
+
+  const latestRow = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
+  const latest = {
+    paymentStatus: paymentStatus,
+    shippingStatus: shippingStatus
+  };
+  return {
+    ok: true,
+    action: "applyAdminOrderStatusIntent",
+    outcome: paymentBlockReason || completionBlockReason ? "business_block" : "applied",
+    current: latest,
+    paymentApplied: paymentApplied,
+    shippingApplied: shippingApplied,
+    shippingDeferred: shippingDeferred,
+    paymentBlockReason: paymentBlockReason || undefined,
+    completionBlockReason: completionBlockReason || undefined,
+    mpPaymentId: paymentApplied
+      ? appliedPaymentId
+      : String(adminSalesValue_(headers, latestRow, ["mp_payment_id", "id_pago_mp"]) || "").trim(),
+    approvedAt: paymentApplied
+      ? appliedApprovedAt
+      : Date.parse(String(adminSalesValue_(headers, latestRow, ["approved_at", "fecha_pago"]) || "")) || undefined
+  };
 }
 
 function normalizeStockItems_(items) {
@@ -2322,6 +2661,10 @@ function publicPostErrorPayload_(err) {
     };
   }
 
+  if (err.code === "INVALID_ADMIN_ORDER_STATUS_INTENT") {
+    return { ok: false, error: "Invalid request", code: err.code };
+  }
+
   const payload = {
     ok: false,
     error: inventoryPublicErrorMessage_(err.code),
@@ -2373,6 +2716,7 @@ function doPost(e) {
 
     if (action === "append_row" || action === "append") return jsonOutput(handleAppendRow(payload));
     if (action === "update_row" || action === "update") return jsonOutput(handleUpdateRow(payload));
+    if (action === "apply_admin_order_status_intent") return jsonOutput(handleApplyAdminOrderStatusIntent_(payload));
     if (action === "decrement_stock" || action === "decrementstock") return jsonOutput(handleDecrementStock(payload));
     if (action === "append_order_and_decrement_stock" || action === "appendorderanddecrementstock") return jsonOutput(handleAppendOrderAndDecrementStock(payload));
     if (action === "ensure_recovery_schema") {

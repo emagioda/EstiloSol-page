@@ -19,6 +19,7 @@ vi.mock("@/src/server/observability/metrics", () => ({
 }));
 
 import {
+  applyAdminOrderStatusIntent,
   assertAdminPaymentTransitionRequest,
   createOrder,
   ensureOrderDurableInSalesSheet,
@@ -35,6 +36,7 @@ import {
   retryPaidOrderInventory,
   updateOrder,
 } from "./store";
+import { AdminOrderStateChangedError } from "./adminIntent";
 import { resolveOrderInventoryStatus } from "./inventory";
 import { evaluateFulfillmentCompletion } from "./fulfillmentCompletion";
 import {
@@ -1077,6 +1079,109 @@ describe("PR 2 monotonic deducted persistence", () => {
       });
     }
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+  });
+});
+
+describe("AUD3 H07-C1 atomic Admin status intent", () => {
+  it("H07C1-KV-01 rejects a stale reopen and preserves trusted completion", async () => {
+    const order = makeOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      shippingStatus: "completed",
+      paymentMethod: "cash",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+    });
+    await createOrder(order);
+
+    await expect(applyAdminOrderStatusIntent(order.externalReference, {
+      changedFields: ["shippingStatus"],
+      expectedShippingStatus: "in_process",
+      requestedShippingStatus: "in_process",
+    })).rejects.toBeInstanceOf(AdminOrderStateChangedError);
+    expect((await getOrder(order.externalReference))?.shippingStatus).toBe("completed");
+  });
+
+  it("H07C1-SHIP-01 ignores stale payment context for shipping-only intent", async () => {
+    const order = makeOrder({ paymentMethod: "cash" });
+    await createOrder(order);
+    await markApproved(order.externalReference, {
+      paymentId: "provider-confirmed",
+      mpStatus: "approved",
+      approvedAt: 20,
+    }, "system");
+
+    const result = await applyAdminOrderStatusIntent(order.externalReference, {
+      changedFields: ["shippingStatus"],
+      expectedShippingStatus: "in_process",
+      requestedShippingStatus: "completed",
+    });
+    expect(result?.order).toMatchObject({
+      paymentStatus: "confirmed",
+      shippingStatus: "completed",
+      inventoryStatus: "deducted",
+    });
+  });
+
+  it("H07C1-KV-03/CASH-01 serializes concurrent confirmations with canonical metadata", async () => {
+    const order = makeOrder({ paymentMethod: "cash" });
+    await createOrder(order);
+    const intent = {
+      changedFields: ["paymentStatus" as const],
+      expectedPaymentStatus: "pending" as const,
+      requestedPaymentStatus: "confirmed" as const,
+    };
+
+    const [first, second] = await Promise.all([
+      applyAdminOrderStatusIntent(order.externalReference, intent),
+      applyAdminOrderStatusIntent(order.externalReference, intent),
+    ]);
+    const persisted = await getOrder(order.externalReference);
+    expect([first?.outcome, second?.outcome].sort()).toEqual([
+      "applied",
+      "idempotent_replay",
+    ]);
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(persisted).toMatchObject({
+      paymentStatus: "confirmed",
+      mpPaymentId: `manual-${order.externalReference}`,
+      approvedAt: expect.any(Number),
+      inventoryStatus: "deducted",
+    });
+    expect(first?.order.mpPaymentId).toBe(second?.order.mpPaymentId);
+    expect(first?.order.approvedAt).toBe(second?.order.approvedAt);
+  });
+
+  it("H07C1-KV-04 returns a shipping response-loss retry as an inert replay", async () => {
+    const order = makeOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      paymentMethod: "cash",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+    });
+    await createOrder(order);
+    const intent = {
+      changedFields: ["shippingStatus" as const],
+      expectedShippingStatus: "in_process" as const,
+      requestedShippingStatus: "completed" as const,
+    };
+    expect((await applyAdminOrderStatusIntent(order.externalReference, intent))?.outcome).toBe("applied");
+    expect((await applyAdminOrderStatusIntent(order.externalReference, intent))?.outcome).toBe("idempotent_replay");
+  });
+
+  it("H07C1-KV-05 rejects the whole multi-field intent before inventory when one field conflicts", async () => {
+    const order = makeOrder({ paymentMethod: "cash", shippingStatus: "completed" });
+    await createOrder(order);
+    await expect(applyAdminOrderStatusIntent(order.externalReference, {
+      changedFields: ["paymentStatus", "shippingStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+      expectedShippingStatus: "in_process",
+      requestedShippingStatus: "in_process",
+    })).rejects.toBeInstanceOf(AdminOrderStateChangedError);
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect((await getOrder(order.externalReference))?.paymentStatus).toBe("pending");
   });
 });
 
