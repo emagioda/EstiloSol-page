@@ -141,6 +141,26 @@ const baseSheetOrder = (patch: Partial<AdminOrderSheetRow> = {}): AdminOrderShee
   ...patch,
 });
 
+const claimedManualSheetOrder = (
+  patch: Partial<AdminOrderSheetRow> = {}
+): AdminOrderSheetRow => {
+  const base = baseSheetOrder();
+  return {
+    ...base,
+    paymentStatus: "confirmed",
+    inventoryStatus: "pending",
+    ...patch,
+    raw: {
+      ...base.raw,
+      mp_payment_id: `manual-${base.orderId}`,
+      mp_status: "manual_confirmed",
+      approved_at: new Date(10).toISOString(),
+      receipt_outbox_version: 1,
+      ...(patch.raw || {}),
+    },
+  };
+};
+
 const save = (
   orderId: string,
   paymentStatus: Order["paymentStatus"] = "confirmed",
@@ -323,7 +343,9 @@ beforeEach(() => {
         const raw = sheetOrder.raw as Record<string, unknown>;
         sheetOrder.paymentStatus = "confirmed";
         raw.mp_payment_id = `manual-${id}`;
+        raw.mp_status = "manual_confirmed";
         raw.approved_at = new Date(10).toISOString();
+        raw.receipt_outbox_version = 1;
         await vi.mocked(updateOrderRowInSalesSheet)(id, {
           paymentStatus: "confirmed",
           mpPaymentId: `manual-${id}`,
@@ -939,6 +961,158 @@ describe("AUD3 H07 Admin fulfillment completion", () => {
       requestedShippingStatus: "delivered" as never,
     }])).rejects.toThrow("Invalid batch order update payload");
     expect(updateOrder).not.toHaveBeenCalled();
+  });
+});
+
+describe("AUD3 H07-C1 claimed Sheet payment crash recovery", () => {
+  beforeEach(() => {
+    vi.mocked(getOrder).mockResolvedValue(null);
+  });
+
+  it("H07C1-FALLBACK-CRASH-01 repairs inventory after the durable payment claim", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder());
+
+    const result = await save("sheet-order-1");
+
+    expect(result.results[0]).toMatchObject({
+      status: "success",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({ inventoryStatus: "deducted" })
+    );
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledWith({
+      order: expect.objectContaining({
+        mpPaymentId: "manual-sheet-order-1",
+        approvedAt: 10,
+      }),
+      paymentId: "manual-sheet-order-1",
+      approvedAt: 10,
+    });
+  });
+
+  it("H07C1-FALLBACK-CRASH-02 projects the journal's deduped inventory result", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder());
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({
+      deduped: true,
+      updated: [{ productId: "p1", previousQty: 1, nextQty: 1 }],
+    });
+
+    const result = await save("sheet-order-1");
+
+    expect(result.results[0]).toMatchObject({ inventoryStatus: "deducted" });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({
+        inventoryStatus: "deducted",
+        inventoryIssueCode: null,
+      })
+    );
+  });
+
+  it("H07C1-FALLBACK-CRASH-03 repairs the missing receipt with canonical payment data", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
+      inventoryStatus: "deducted",
+      stockDeductedAt: "2026-08-01T00:00:00.000Z",
+    }));
+
+    await save("sheet-order-1");
+
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledWith({
+      order: expect.objectContaining({
+        mpPaymentId: "manual-sheet-order-1",
+        approvedAt: 10,
+        inventoryStatus: "deducted",
+      }),
+      paymentId: "manual-sheet-order-1",
+      approvedAt: 10,
+    });
+  });
+
+  it("H07C1-FALLBACK-CRASH-04 keeps a fully completed replay effect-free", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
+      inventoryStatus: "deducted",
+      stockDeductedAt: "2026-08-01T00:00:00.000Z",
+      receiptEmailSentAt: "2026-08-01T00:01:00.000Z",
+    }));
+
+    const result = await save("sheet-order-1");
+
+    expect(result.ok).toBe(true);
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+  });
+
+  it("H07C1-FALLBACK-CRASH-05 repairs inventory before completing combined shipping", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder());
+
+    const result = await save("sheet-order-1", "confirmed", "completed");
+
+    expect(result.results[0]).toMatchObject({
+      status: "success",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      shippingStatus: "completed",
+      shippingBlocked: false,
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(applyAdminOrderStatusIntentInSalesSheet).toHaveBeenNthCalledWith(
+      2,
+      "sheet-order-1",
+      {
+        changedFields: ["shippingStatus"],
+        expectedShippingStatus: "in_process",
+        requestedShippingStatus: "completed",
+      }
+    );
+  });
+
+  it("H07C1-FALLBACK-CRASH-06 preserves payment and blocks shipping on stock conflict", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder());
+    vi.mocked(decrementProductsStockInSheet).mockRejectedValue(new InventoryOperationError({
+      code: "INSUFFICIENT_STOCK",
+      message: "none",
+    }));
+
+    const result = await save("sheet-order-1", "confirmed", "completed");
+
+    expect(result.results[0]).toMatchObject({
+      status: "business_block",
+      paymentStatus: "confirmed",
+      inventoryStatus: "conflict",
+      shippingStatus: "in_process",
+      completionBlockReason: "INVENTORY_REQUIRES_ATTENTION",
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledWith(expect.objectContaining({
+      paymentId: "manual-sheet-order-1",
+      approvedAt: 10,
+    }));
+  });
+
+  it("keeps shipping-only intent free of manual payment repair effects", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder());
+
+    const result = await saveOrderStatusesBatchAction([{
+      orderId: "sheet-order-1",
+      changedFields: ["shippingStatus"],
+      expectedShippingStatus: "in_process",
+      requestedShippingStatus: "completed",
+    }]);
+
+    expect(result.results[0]).toMatchObject({
+      status: "business_block",
+      completionBlockReason: "INVENTORY_NOT_DEDUCTED",
+    });
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
   });
 });
 

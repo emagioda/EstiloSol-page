@@ -137,11 +137,15 @@ const buildFallbackOrderFromSheet = (
 ): Order => {
   const raw = sheetOrder.raw as Record<string, unknown>;
   const items = parseFallbackOrderItems(raw, sheetOrder.items);
+  const canonicalPaymentId = raw.mp_payment_id ?? raw.id_pago_mp;
+  const canonicalPaymentStatus = raw.mp_status ?? raw.estado_mp;
   const mpPaymentId =
-    typeof raw.mp_payment_id === "string" && raw.mp_payment_id.trim() ? raw.mp_payment_id.trim() : undefined;
+    typeof canonicalPaymentId === "string" && canonicalPaymentId.trim()
+      ? canonicalPaymentId.trim()
+      : undefined;
   const mpStatus =
-    typeof raw.mp_status === "string" && raw.mp_status.trim()
-      ? raw.mp_status.trim()
+    typeof canonicalPaymentStatus === "string" && canonicalPaymentStatus.trim()
+      ? canonicalPaymentStatus.trim()
       : paymentStatus === "confirmed"
       ? "approved"
       : paymentStatus === "cancelled"
@@ -234,6 +238,20 @@ const inventoryPatchFromAttempt = async (order: Order) => {
   return { result, patch: inventoryResultToOrderPatch(result) };
 };
 
+const isDurablyClaimedManualPaymentIntent = (
+  intent: AdminOrderStatusIntent,
+  order: Order
+) =>
+  intent.changedFields.includes("paymentStatus") &&
+  intent.expectedPaymentStatus === "pending" &&
+  intent.requestedPaymentStatus === "confirmed" &&
+  order.paymentStatus === "confirmed" &&
+  (order.paymentMethod === "cash" || order.paymentMethod === "transfer") &&
+  order.mpStatus === "manual_confirmed" &&
+  Boolean(order.mpPaymentId) &&
+  Number.isFinite(order.approvedAt) &&
+  order.receiptOutboxVersion === 1;
+
 const reconcileVerifiedMercadoPagoApproval = async (order: Order): Promise<Order> => {
   let accessToken: string;
   try {
@@ -301,7 +319,6 @@ const applySheetFallbackOrderStatusesUpdate = async (
       );
     }
   }
-  const paymentWasApplied = sheetResult.paymentApplied;
   const paymentBlockReason = sheetResult.paymentBlockReason;
   let completionBlockReason = sheetResult.completionBlockReason;
 
@@ -312,8 +329,13 @@ const applySheetFallbackOrderStatusesUpdate = async (
     sheetResult.current.paymentStatus,
     sheetResult.current.shippingStatus
   );
+  const shouldEnsureClaimedManualPaymentEffects =
+    isDurablyClaimedManualPaymentIntent(intent, canonicalOrder);
 
-  if (paymentWasApplied && shouldAttemptInventoryAutomatically(canonicalOrder)) {
+  if (
+    shouldEnsureClaimedManualPaymentEffects &&
+    shouldAttemptInventoryAutomatically(canonicalOrder)
+  ) {
     const { patch } = await inventoryPatchFromAttempt(canonicalOrder);
     await updateOrderRowInSalesSheet(orderId, {
       inventoryStatus: patch.inventoryStatus ?? null,
@@ -325,7 +347,12 @@ const applySheetFallbackOrderStatusesUpdate = async (
     canonicalOrder = { ...canonicalOrder, ...patch };
   }
 
-  if (sheetResult.shippingDeferred) {
+  const shouldReevaluateShippingAfterClaimedPayment =
+    shouldEnsureClaimedManualPaymentEffects &&
+    intent.changedFields.includes("shippingStatus") &&
+    intent.requestedShippingStatus === "completed" &&
+    sheetResult.current.shippingStatus !== "completed";
+  if (sheetResult.shippingDeferred || shouldReevaluateShippingAfterClaimedPayment) {
     const shippingIntent: AdminOrderStatusIntent = {
       changedFields: ["shippingStatus"],
       expectedShippingStatus: intent.expectedShippingStatus,
@@ -348,9 +375,9 @@ const applySheetFallbackOrderStatusesUpdate = async (
     };
   }
 
-  if (paymentWasApplied && !sheetOrder.receiptEmailSentAt) {
-    const paymentId = canonicalOrder.mpPaymentId || sheetResult.mpPaymentId;
-    const approvedAt = canonicalOrder.approvedAt || sheetResult.approvedAt;
+  if (shouldEnsureClaimedManualPaymentEffects && !sheetOrder.receiptEmailSentAt) {
+    const paymentId = canonicalOrder.mpPaymentId;
+    const approvedAt = canonicalOrder.approvedAt;
     if (!paymentId || !approvedAt) {
       throw new Error("No se pudo recuperar la identidad canónica del pago manual.");
     }
