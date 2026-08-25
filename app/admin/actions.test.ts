@@ -1222,22 +1222,216 @@ describe("AUD3 H07-C1 claimed Sheet payment crash recovery", () => {
     }));
   });
 
-  it("keeps shipping-only intent free of manual payment repair effects", async () => {
-    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder());
+});
 
-    const result = await saveOrderStatusesBatchAction([{
-      orderId: "sheet-order-1",
-      changedFields: ["shippingStatus"],
-      expectedShippingStatus: "in_process",
-      requestedShippingStatus: "completed",
-    }]);
+describe("AUD3 H07-D2 manual confirmed shipping-only fallback", () => {
+  const shippingOnlyIntent = () => ({
+    orderId: "sheet-order-1",
+    changedFields: ["shippingStatus" as const],
+    expectedShippingStatus: "in_process" as const,
+    requestedShippingStatus: "completed" as const,
+  });
+
+  beforeEach(() => {
+    vi.mocked(getOrder).mockResolvedValue(null);
+  });
+
+  it("H07D2-MANUAL-SHIP-01 completes cash shipping-only from canonical journal evidence", async () => {
+    const sheetOrder = claimedManualSheetOrder({ paymentMethod: "cash" });
+    vi.mocked(getOrderRowById).mockResolvedValue(sheetOrder);
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
+
+    const result = await saveOrderStatusesBatchAction([shippingOnlyIntent()]);
+
+    expect(result.results[0]).toMatchObject({
+      status: "success",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      shippingStatus: "completed",
+      shippingBlocked: false,
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(getUniqueOrderRowById).toHaveBeenCalledTimes(3);
+    expect(applyAdminOrderStatusIntentInSalesSheet).toHaveBeenCalledWith(
+      "sheet-order-1",
+      {
+        changedFields: ["shippingStatus"],
+        expectedShippingStatus: "in_process",
+        requestedShippingStatus: "completed",
+      },
+    );
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
+    expect(sheetOrder.raw).toMatchObject({
+      mp_payment_id: "manual-sheet-order-1",
+      approved_at: new Date(10).toISOString(),
+    });
+    expect(vi.mocked(updateOrderRowInSalesSheet).mock.calls.every(([, update]) =>
+      !("paymentStatus" in update) && !("mpPaymentId" in update) && !("approvedAt" in update)
+    )).toBe(true);
+
+    const projectionIndex = vi.mocked(updateOrderRowInSalesSheet).mock.calls.findIndex(
+      ([, update]) => "inventoryStatus" in update,
+    );
+    expect(projectionIndex).toBeGreaterThanOrEqual(0);
+    expect(vi.mocked(decrementProductsStockInSheet).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(updateOrderRowInSalesSheet).mock.invocationCallOrder[projectionIndex],
+    );
+    expect(vi.mocked(updateOrderRowInSalesSheet).mock.invocationCallOrder[projectionIndex]).toBeLessThan(
+      vi.mocked(runMissingOrderSheetFallback).mock.invocationCallOrder[0],
+    );
+    expect(vi.mocked(runMissingOrderSheetFallback).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(getUniqueOrderRowById).mock.invocationCallOrder[1],
+    );
+    expect(vi.mocked(getUniqueOrderRowById).mock.invocationCallOrder[1]).toBeLessThan(
+      vi.mocked(applyAdminOrderStatusIntentInSalesSheet).mock.invocationCallOrder[0],
+    );
+  });
+
+  it("H07D2-MANUAL-SHIP-02 completes transfer shipping-only without replaying payment", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
+      paymentMethod: "transfer",
+    }));
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
+
+    const result = await saveOrderStatusesBatchAction([shippingOnlyIntent()]);
+
+    expect(result.results[0]).toMatchObject({
+      status: "success",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      shippingStatus: "completed",
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
+    expect(applyAdminOrderStatusIntentInSalesSheet).toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({ changedFields: ["shippingStatus"] }),
+    );
+  });
+
+  it("H07D2-MANUAL-SHIP-03 lets deduped journal truth override a pending Sheet projection", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
+      inventoryStatus: "pending",
+      stockDeductedAt: "",
+    }));
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
+
+    const result = await saveOrderStatusesBatchAction([shippingOnlyIntent()]);
+
+    expect(result.results[0]).toMatchObject({
+      inventoryStatus: "deducted",
+      shippingStatus: "completed",
+      shippingBlocked: false,
+    });
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({
+        inventoryStatus: "deducted",
+        inventoryIssueCode: null,
+      }),
+    );
+  });
+
+  it("H07D2-MANUAL-SHIP-04 rejects a false Sheet deducted projection without journal authority", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
+      inventoryStatus: "deducted",
+      stockDeductedAt: "2026-08-01T00:00:00.000Z",
+    }));
+    vi.mocked(decrementProductsStockInSheet).mockRejectedValue(new InventoryOperationError({
+      code: "INSUFFICIENT_STOCK",
+      message: "none",
+    }));
+
+    const result = await saveOrderStatusesBatchAction([shippingOnlyIntent()]);
 
     expect(result.results[0]).toMatchObject({
       status: "business_block",
-      completionBlockReason: "INVENTORY_NOT_DEDUCTED",
+      paymentStatus: "confirmed",
+      inventoryStatus: "conflict",
+      shippingStatus: "in_process",
+      shippingBlocked: true,
+      completionBlockReason: "INVENTORY_REQUIRES_ATTENTION",
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({
+        inventoryStatus: "conflict",
+        stockDeductedAt: null,
+      }),
+    );
+  });
+
+  it("H07D2-MANUAL-SHIP-05 fails closed before inventory when the manual signature is invalid", async () => {
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
+      raw: { mp_status: "approved" },
+    }));
+
+    const result = await saveOrderStatusesBatchAction([shippingOnlyIntent()]);
+
+    expect(result.results[0]).toMatchObject({
+      status: "business_block",
+      paymentStatus: "confirmed",
+      shippingStatus: "in_process",
+      paymentBlocked: true,
+      paymentBlockReason: "PAYMENT_PROVIDER_AUTHORITY_REQUIRED",
     });
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
-    expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+    expect(runMissingOrderSheetFallback).not.toHaveBeenCalled();
+    expect(applyAdminOrderStatusIntentInSalesSheet).not.toHaveBeenCalled();
+  });
+
+  it("H07D2-MANUAL-SHIP-06 routes to KV when authority returns before the Sheet shipping CAS", async () => {
+    const kvOrder = baseOrder({
+      externalReference: "sheet-order-1",
+      paymentMethod: "cash",
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+      shippingStatus: "completed",
+      mpPaymentId: "manual-sheet-order-1",
+      mpStatus: "manual_confirmed",
+      approvedAt: 10,
+      receiptOutboxVersion: 1,
+    });
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
+      paymentMethod: "cash",
+    }));
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
+    vi.mocked(runMissingOrderSheetFallback).mockResolvedValueOnce({
+      outcome: "kv_authority_returned",
+    });
+    vi.mocked(applyAdminOrderStatusIntent)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        order: kvOrder,
+        outcome: "applied",
+        paymentApplied: false,
+        shippingApplied: true,
+        receiptEnrollmentRequired: false,
+        shippingBlocked: false,
+      });
+
+    const result = await saveOrderStatusesBatchAction([shippingOnlyIntent()]);
+
+    expect(result.results[0]).toMatchObject({
+      status: "success",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      shippingStatus: "completed",
+    });
+    expect(applyAdminOrderStatusIntentInSalesSheet).not.toHaveBeenCalled();
+    expect(applyAdminOrderStatusIntent).toHaveBeenNthCalledWith(
+      2,
+      "sheet-order-1",
+      {
+        changedFields: ["shippingStatus"],
+        expectedShippingStatus: "in_process",
+        requestedShippingStatus: "completed",
+      },
+    );
   });
 });
 

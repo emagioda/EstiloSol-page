@@ -420,6 +420,8 @@ const applyOrderStatusesUpdate = async (
 ): Promise<AdminOrderUpdateResult> => {
   let application = await applyAdminOrderStatusIntent(orderId, intent);
   if (!application) {
+    let sheetFallbackMutation = () =>
+      applyAdminOrderStatusIntentInSalesSheet(orderId, intent);
     const requestsCompletion =
       intent.changedFields.includes("shippingStatus") &&
       intent.requestedShippingStatus === "completed";
@@ -447,16 +449,38 @@ const applyOrderStatusesUpdate = async (
           );
         }
         if (!intent.changedFields.includes("paymentStatus")) {
-          return resultFromOrder({
-            order: buildFallbackOrderFromSheet(
-              sheetOrder,
-              "confirmed",
-              sheetOrder.shippingStatus,
-            ),
-            status: "business_block",
-            shippingBlocked: true,
-            completionBlockReason: "INVENTORY_NOT_DEDUCTED",
+          const canonicalOrder = buildFallbackOrderFromSheet(
+            sheetOrder,
+            "confirmed",
+            sheetOrder.shippingStatus,
+          );
+          const { patch } = await inventoryPatchFromAttempt({
+            ...canonicalOrder,
+            inventoryStatus: "pending",
+            stockDeductedAt: undefined,
           });
+          await updateOrderRowInSalesSheet(orderId, {
+            inventoryStatus: patch.inventoryStatus ?? null,
+            inventoryIssueCode: patch.inventoryIssueCode ?? null,
+            inventoryIssueAt: patch.inventoryIssueAt ?? null,
+            stockDeductedAt: patch.stockDeductedAt ?? null,
+            updatedAt: Date.now(),
+          });
+
+          sheetFallbackMutation = async () => {
+            const latestSheetOrder = await requireUniqueSheetOrder(orderId);
+            if (
+              !parseCanonicalManualPaymentEvidence(
+                latestSheetOrder,
+                manualEvidence.paymentMethod,
+              )
+            ) {
+              throw new PaymentTransitionBlockedError(
+                PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired,
+              );
+            }
+            return applyAdminOrderStatusIntentInSalesSheet(orderId, intent);
+          };
         }
       }
     }
@@ -464,7 +488,7 @@ const applyOrderStatusesUpdate = async (
     if (!application) {
       const claim = await runMissingOrderSheetFallback(
         orderId,
-        () => applyAdminOrderStatusIntentInSalesSheet(orderId, intent),
+        sheetFallbackMutation,
       );
       if (claim.outcome === "kv_authority_returned") {
         application = await applyAdminOrderStatusIntent(orderId, intent);
