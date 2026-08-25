@@ -13,8 +13,6 @@ import {
 } from "./salesSheetRecovery";
 import {
   listPendingSalesSheetOrderIds,
-  removePendingSalesSheetOrder,
-  shouldRecoverOrderInSalesSheet,
 } from "./salesSheetSync";
 import { getOrder, projectCurrentOrderSalesState } from "./store";
 import type { Order } from "./types";
@@ -29,7 +27,6 @@ type AdminOrderStateDependencies = {
   syncSheetState?: typeof updateOrderRowInSalesSheet;
   projectCurrentState?: typeof projectCurrentOrderSalesState;
   listPendingOrderIds?: typeof listPendingSalesSheetOrderIds;
-  removePendingOrder?: typeof removePendingSalesSheetOrder;
   recoverPendingOrder?: typeof recoverPendingSalesSheetOrder;
   now?: () => number;
 };
@@ -248,8 +245,6 @@ export async function getOrdersForAdminWithKvState(
       : projectCurrentOrderSalesState);
   const listPendingOrderIds =
     dependencies.listPendingOrderIds ?? listPendingSalesSheetOrderIds;
-  const removePendingOrder =
-    dependencies.removePendingOrder ?? removePendingSalesSheetOrder;
   const recoverPendingOrder =
     dependencies.recoverPendingOrder ?? recoverPendingSalesSheetOrder;
   const now = dependencies.now ?? Date.now;
@@ -264,39 +259,17 @@ export async function getOrdersForAdminWithKvState(
     sheetOrders.map(async (sheetOrder) => {
       const kvOrder = await readKvOrder(sheetOrder.orderId);
       const isPending = pendingOrderIdSet.has(sheetOrder.orderId);
-      if (!kvOrder) {
-        if (isPending) {
-          try {
-            await removePendingOrder(sheetOrder.orderId);
-            logEvent("warn", "orders.sales_sheet_pending_index_stale", {
-              orderId: sheetOrder.orderId,
-              inventoryStatus: "unknown",
-              paymentStatus: "unknown",
-              outcome: "stale",
-            });
-          } catch (error) {
-            logEvent("warn", "orders.sales_sheet_append_pending", {
-              orderId: sheetOrder.orderId,
-              inventoryStatus: "unknown",
-              paymentStatus: "unknown",
-              outcome: error instanceof Error ? error.name : "unknown",
-            });
-          }
-        }
-        return sheetOrder;
-      }
-
-      const resolution = resolveAdminOrderState(sheetOrder, kvOrder, now());
       if (isPending) {
-        if (!shouldRecoverOrderInSalesSheet(kvOrder)) {
-          await removePendingOrder(sheetOrder.orderId);
-          return resolution.order;
-        }
-
         try {
           const recovery = await recoverPendingOrder(
             sheetOrder.orderId,
             { rowExists: true }
+          );
+          if (!recovery.order) return sheetOrder;
+          const resolution = resolveAdminOrderState(
+            sheetOrder,
+            recovery.order,
+            recovery.order.updatedAt,
           );
           return {
             ...resolution.order,
@@ -305,13 +278,22 @@ export async function getOrdersForAdminWithKvState(
         } catch (error) {
           logEvent("warn", "orders.sales_sheet_append_pending", {
             orderId: sheetOrder.orderId,
-            inventoryStatus: resolution.order.inventoryStatus ?? "legacy",
-            paymentStatus: resolution.order.paymentStatus,
+            inventoryStatus: kvOrder
+              ? resolveOrderInventoryStatus(kvOrder) ?? "legacy"
+              : "unknown",
+            paymentStatus: kvOrder?.paymentStatus ?? "unknown",
             outcome: error instanceof Error ? error.name : "unknown",
           });
-          return { ...resolution.order, salesSheetSyncPending: true };
+          if (!kvOrder) return { ...sheetOrder, salesSheetSyncPending: true };
+          return {
+            ...resolveAdminOrderState(sheetOrder, kvOrder, now()).order,
+            salesSheetSyncPending: true,
+          };
         }
       }
+
+      if (!kvOrder) return sheetOrder;
+      const resolution = resolveAdminOrderState(sheetOrder, kvOrder, now());
 
       if (!resolution.syncUpdates) return resolution.order;
 
@@ -351,53 +333,31 @@ export async function getOrdersForAdminWithKvState(
       .filter((orderId) => !sheetOrderIdSet.has(orderId))
       .map(async (orderId) => {
         const kvOrder = await readKvOrder(orderId);
-        if (!kvOrder) {
-          try {
-            await removePendingOrder(orderId);
-            logEvent("warn", "orders.sales_sheet_pending_index_stale", {
-              orderId,
-              inventoryStatus: "unknown",
-              paymentStatus: "unknown",
-              outcome: "stale",
-            });
-          } catch (error) {
-            logEvent("warn", "orders.sales_sheet_append_pending", {
-              orderId,
-              inventoryStatus: "unknown",
-              paymentStatus: "unknown",
-              outcome: error instanceof Error ? error.name : "unknown",
-            });
-          }
-          return null;
-        }
-
-        if (!shouldRecoverOrderInSalesSheet(kvOrder)) {
-          await removePendingOrder(orderId);
-          logEvent("warn", "orders.sales_sheet_pending_index_stale", {
-            orderId,
-            inventoryStatus: resolveOrderInventoryStatus(kvOrder) ?? "legacy",
-            paymentStatus: kvOrder.paymentStatus,
-            outcome: "not_eligible",
-          });
-          return null;
-        }
-
-        let result = buildAdminOrderSheetRowFromKv(kvOrder);
         try {
           const recovery = await recoverPendingOrder(orderId, { rowExists: false });
-          result = {
-            ...result,
+          if (
+            !recovery.order ||
+            recovery.outcome === "stale" ||
+            recovery.outcome === "not_eligible" ||
+            recovery.outcome === "not_indexed"
+          ) {
+            return null;
+          }
+          return {
+            ...buildAdminOrderSheetRowFromKv(recovery.order),
             salesSheetSyncPending: !salesSheetRecoveryCompleted(recovery.outcome),
           };
         } catch (error) {
+          if (!kvOrder) return null;
+          const result = buildAdminOrderSheetRowFromKv(kvOrder);
           logEvent("warn", "orders.sales_sheet_append_pending", {
             orderId,
             inventoryStatus: result.inventoryStatus ?? "legacy",
             paymentStatus: result.paymentStatus,
             outcome: error instanceof Error ? error.name : "unknown",
           });
+          return result;
         }
-        return result;
       })
   );
 

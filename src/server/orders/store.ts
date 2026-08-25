@@ -87,6 +87,7 @@ export type CurrentSalesProjectionOutcome =
   | "appended"
   | "projected"
   | "deduped"
+  | "pending"
   | "failed"
   | "missing"
   | "not_eligible"
@@ -267,6 +268,48 @@ const persistSalesProjectionStateWithinLock = async (
   return updated;
 };
 
+const ensurePendingSalesProjectionWithinLock = async (
+  order: Order,
+): Promise<boolean> => {
+  try {
+    await addPendingSalesSheetOrder(order.externalReference);
+    return true;
+  } catch (error) {
+    logEvent("error", "orders.sales_sheet_pending_index_failed", {
+      orderId: order.externalReference,
+      paymentStatus: order.paymentStatus,
+      inventoryStatus: resolveOrderInventoryStatus(order) ?? "legacy",
+      outcome: error instanceof Error ? error.name : "unknown",
+    });
+    return false;
+  }
+};
+
+const clearPendingSalesProjectionWithinLock = async (
+  externalReference: string,
+  order: Order | null,
+): Promise<boolean> => {
+  try {
+    await removePendingSalesSheetOrder(externalReference);
+    return true;
+  } catch (error) {
+    const restored = order
+      ? await ensurePendingSalesProjectionWithinLock(order)
+      : await addPendingSalesSheetOrder(externalReference).then(
+          () => true,
+          () => false,
+        );
+    logEvent("warn", "orders.sales_sheet_pending_index_remove_failed", {
+      orderId: externalReference,
+      paymentStatus: order?.paymentStatus ?? "unknown",
+      inventoryStatus: order ? resolveOrderInventoryStatus(order) ?? "legacy" : "unknown",
+      outcome: error instanceof Error ? error.name : "unknown",
+      pendingRestored: restored,
+    });
+    return false;
+  }
+};
+
 /**
  * Projects the current KV Order while holding the same lock used by normal
  * mutations. A deduped append deliberately does not bind success: callers must
@@ -274,17 +317,26 @@ const persistSalesProjectionStateWithinLock = async (
  */
 export async function reconcileCurrentOrderSalesProjection(
   externalReference: string,
-  options: { rowExists: boolean; requirePending?: boolean },
+  options: { rowExists: boolean; requirePending?: boolean; managePending?: boolean },
 ): Promise<CurrentSalesProjectionResult> {
   return withOrderWriteLock(externalReference, async () => {
+    const managesPending = options.requirePending || options.managePending;
     if (options.requirePending && !(await isPendingSalesSheetOrder(externalReference))) {
       return { outcome: "not_indexed", order: await getOrder(externalReference) };
     }
 
     const stored = await getJson<StoredOrder>(orderKey(externalReference));
-    if (!stored) return { outcome: "missing", order: null };
+    if (!stored) {
+      if (managesPending && !(await clearPendingSalesProjectionWithinLock(externalReference, null))) {
+        return { outcome: "pending", order: null };
+      }
+      return { outcome: "missing", order: null };
+    }
     const current = ensureOrderDefaults(stored);
     if (options.requirePending && !shouldRecoverOrderInSalesSheet(current)) {
+      if (!(await clearPendingSalesProjectionWithinLock(externalReference, current))) {
+        return { outcome: "pending", order: current };
+      }
       return { outcome: "not_eligible", order: current };
     }
 
@@ -314,6 +366,9 @@ export async function reconcileCurrentOrderSalesProjection(
             }
           : {}),
       });
+      if (managesPending && !(await clearPendingSalesProjectionWithinLock(externalReference, bound))) {
+        return { outcome: "pending", order: bound };
+      }
       return { outcome, order: bound };
     } catch (error) {
       let failed = current;
@@ -329,6 +384,9 @@ export async function reconcileCurrentOrderSalesProjection(
           inventoryStatus: resolveOrderInventoryStatus(current) ?? "legacy",
           outcome: stateError instanceof Error ? stateError.name : "unknown",
         });
+      }
+      if (managesPending) {
+        await ensurePendingSalesProjectionWithinLock(failed);
       }
       return { outcome: "failed", order: failed, error };
     }
@@ -442,30 +500,10 @@ async function appendApprovedOrderToSalesSheet(order: Order): Promise<{ order: O
 
   const projection = await reconcileCurrentOrderSalesProjection(order.externalReference, {
     rowExists: true,
+    managePending: true,
   });
   if (projection.outcome !== "projected" || !projection.order) {
-    try {
-      await addPendingSalesSheetOrder(order.externalReference);
-    } catch (indexError) {
-      logEvent("error", "orders.sales_sheet_pending_index_failed", {
-        orderId: order.externalReference,
-        paymentStatus: order.paymentStatus,
-        inventoryStatus: resolveOrderInventoryStatus(order) ?? "legacy",
-        outcome: indexError instanceof Error ? indexError.name : "unknown",
-      });
-    }
     return { order: projection.order ?? order, synced: false };
-  }
-
-  try {
-    await removePendingSalesSheetOrder(order.externalReference);
-  } catch (error) {
-    logEvent("warn", "orders.sales_sheet_pending_index_remove_failed", {
-      orderId: order.externalReference,
-      paymentStatus: projection.order.paymentStatus,
-      inventoryStatus: resolveOrderInventoryStatus(projection.order) ?? "legacy",
-      outcome: error instanceof Error ? error.name : "unknown",
-    });
   }
   return { order: projection.order, synced: true };
 }

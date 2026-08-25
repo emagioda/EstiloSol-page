@@ -48,8 +48,6 @@ const dependenciesFor = (
   isPending: vi.fn().mockResolvedValue(true),
   readOrder: vi.fn().mockResolvedValue(order),
   reconcileProjection: vi.fn().mockResolvedValue(projection),
-  addPending: vi.fn().mockResolvedValue(false),
-  removePending: vi.fn().mockResolvedValue(true),
 });
 
 describe("AUD3 H07-D1 indexed sales Sheet recovery orchestration", () => {
@@ -66,15 +64,13 @@ describe("AUD3 H07-D1 indexed sales Sheet recovery orchestration", () => {
     });
   });
 
-  it("PR2-SYNC-13 removes pending only after a bound successful projection", async () => {
+  it("PR2-SYNC-13 delegates successful index cleanup to the locked projection", async () => {
     const order = makeOrder();
     const dependencies = dependenciesFor(order);
 
     await recoverPendingSalesSheetOrder(order.externalReference, { rowExists: false }, dependencies);
 
-    expect(dependencies.reconcileProjection.mock.invocationCallOrder[0]).toBeLessThan(
-      dependencies.removePending.mock.invocationCallOrder[0],
-    );
+    expect(dependencies.reconcileProjection).toHaveBeenCalledOnce();
   });
 
   it("PR2-SYNC-17 leaves a failed current projection indexed and retryable", async () => {
@@ -88,8 +84,6 @@ describe("AUD3 H07-D1 indexed sales Sheet recovery orchestration", () => {
     await expect(
       recoverPendingSalesSheetOrder(order.externalReference, { rowExists: false }, dependencies),
     ).resolves.toMatchObject({ outcome: "pending" });
-    expect(dependencies.addPending).toHaveBeenCalledWith(order.externalReference);
-    expect(dependencies.removePending).not.toHaveBeenCalled();
   });
 
   it("PR2-SYNC-18 reconciles a caller-reported existing row without append assumptions", async () => {
@@ -112,7 +106,6 @@ describe("AUD3 H07-D1 indexed sales Sheet recovery orchestration", () => {
     await recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }, dependencies);
 
     expect(dependencies.reconcileProjection).toHaveBeenCalledOnce();
-    expect(dependencies.removePending).toHaveBeenCalledOnce();
   });
 
   it("AUD3-H06E-AUTO-SALES-08 removes an ineligible indexed entry", async () => {
@@ -122,7 +115,6 @@ describe("AUD3 H07-D1 indexed sales Sheet recovery orchestration", () => {
     await expect(
       recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }, dependencies),
     ).resolves.toMatchObject({ outcome: "not_eligible" });
-    expect(dependencies.removePending).toHaveBeenCalledWith(order.externalReference);
   });
 
   it("PR2-SYNC-INDEX-03 removes a stale index entry after locked KV absence", async () => {
@@ -132,7 +124,6 @@ describe("AUD3 H07-D1 indexed sales Sheet recovery orchestration", () => {
     await expect(
       recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }, dependencies),
     ).resolves.toEqual({ outcome: "stale", order: null });
-    expect(dependencies.removePending).toHaveBeenCalledWith(order.externalReference);
   });
 
   it("H07D1-APPEND-01 reconciles current state after append identity dedupe", async () => {
@@ -154,20 +145,15 @@ describe("AUD3 H07-D1 indexed sales Sheet recovery orchestration", () => {
       rowExists: true,
       requirePending: true,
     });
-    expect(dependencies.reconcileProjection.mock.invocationCallOrder[1]).toBeLessThan(
-      dependencies.removePending.mock.invocationCallOrder[0],
-    );
   });
 
-  it("H07D1-CRASH-02 keeps pending when index removal fails after marker success", async () => {
+  it("H07D1-CRASH-02 preserves the store-owned pending outcome", async () => {
     const order = makeOrder({ salesSheetSyncedAt: 30, salesSheetSyncFailedAt: undefined });
-    const dependencies = dependenciesFor(order, { outcome: "projected", order });
-    dependencies.removePending.mockRejectedValueOnce(new Error("KV set unavailable"));
+    const dependencies = dependenciesFor(order, { outcome: "pending", order });
 
     await expect(
       recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }, dependencies),
     ).resolves.toMatchObject({ outcome: "pending", order });
-    expect(dependencies.addPending).toHaveBeenCalledWith(order.externalReference);
   });
 
   it("PR2-SYNC-20-LOCK retains the recovery lock only as worker dedupe", async () => {

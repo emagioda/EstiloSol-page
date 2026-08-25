@@ -3,9 +3,7 @@ import { delIfValue, setJsonIfNotExists } from "@/src/server/kv";
 import { logEvent } from "@/src/server/observability/log";
 import { resolveOrderInventoryStatus } from "./inventory";
 import {
-  addPendingSalesSheetOrder,
   isPendingSalesSheetOrder,
-  removePendingSalesSheetOrder,
 } from "./salesSheetSync";
 import {
   getOrder,
@@ -37,8 +35,6 @@ type SalesSheetRecoveryDependencies = {
   isPending?: typeof isPendingSalesSheetOrder;
   readOrder?: typeof getOrder;
   reconcileProjection?: typeof reconcileCurrentOrderSalesProjection;
-  addPending?: typeof addPendingSalesSheetOrder;
-  removePending?: typeof removePendingSalesSheetOrder;
 };
 
 const logRecovery = (
@@ -75,8 +71,6 @@ export async function recoverPendingSalesSheetOrder(
   const readOrder = dependencies.readOrder ?? getOrder;
   const reconcileProjection =
     dependencies.reconcileProjection ?? reconcileCurrentOrderSalesProjection;
-  const addPending = dependencies.addPending ?? addPendingSalesSheetOrder;
-  const removePending = dependencies.removePending ?? removePendingSalesSheetOrder;
   const ownerToken = randomUUID();
   const lockKey = recoveryLockKey(orderId);
   const acquired = await setJsonIfNotExists(
@@ -110,7 +104,6 @@ export async function recoverPendingSalesSheetOrder(
 
     const outcome = mapProjectionOutcome(projection);
     if (outcome === "stale" || outcome === "not_eligible") {
-      await removePending(orderId);
       if (projection.order) {
         logRecovery("warn", "orders.sales_sheet_pending_index_stale", projection.order, outcome);
       } else {
@@ -129,22 +122,12 @@ export async function recoverPendingSalesSheetOrder(
     }
 
     if (outcome === "appended" || outcome === "reconciled") {
-      try {
-        await removePending(orderId);
-      } catch {
-        await addPending(orderId);
-        if (projection.order) {
-          logRecovery("warn", "orders.sales_sheet_append_pending", projection.order, "pending");
-        }
-        return { outcome: "pending", order: projection.order };
-      }
       if (projection.order) {
         logRecovery("info", "orders.sales_sheet_append_recovered", projection.order, outcome);
       }
       return { outcome, order: projection.order };
     }
 
-    await addPending(orderId);
     const current = (await readOrder(orderId)) ?? projection.order;
     logEvent("warn", "orders.sales_sheet_append_pending", {
       orderId,
@@ -171,4 +154,6 @@ export const salesSheetRecoveryCompleted = (
   outcome === "appended" ||
   outcome === "reconciled" ||
   outcome === "already_synced" ||
+  outcome === "stale" ||
+  outcome === "not_eligible" ||
   outcome === "not_indexed";

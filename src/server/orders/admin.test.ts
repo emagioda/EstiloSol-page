@@ -237,7 +237,6 @@ describe("PR 2 admin KV and Sheets reconciliation", () => {
       salesSheetDeferredUntilApprovedAt: 1,
       salesSheetSyncFailedAt: 2,
     });
-    const removePendingOrder = vi.fn();
     const recoverPendingOrder = vi
       .fn()
       .mockResolvedValue({ outcome: "pending", order: kvOrder });
@@ -247,26 +246,27 @@ describe("PR 2 admin KV and Sheets reconciliation", () => {
       listPendingOrderIds: async () => [kvOrder.externalReference],
       getKvOrder: async () => kvOrder,
       recoverPendingOrder,
-      removePendingOrder,
     });
 
     expect(result.salesSheetSyncPending).toBe(true);
     expect(recoverPendingOrder).toHaveBeenCalledTimes(1);
-    expect(removePendingOrder).not.toHaveBeenCalled();
   });
 
-  it("PR2-SYNC-INDEX-03 an expired KV order is removed from the pending index", async () => {
-    const removePendingOrder = vi.fn().mockResolvedValue(true);
+  it("PR2-SYNC-INDEX-03 delegates expired KV cleanup to locked recovery", async () => {
+    const recoverPendingOrder = vi.fn().mockResolvedValue({
+      outcome: "stale",
+      order: null,
+    });
 
     const result = await getOrdersForAdminWithKvState({
       getSheetOrders: async () => [],
       listPendingOrderIds: async () => ["expired-order"],
       getKvOrder: async () => null,
-      removePendingOrder,
+      recoverPendingOrder,
     });
 
     expect(result).toEqual([]);
-    expect(removePendingOrder).toHaveBeenCalledWith("expired-order");
+    expect(recoverPendingOrder).toHaveBeenCalledWith("expired-order", { rowExists: false });
   });
 
   it("PR2-SYNC-20 two concurrent admin loads perform at most one append", async () => {
@@ -283,7 +283,7 @@ describe("PR 2 admin KV and Sheets reconciliation", () => {
     const appendReleased = new Promise<void>((resolve) => {
       releaseAppend = resolve;
     });
-    let indexed = true;
+    const indexed = true;
     const reconcileProjection = vi.fn(async () => {
       signalAppendEntered();
       await appendReleased;
@@ -293,12 +293,6 @@ describe("PR 2 admin KV and Sheets reconciliation", () => {
       isPending: vi.fn(async () => indexed),
       readOrder: vi.fn(async () => kvOrder),
       reconcileProjection,
-      addPending: vi.fn(async () => false),
-      removePending: vi.fn(async () => {
-        indexed = false;
-        return true;
-      }),
-      now: vi.fn(() => 1_000),
     };
     const adminDependencies = {
       getSheetOrders: async () => [],

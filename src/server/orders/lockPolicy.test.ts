@@ -32,6 +32,7 @@ describe("PR 2 order write lock policy", () => {
     expect(end).toBeGreaterThan(start);
     expect(implementation).toContain("withOrderWriteLock");
     expect(implementation).toContain("persistSalesProjectionStateWithinLock");
+    expect(implementation).toContain("clearPendingSalesProjectionWithinLock");
     expect(implementation).not.toContain("updateOrder(");
   });
 
@@ -44,9 +45,15 @@ describe("PR 2 order write lock policy", () => {
       resolve(process.cwd(), "src/server/orders/salesSheetRecovery.ts"),
       "utf8",
     );
+    const adminSource = readFileSync(
+      resolve(process.cwd(), "src/server/orders/admin.ts"),
+      "utf8",
+    );
 
     expect(storeSource).not.toContain("sales-sheet-recovery-lock");
     expect(recoverySource).toContain("sales-sheet-recovery-lock");
     expect(recoverySource).toContain("reconcileCurrentOrderSalesProjection");
+    expect(recoverySource).not.toContain("removePendingSalesSheetOrder");
+    expect(adminSource).not.toContain("removePendingSalesSheetOrder");
   });
 });
