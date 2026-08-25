@@ -5,7 +5,7 @@ import type { RecoveryPaymentEvent } from "@/src/server/recovery/types";
 const { scheduledTasks } = vi.hoisted(() => ({ scheduledTasks: [] as Promise<void>[] }));
 
 vi.mock("@/src/server/sheets/repository", () => ({
-  appendOrderToSalesSheet: vi.fn(async () => undefined),
+  appendOrderToSalesSheet: vi.fn(async () => ({ deduped: false })),
   decrementProductsStockInSheet: vi.fn(async () => ({ deduped: false, updated: [] })),
   updateOrderRowInSalesSheet: vi.fn(async () => undefined),
   UPDATE_ORDER_ROW_WORST_CASE_MS: 48_800,
@@ -239,7 +239,7 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     const event = durableEvent(order);
     vi.mocked(appendOrderToSalesSheet)
       .mockRejectedValueOnce(new Error("ventas unavailable"))
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce({ deduped: false });
 
     await expect(
       reconcileRecoveryPaymentEvent(event, "worker:h06:first"),

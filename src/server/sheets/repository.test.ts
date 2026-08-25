@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyAdminOrderStatusIntentInSalesSheet,
+  appendOrderToSalesSheet,
   buildSalesSheetRow,
   decrementProductsStockInSheet,
   getOrdersForAdmin,
@@ -36,6 +37,24 @@ const baseOrder: Order = {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+describe("AUD3 H07-D1 ventas append identity response", () => {
+  it.each([
+    { deduped: false, response: { ok: true } },
+    { deduped: true, response: { ok: true, deduped: true } },
+  ])("reports deduped=$deduped without changing the Apps Script contract", async ({
+    deduped,
+    response,
+  }) => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/append");
+    vi.stubEnv("SHEETS_WRITE_TOKEN", "write-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(response), { status: 200 }),
+    );
+
+    await expect(appendOrderToSalesSheet(baseOrder)).resolves.toEqual({ deduped });
+  });
 });
 
 describe("AUD3 H07-C1 Sheet Admin intent contract", () => {

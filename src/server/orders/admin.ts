@@ -16,7 +16,7 @@ import {
   removePendingSalesSheetOrder,
   shouldRecoverOrderInSalesSheet,
 } from "./salesSheetSync";
-import { getOrder } from "./store";
+import { getOrder, projectCurrentOrderSalesState } from "./store";
 import type { Order } from "./types";
 import { listRecoveryAttention } from "@/src/server/recovery/repository";
 import type { RecoveryAttentionItem } from "@/src/server/recovery/types";
@@ -27,6 +27,7 @@ type AdminOrderStateDependencies = {
   getSheetOrders?: typeof getOrdersForAdmin;
   getKvOrder?: typeof getOrder;
   syncSheetState?: typeof updateOrderRowInSalesSheet;
+  projectCurrentState?: typeof projectCurrentOrderSalesState;
   listPendingOrderIds?: typeof listPendingSalesSheetOrderIds;
   removePendingOrder?: typeof removePendingSalesSheetOrder;
   recoverPendingOrder?: typeof recoverPendingSalesSheetOrder;
@@ -231,6 +232,20 @@ export async function getOrdersForAdminWithKvState(
   const readSheetOrders = dependencies.getSheetOrders ?? getOrdersForAdmin;
   const readKvOrder = dependencies.getKvOrder ?? getOrder;
   const syncSheetState = dependencies.syncSheetState ?? updateOrderRowInSalesSheet;
+  const projectCurrentState =
+    dependencies.projectCurrentState ??
+    (dependencies.getKvOrder || dependencies.syncSheetState
+      ? async (
+          orderId: string,
+          selectUpdates: (current: Order) => SheetStateUpdates | null,
+        ) => {
+          const current = await readKvOrder(orderId);
+          if (!current) return null;
+          const updates = selectUpdates(current);
+          if (updates) await syncSheetState(orderId, updates);
+          return current;
+        }
+      : projectCurrentOrderSalesState);
   const listPendingOrderIds =
     dependencies.listPendingOrderIds ?? listPendingSalesSheetOrderIds;
   const removePendingOrder =
@@ -301,11 +316,24 @@ export async function getOrdersForAdminWithKvState(
       if (!resolution.syncUpdates) return resolution.order;
 
       try {
-        await syncSheetState(sheetOrder.orderId, resolution.syncUpdates);
+        const projectedCurrent = await projectCurrentState(
+          sheetOrder.orderId,
+          (current) =>
+            resolveAdminOrderState(sheetOrder, current, current.updatedAt).syncUpdates,
+        );
         logEvent("info", "orders.sheet_sync_recovered", {
           orderId: sheetOrder.orderId,
-          inventoryStatus: resolution.order.inventoryStatus ?? "legacy",
+          inventoryStatus: projectedCurrent
+            ? resolveOrderInventoryStatus(projectedCurrent) ?? "legacy"
+            : resolution.order.inventoryStatus ?? "legacy",
         });
+        if (projectedCurrent) {
+          return resolveAdminOrderState(
+            sheetOrder,
+            projectedCurrent,
+            projectedCurrent.updatedAt,
+          ).order;
+        }
       } catch (error) {
         logEvent("warn", "orders.sheet_sync_pending", {
           orderId: sheetOrder.orderId,

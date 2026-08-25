@@ -1,47 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { CurrentSalesProjectionResult } from "./store";
 import type { Order } from "./types";
-
-vi.mock("@/src/server/sheets/repository", () => ({
-  appendOrderToSalesSheet: vi.fn(),
-  updateOrderRowInSalesSheet: vi.fn(),
-  decrementProductsStockInSheet: vi.fn(),
-  UPDATE_ORDER_ROW_WORST_CASE_MS: 48_800,
-}));
 
 vi.mock("./store", () => ({
   getOrder: vi.fn(),
-  updateOrder: vi.fn(),
+  reconcileCurrentOrderSalesProjection: vi.fn(),
   ORDER_WRITE_LOCK_TTL_SECONDS: 75,
 }));
 
-vi.mock("@/src/server/payments/mpClient", () => ({
-  createPreferenceOnMp: vi.fn(),
-  searchPaymentsByExternalReference: vi.fn(),
-  fetchPaymentByIdFromMp: vi.fn(),
-}));
-
-vi.mock("@/src/server/notifications/orderReceipt", () => ({
-  sendOrderReceiptEmail: vi.fn(),
-}));
-
-import {
-  appendOrderToSalesSheet,
-  decrementProductsStockInSheet,
-  updateOrderRowInSalesSheet,
-} from "@/src/server/sheets/repository";
-import {
-  createPreferenceOnMp,
-  fetchPaymentByIdFromMp,
-  searchPaymentsByExternalReference,
-} from "@/src/server/payments/mpClient";
-import { sendOrderReceiptEmail } from "@/src/server/notifications/orderReceipt";
 import { recoverPendingSalesSheetOrder } from "./salesSheetRecovery";
 
 let sequence = 0;
 const makeOrder = (patch: Partial<Order> = {}): Order => {
   sequence += 1;
   return {
-    externalReference: `pr2-recovery-${Date.now()}-${sequence}`,
+    externalReference: `sales-recovery-${Date.now()}-${sequence}`,
     status: "approved",
     paymentStatus: "confirmed",
     shippingStatus: "in_process",
@@ -51,15 +24,7 @@ const makeOrder = (patch: Partial<Order> = {}): Order => {
     receiptOutboxVersion: 1,
     salesSheetDeferredUntilApprovedAt: 1,
     salesSheetSyncFailedAt: 2,
-    items: [
-      {
-        productId: "p1",
-        title: "Producto",
-        unitPrice: 1000,
-        qty: 1,
-        currency: "ARS",
-      },
-    ],
+    items: [{ productId: "p1", title: "Producto", unitPrice: 1000, qty: 1, currency: "ARS" }],
     total: 1000,
     currency: "ARS",
     createdAt: 10,
@@ -76,296 +41,161 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-const dependenciesFor = (order: Order) => {
-  const removePending = vi.fn().mockResolvedValue(true);
-  const persistOrder = vi.fn().mockImplementation(async (_orderId, patch) => ({
-    ...order,
-    ...patch,
-  }));
-  return {
-    isPending: vi.fn().mockResolvedValue(true),
-    readOrder: vi.fn().mockResolvedValue(order),
-    persistOrder,
-    addPending: vi.fn().mockResolvedValue(false),
-    removePending,
-    now: vi.fn().mockReturnValue(1_000),
-  };
-};
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  vi.mocked(appendOrderToSalesSheet).mockResolvedValue(undefined);
-  vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
+const dependenciesFor = (
+  order: Order,
+  projection: CurrentSalesProjectionResult = { outcome: "appended", order },
+) => ({
+  isPending: vi.fn().mockResolvedValue(true),
+  readOrder: vi.fn().mockResolvedValue(order),
+  reconcileProjection: vi.fn().mockResolvedValue(projection),
+  addPending: vi.fn().mockResolvedValue(false),
+  removePending: vi.fn().mockResolvedValue(true),
 });
 
-describe("PR 2 indexed sales Sheet recovery", () => {
-  it("PR2-SYNC-12 a missing row is appended from the authoritative KV order", async () => {
+describe("AUD3 H07-D1 indexed sales Sheet recovery orchestration", () => {
+  it("PR2-SYNC-12 delegates a missing row to the current-state locked append", async () => {
     const order = makeOrder();
     const dependencies = dependenciesFor(order);
 
-    const result = await recoverPendingSalesSheetOrder(
-      order.externalReference,
-      { rowExists: false },
-      dependencies
-    );
-
-    expect(result.outcome).toBe("appended");
-    expect(appendOrderToSalesSheet).toHaveBeenCalledWith(order);
-    expect(dependencies.persistOrder).toHaveBeenCalledWith(
-      order.externalReference,
-      expect.objectContaining({
-        salesSheetSyncedAt: 1_000,
-        salesSheetSyncFailedAt: undefined,
-      }),
-      { syncSheet: false }
-    );
-  });
-
-  it("PR2-SYNC-13 successful recovery removes the pending index entry", async () => {
-    const order = makeOrder();
-    const dependencies = dependenciesFor(order);
-
-    await recoverPendingSalesSheetOrder(
-      order.externalReference,
-      { rowExists: false },
-      dependencies
-    );
-
-    expect(dependencies.removePending).toHaveBeenCalledOnce();
-    expect(dependencies.removePending).toHaveBeenCalledWith(order.externalReference);
-  });
-
-  it("PR2-SYNC-14 recovery never decrements stock", async () => {
-    const order = makeOrder();
-
-    await recoverPendingSalesSheetOrder(
-      order.externalReference,
-      { rowExists: false },
-      dependenciesFor(order)
-    );
-
-    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
-  });
-
-  it("PR2-SYNC-15 recovery never calls Mercado Pago", async () => {
-    const order = makeOrder();
-
-    await recoverPendingSalesSheetOrder(
-      order.externalReference,
-      { rowExists: false },
-      dependenciesFor(order)
-    );
-
-    expect(createPreferenceOnMp).not.toHaveBeenCalled();
-    expect(searchPaymentsByExternalReference).not.toHaveBeenCalled();
-    expect(fetchPaymentByIdFromMp).not.toHaveBeenCalled();
-  });
-
-  it("PR2-SYNC-16 recovery never sends another receipt", async () => {
-    const order = makeOrder();
-
-    await recoverPendingSalesSheetOrder(
-      order.externalReference,
-      { rowExists: false },
-      dependenciesFor(order)
-    );
-
-    expect(sendOrderReceiptEmail).not.toHaveBeenCalled();
-  });
-
-  it("PR2-SYNC-17 a failed append remains pending, indexed and retryable", async () => {
-    const order = makeOrder();
-    const dependencies = dependenciesFor(order);
-    vi.mocked(appendOrderToSalesSheet).mockRejectedValueOnce(
-      new Error("Sheets unavailable")
-    );
-
-    const result = await recoverPendingSalesSheetOrder(
-      order.externalReference,
-      { rowExists: false },
-      dependencies
-    );
-
-    expect(result.outcome).toBe("pending");
-    expect(dependencies.addPending).toHaveBeenCalledWith(order.externalReference);
-    expect(dependencies.removePending).not.toHaveBeenCalled();
-    expect(dependencies.persistOrder).toHaveBeenCalledWith(
-      order.externalReference,
-      { salesSheetSyncFailedAt: 1_000 },
-      { syncSheet: false }
-    );
-  });
-
-  it("PR2-SYNC-18 a row found after a lost response is not appended again", async () => {
-    const order = makeOrder();
-
-    await recoverPendingSalesSheetOrder(
-      order.externalReference,
-      { rowExists: true },
-      dependenciesFor(order)
-    );
-
-    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
-    expect(updateOrderRowInSalesSheet).toHaveBeenCalledOnce();
-  });
-
-  it("PR2-SYNC-19 an existing row is reconciled and removed from the index", async () => {
-    const order = makeOrder();
-    const dependencies = dependenciesFor(order);
-
-    const result = await recoverPendingSalesSheetOrder(
-      order.externalReference,
-      { rowExists: true },
-      dependencies
-    );
-
-    expect(result.outcome).toBe("reconciled");
-    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
-      order.externalReference,
-      expect.objectContaining({
-        paymentStatus: "confirmed",
-        approvedAt: 15,
-        receiptOutboxVersion: 1,
-        inventoryStatus: "deducted",
-        stockDeductedAt: 100,
-      })
-    );
-    expect(dependencies.removePending).toHaveBeenCalledWith(order.externalReference);
-  });
-
-  it("AUD3-H06E-SALES-02 an older sync timestamp cannot suppress a newer failed projection", async () => {
-    const order = makeOrder({
-      salesSheetSyncedAt: 10,
-      salesSheetSyncFailedAt: 20,
-      salesSheetDeferredUntilApprovedAt: undefined,
+    await expect(
+      recoverPendingSalesSheetOrder(order.externalReference, { rowExists: false }, dependencies),
+    ).resolves.toMatchObject({ outcome: "appended", order });
+    expect(dependencies.reconcileProjection).toHaveBeenCalledWith(order.externalReference, {
+      rowExists: false,
+      requirePending: true,
     });
-    const dependencies = dependenciesFor(order);
-
-    const result = await recoverPendingSalesSheetOrder(
-      order.externalReference,
-      { rowExists: true },
-      dependencies,
-    );
-
-    expect(result.outcome).toBe("reconciled");
-    expect(updateOrderRowInSalesSheet).toHaveBeenCalledOnce();
-    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
   });
 
-  it("AUD3-H06E-SALES-03 repairs an existing enrolled row before clearing durable recovery intent", async () => {
-    const order = makeOrder({
-      salesSheetSyncedAt: 10,
-      salesSheetSyncFailedAt: 20,
-      salesSheetDeferredUntilApprovedAt: undefined,
-    });
+  it("PR2-SYNC-13 removes pending only after a bound successful projection", async () => {
+    const order = makeOrder();
     const dependencies = dependenciesFor(order);
 
-    await recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }, dependencies);
+    await recoverPendingSalesSheetOrder(order.externalReference, { rowExists: false }, dependencies);
 
-    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
-      order.externalReference,
-      expect.objectContaining({
-        paymentStatus: "confirmed",
-        approvedAt: 15,
-        receiptOutboxVersion: 1,
-        inventoryStatus: "deducted",
-        stockDeductedAt: 100,
-      }),
-    );
-    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
-    expect(dependencies.persistOrder).toHaveBeenCalledWith(
-      order.externalReference,
-      expect.objectContaining({
-        salesSheetSyncFailedAt: undefined,
-        salesSheetSyncedAt: 1_000,
-      }),
-      { syncSheet: false },
-    );
-    expect(dependencies.persistOrder.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(dependencies.reconcileProjection.mock.invocationCallOrder[0]).toBeLessThan(
       dependencies.removePending.mock.invocationCallOrder[0],
     );
   });
 
-  it("AUD3-H06E-AUTO-SALES-08 excludes a legacy confirmed Order without enrollment", async () => {
-    const order = makeOrder({
-      receiptOutboxVersion: undefined,
-      salesSheetDeferredUntilApprovedAt: undefined,
-      salesSheetSyncFailedAt: 20,
+  it("PR2-SYNC-17 leaves a failed current projection indexed and retryable", async () => {
+    const order = makeOrder();
+    const dependencies = dependenciesFor(order, {
+      outcome: "failed",
+      order: { ...order, salesSheetSyncFailedAt: 30 },
+      error: new Error("Sheets unavailable"),
     });
-    const dependencies = dependenciesFor(order);
 
-    const result = await recoverPendingSalesSheetOrder(
-      order.externalReference,
-      { rowExists: true },
-      dependencies,
-    );
+    await expect(
+      recoverPendingSalesSheetOrder(order.externalReference, { rowExists: false }, dependencies),
+    ).resolves.toMatchObject({ outcome: "pending" });
+    expect(dependencies.addPending).toHaveBeenCalledWith(order.externalReference);
+    expect(dependencies.removePending).not.toHaveBeenCalled();
+  });
 
-    expect(result.outcome).toBe("not_eligible");
-    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
-    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
+  it("PR2-SYNC-18 reconciles a caller-reported existing row without append assumptions", async () => {
+    const order = makeOrder();
+    const dependencies = dependenciesFor(order, { outcome: "projected", order });
+
+    await expect(
+      recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }, dependencies),
+    ).resolves.toMatchObject({ outcome: "reconciled" });
+    expect(dependencies.reconcileProjection).toHaveBeenCalledWith(order.externalReference, {
+      rowExists: true,
+      requirePending: true,
+    });
+  });
+
+  it("AUD3-H06E-SALES-02 does not suppress pending work using an old success marker", async () => {
+    const order = makeOrder({ salesSheetSyncedAt: 10, salesSheetSyncFailedAt: undefined });
+    const dependencies = dependenciesFor(order, { outcome: "projected", order });
+
+    await recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }, dependencies);
+
+    expect(dependencies.reconcileProjection).toHaveBeenCalledOnce();
+    expect(dependencies.removePending).toHaveBeenCalledOnce();
+  });
+
+  it("AUD3-H06E-AUTO-SALES-08 removes an ineligible indexed entry", async () => {
+    const order = makeOrder({ receiptOutboxVersion: undefined });
+    const dependencies = dependenciesFor(order, { outcome: "not_eligible", order });
+
+    await expect(
+      recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }, dependencies),
+    ).resolves.toMatchObject({ outcome: "not_eligible" });
     expect(dependencies.removePending).toHaveBeenCalledWith(order.externalReference);
   });
 
-  it("AUD3-H06E-AUTO-SALES-09 reconciles an existing row without a duplicate append", async () => {
-    const order = makeOrder({ salesSheetSyncedAt: 10, salesSheetSyncFailedAt: 20 });
+  it("PR2-SYNC-INDEX-03 removes a stale index entry after locked KV absence", async () => {
+    const order = makeOrder();
+    const dependencies = dependenciesFor(order, { outcome: "missing", order: null });
 
-    await recoverPendingSalesSheetOrder(
-      order.externalReference,
-      { rowExists: true },
-      dependenciesFor(order),
-    );
-
-    expect(updateOrderRowInSalesSheet).toHaveBeenCalledOnce();
-    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
+    await expect(
+      recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }, dependencies),
+    ).resolves.toEqual({ outcome: "stale", order: null });
+    expect(dependencies.removePending).toHaveBeenCalledWith(order.externalReference);
   });
 
-  it("AUD3-H06E-AUTO-SALES-10 keeps recovery indexed when an existing-row repair fails again", async () => {
-    const order = makeOrder({ salesSheetSyncedAt: 10, salesSheetSyncFailedAt: 20 });
+  it("H07D1-APPEND-01 reconciles current state after append identity dedupe", async () => {
+    const order = makeOrder();
+    const current = { ...order, shippingStatus: "completed" as const };
     const dependencies = dependenciesFor(order);
-    vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(new Error("Sheets still unavailable"));
+    dependencies.reconcileProjection
+      .mockResolvedValueOnce({ outcome: "deduped", order })
+      .mockResolvedValueOnce({ outcome: "projected", order: current });
 
     const result = await recoverPendingSalesSheetOrder(
       order.externalReference,
-      { rowExists: true },
+      { rowExists: false },
       dependencies,
     );
 
-    expect(result.outcome).toBe("pending");
-    expect(dependencies.addPending).toHaveBeenCalledWith(order.externalReference);
-    expect(dependencies.removePending).not.toHaveBeenCalled();
-    expect(dependencies.persistOrder).toHaveBeenCalledWith(
-      order.externalReference,
-      { salesSheetSyncFailedAt: 1_000 },
-      { syncSheet: false },
+    expect(result).toMatchObject({ outcome: "reconciled", order: current });
+    expect(dependencies.reconcileProjection).toHaveBeenNthCalledWith(2, order.externalReference, {
+      rowExists: true,
+      requirePending: true,
+    });
+    expect(dependencies.reconcileProjection.mock.invocationCallOrder[1]).toBeLessThan(
+      dependencies.removePending.mock.invocationCallOrder[0],
     );
-    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
   });
 
-  it("PR2-SYNC-20-LOCK concurrent recovery allows at most one effective append", async () => {
+  it("H07D1-CRASH-02 keeps pending when index removal fails after marker success", async () => {
+    const order = makeOrder({ salesSheetSyncedAt: 30, salesSheetSyncFailedAt: undefined });
+    const dependencies = dependenciesFor(order, { outcome: "projected", order });
+    dependencies.removePending.mockRejectedValueOnce(new Error("KV set unavailable"));
+
+    await expect(
+      recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }, dependencies),
+    ).resolves.toMatchObject({ outcome: "pending", order });
+    expect(dependencies.addPending).toHaveBeenCalledWith(order.externalReference);
+  });
+
+  it("PR2-SYNC-20-LOCK retains the recovery lock only as worker dedupe", async () => {
     const order = makeOrder();
-    const firstAppendEntered = deferred();
-    const releaseFirstAppend = deferred();
+    const entered = deferred();
+    const release = deferred();
     const dependencies = dependenciesFor(order);
-    vi.mocked(appendOrderToSalesSheet).mockImplementationOnce(async () => {
-      firstAppendEntered.resolve();
-      await releaseFirstAppend.promise;
+    dependencies.reconcileProjection.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return { outcome: "appended", order };
     });
 
     const first = recoverPendingSalesSheetOrder(
       order.externalReference,
       { rowExists: false },
-      dependencies
+      dependencies,
     );
-    await firstAppendEntered.promise;
+    await entered.promise;
     const second = recoverPendingSalesSheetOrder(
       order.externalReference,
       { rowExists: false },
-      dependencies
+      dependencies,
     );
-    await expect(second).resolves.toMatchObject({ outcome: "busy" });
-    releaseFirstAppend.resolve();
-    await expect(first).resolves.toMatchObject({ outcome: "appended" });
 
-    expect(appendOrderToSalesSheet).toHaveBeenCalledTimes(1);
+    await expect(second).resolves.toMatchObject({ outcome: "busy" });
+    release.resolve();
+    await expect(first).resolves.toMatchObject({ outcome: "appended" });
+    expect(dependencies.reconcileProjection).toHaveBeenCalledTimes(1);
   });
 });

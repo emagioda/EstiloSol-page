@@ -8,7 +8,7 @@ const { scheduledTasks } = vi.hoisted(() => ({
 
 vi.mock("@/src/server/sheets/repository", () => ({
   appendOrderAndDecrementStockInSheet: vi.fn(async () => undefined),
-  appendOrderToSalesSheet: vi.fn(async () => undefined),
+  appendOrderToSalesSheet: vi.fn(async () => ({ deduped: false })),
   decrementProductsStockInSheet: vi.fn(async () => undefined),
   updateOrderRowInSalesSheet: vi.fn(async () => undefined),
 }));
@@ -49,7 +49,7 @@ describe("verify-payment confirmation flow", () => {
     vi.clearAllMocks();
     scheduledTasks.splice(0);
     process.env.MP_ACCESS_TOKEN = "test-token";
-    vi.mocked(appendOrderToSalesSheet).mockResolvedValue(undefined);
+    vi.mocked(appendOrderToSalesSheet).mockResolvedValue({ deduped: false });
     vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: false, updated: [] });
     vi.mocked(prepareProtectedPaymentDurability)
       .mockReset()

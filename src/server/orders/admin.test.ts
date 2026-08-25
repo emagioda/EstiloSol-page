@@ -284,19 +284,15 @@ describe("PR 2 admin KV and Sheets reconciliation", () => {
       releaseAppend = resolve;
     });
     let indexed = true;
-    const appendOrder = vi.fn(async () => {
+    const reconcileProjection = vi.fn(async () => {
       signalAppendEntered();
       await appendReleased;
+      return { outcome: "appended" as const, order: kvOrder };
     });
     const recoveryDependencies = {
       isPending: vi.fn(async () => indexed),
       readOrder: vi.fn(async () => kvOrder),
-      appendOrder,
-      updateSheetRow: vi.fn(),
-      persistOrder: vi.fn(async (_orderId: string, patch: Partial<Order>) => ({
-        ...kvOrder,
-        ...patch,
-      })),
+      reconcileProjection,
       addPending: vi.fn(async () => false),
       removePending: vi.fn(async () => {
         indexed = false;
@@ -321,7 +317,7 @@ describe("PR 2 admin KV and Sheets reconciliation", () => {
 
     expect(firstResult).toHaveLength(1);
     expect(secondResult).toHaveLength(1);
-    expect(appendOrder).toHaveBeenCalledTimes(1);
+    expect(reconcileProjection).toHaveBeenCalledTimes(1);
   });
 
   it("AUD3-H06-MERGE-01 preserves Sheet confirmed over stale KV pending without writing pending", () => {
@@ -399,5 +395,61 @@ describe("PR 2 admin KV and Sheets reconciliation", () => {
       financialAttentionCode: "FINANCIAL_EVIDENCE_CONFLICT",
     });
     expect(resolution.syncUpdates?.paymentStatus).not.toBe("charged_back");
+  });
+
+  it("H07D1-ADMIN-01 derives read repair fields from the current locked Order", async () => {
+    const sheetOrder = makeSheetOrder({
+      paymentStatus: "pending",
+      shippingStatus: "in_process",
+    });
+    const o1 = makeKvOrder({ shippingStatus: "in_process", updatedAt: 100 });
+    const o2 = makeKvOrder({
+      shippingStatus: "completed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: STOCK_DEDUCTED_AT,
+      updatedAt: 200,
+    });
+    let current = o1;
+    let releaseProjection!: () => void;
+    let signalProjectionEntered!: () => void;
+    const projectionEntered = new Promise<void>((resolve) => {
+      signalProjectionEntered = resolve;
+    });
+    const projectionReleased = new Promise<void>((resolve) => {
+      releaseProjection = resolve;
+    });
+    const sheetWrites: Array<Record<string, unknown>> = [];
+
+    const adminLoad = getOrdersForAdminWithKvState({
+      getSheetOrders: async () => [sheetOrder],
+      getKvOrder: async () => o1,
+      listPendingOrderIds: async () => [],
+      projectCurrentState: async (_orderId, selectUpdates) => {
+        signalProjectionEntered();
+        await projectionReleased;
+        const updates = selectUpdates(current);
+        if (updates) sheetWrites.push(updates);
+        return current;
+      },
+    });
+    await projectionEntered;
+    current = o2;
+    releaseProjection();
+    const [result] = await adminLoad;
+
+    expect(sheetWrites).toEqual([
+      expect.objectContaining({
+        paymentStatus: "confirmed",
+        shippingStatus: "completed",
+        inventoryStatus: "deducted",
+        stockDeductedAt: STOCK_DEDUCTED_AT,
+        updatedAt: 200,
+      }),
+    ]);
+    expect(result).toMatchObject({
+      paymentStatus: "confirmed",
+      shippingStatus: "completed",
+      inventoryStatus: "deducted",
+    });
   });
 });

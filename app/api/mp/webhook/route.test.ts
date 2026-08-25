@@ -59,7 +59,7 @@ describe("mercado pago webhook route", () => {
     vi.clearAllMocks();
     process.env.MP_ACCESS_TOKEN = "test-token";
     process.env.MP_WEBHOOK_SECRET = "webhook-secret";
-    vi.mocked(appendOrderToSalesSheet).mockResolvedValue(undefined);
+    vi.mocked(appendOrderToSalesSheet).mockResolvedValue({ deduped: false });
     vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
     vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: false, updated: [] });
     vi.mocked(prepareProtectedPaymentDurability).mockResolvedValue({ protected: false });

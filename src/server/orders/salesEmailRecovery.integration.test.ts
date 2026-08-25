@@ -66,7 +66,7 @@ const makeOrder = (paymentMethod: OrderPaymentMethod): Order => {
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.RESEND_API_KEY = "re_test_synthetic_only";
-  vi.mocked(appendOrderToSalesSheet).mockResolvedValue(undefined);
+  vi.mocked(appendOrderToSalesSheet).mockResolvedValue({ deduped: false });
   vi.mocked(getOrderRowById).mockResolvedValue({} as never);
   vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
   vi.mocked(decrementProductsStockInSheet).mockResolvedValue({
