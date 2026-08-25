@@ -18,7 +18,12 @@ vi.mock("@/src/server/orders/store", () => ({
   getOrder: vi.fn(),
   markApproved: vi.fn(),
   retryPaidOrderInventory: vi.fn(),
+  runMissingOrderSheetFallback: vi.fn(),
   updateOrder: vi.fn(),
+}));
+
+vi.mock("@/src/server/recovery/service", () => ({
+  reconstructOrderAuthorityFromDurableEvidence: vi.fn(async () => null),
 }));
 
 vi.mock("@/src/server/payments/adminConfirmation", () => ({
@@ -29,6 +34,7 @@ vi.mock("@/src/server/sheets/repository", () => ({
   applyAdminOrderStatusIntentInSalesSheet: vi.fn(),
   decrementProductsStockInSheet: vi.fn(),
   getOrderRowById: vi.fn(),
+  getUniqueOrderRowById: vi.fn(),
   updateOrderRowInSalesSheet: vi.fn(),
   updateProductRowInSheet: vi.fn(),
 }));
@@ -43,6 +49,7 @@ import {
   getOrder,
   markApproved,
   retryPaidOrderInventory,
+  runMissingOrderSheetFallback,
   updateOrder,
 } from "@/src/server/orders/store";
 import { ensurePurchaseReceiptEventSafely } from "@/src/server/emailOutbox/service";
@@ -50,9 +57,11 @@ import {
   applyAdminOrderStatusIntentInSalesSheet,
   decrementProductsStockInSheet,
   getOrderRowById,
+  getUniqueOrderRowById,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
 import { reconcileAdminMercadoPagoConfirmation } from "@/src/server/payments/adminConfirmation";
+import { reconstructOrderAuthorityFromDurableEvidence } from "@/src/server/recovery/service";
 import {
   evaluateAdminPaymentTransitionRequest,
   getPaymentTransitionBlockMessage,
@@ -154,6 +163,7 @@ const claimedManualSheetOrder = (
       ...base.raw,
       mp_payment_id: `manual-${base.orderId}`,
       mp_status: "manual_confirmed",
+      order_status: "approved",
       approved_at: new Date(10).toISOString(),
       receipt_outbox_version: 1,
       ...(patch.raw || {}),
@@ -184,6 +194,17 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.MP_ACCESS_TOKEN = "test-token";
   vi.mocked(reconcileAdminMercadoPagoConfirmation).mockReset();
+  vi.mocked(reconstructOrderAuthorityFromDurableEvidence).mockResolvedValue(null);
+  vi.mocked(getUniqueOrderRowById).mockImplementation(async (id) => {
+    const order = await vi.mocked(getOrderRowById)(id);
+    return order
+      ? { outcome: "unique" as const, order }
+      : { outcome: "missing" as const, order: null };
+  });
+  vi.mocked(runMissingOrderSheetFallback).mockImplementation(async (_id, fallback) => ({
+    outcome: "sheet_fallback" as const,
+    result: await fallback(),
+  }));
   vi.mocked(updateOrder).mockImplementation(async (_id, patch) => baseOrder(patch));
   vi.mocked(assertAdminPaymentTransitionRequest).mockImplementation(async (id, requested) => {
     const order = await vi.mocked(getOrder)(id);
@@ -344,6 +365,7 @@ beforeEach(() => {
         sheetOrder.paymentStatus = "confirmed";
         raw.mp_payment_id = `manual-${id}`;
         raw.mp_status = "manual_confirmed";
+        raw.order_status = "approved";
         raw.approved_at = new Date(10).toISOString();
         raw.receipt_outbox_version = 1;
         await vi.mocked(updateOrderRowInSalesSheet)(id, {
@@ -663,12 +685,13 @@ describe("PR 2 Sheets fallback", () => {
   });
 
   it("PR2-FALLBACK-03 existing stock timestamp avoids another decrement", async () => {
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
     vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
       inventoryStatus: "deducted",
       stockDeductedAt: "2026-08-01T00:00:00.000Z",
     }));
     await save("sheet-order-1");
-    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
   });
 
   it("PR2-FALLBACK-04 decimal qty in items_json is not truncated", () => {
@@ -843,11 +866,10 @@ describe("AUD3 H07 Admin fulfillment completion", () => {
 
   it("FALLBACK-H07-02 fails closed when the existing Sheet snapshot is incomplete", async () => {
     vi.mocked(getOrder).mockResolvedValue(null);
-    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
-      paymentStatus: "confirmed",
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
       inventoryStatus: "deducted",
       stockDeductedAt: "2026-08-01T00:00:00.000Z",
-      raw: { items_json: JSON.stringify([{ productId: "p1", qty: 1, unitPrice: 1000 }]) },
+      raw: { total_final: "" },
     }));
 
     expect((await save("sheet-order-1", "confirmed", "completed")).results[0]).toMatchObject({
@@ -877,8 +899,7 @@ describe("AUD3 H07 Admin fulfillment completion", () => {
   });
 
   it("FALLBACK-H07-04 rejects a missing pickup reference from existing fields", async () => {
-    const sheetOrder = baseSheetOrder({
-      paymentStatus: "confirmed",
+    const sheetOrder = claimedManualSheetOrder({
       inventoryStatus: "deducted",
       stockDeductedAt: "2026-08-01T00:00:00.000Z",
     });
@@ -895,8 +916,7 @@ describe("AUD3 H07 Admin fulfillment completion", () => {
 
   it("FALLBACK-H07-05 blocks a terminal financial update and preserves completion", async () => {
     vi.mocked(getOrder).mockResolvedValue(null);
-    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
-      paymentStatus: "confirmed",
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
       shippingStatus: "completed",
       inventoryStatus: "deducted",
       stockDeductedAt: "2026-08-01T00:00:00.000Z",
@@ -914,6 +934,106 @@ describe("AUD3 H07 Admin fulfillment completion", () => {
       paymentBlockReason: "PAYMENT_CONFIRMED_CANNOT_BE_DOWNGRADED",
     });
     expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+  });
+
+  it("H07D2-FALLBACK-AUTH-01 blocks new completion from stale Sheet approval", async () => {
+    const reconstructed = baseOrder({
+      externalReference: "sheet-order-1",
+      paymentMethod: "mercadopago",
+      status: "refunded",
+      paymentStatus: "refunded",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+    });
+    vi.mocked(getOrder)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(reconstructed);
+    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
+      paymentMethod: "mercadopago",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: "2026-08-01T00:00:00.000Z",
+    }));
+    vi.mocked(reconstructOrderAuthorityFromDurableEvidence).mockResolvedValue(reconstructed);
+
+    const result = await saveOrderStatusesBatchAction([{
+      orderId: "sheet-order-1",
+      changedFields: ["shippingStatus"],
+      expectedShippingStatus: "in_process",
+      requestedShippingStatus: "completed",
+    }]);
+    expect(result.results[0]).toMatchObject({
+      paymentStatus: "refunded",
+      shippingStatus: "in_process",
+      completionBlockReason: "PAYMENT_NOT_CONFIRMED",
+    });
+    expect(applyAdminOrderStatusIntentInSalesSheet).not.toHaveBeenCalled();
+  });
+
+  it("H07D2-FALLBACK-AUTH-02 uses reconstructed journal truth for completion", async () => {
+    const reconstructed = baseOrder({
+      externalReference: "sheet-order-1",
+      paymentMethod: "mercadopago",
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 10,
+    });
+    vi.mocked(getOrder)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(reconstructed);
+    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
+      paymentMethod: "mercadopago",
+      paymentStatus: "confirmed",
+      inventoryStatus: "pending",
+    }));
+    vi.mocked(reconstructOrderAuthorityFromDurableEvidence).mockResolvedValue(reconstructed);
+
+    const result = await saveOrderStatusesBatchAction([{
+      orderId: "sheet-order-1",
+      changedFields: ["shippingStatus"],
+      expectedShippingStatus: "in_process",
+      requestedShippingStatus: "completed",
+    }]);
+    expect(result.results[0]).toMatchObject({
+      inventoryStatus: "deducted",
+      shippingStatus: "completed",
+      shippingBlocked: false,
+    });
+    expect(applyAdminOrderStatusIntentInSalesSheet).not.toHaveBeenCalled();
+  });
+
+  it("H07D2-FALLBACK-AUTH-03 rejects stale Sheet inventory without journal proof", async () => {
+    const reconstructed = baseOrder({
+      externalReference: "sheet-order-1",
+      paymentMethod: "mercadopago",
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "conflict",
+    });
+    vi.mocked(getOrder)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(reconstructed);
+    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
+      paymentMethod: "mercadopago",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: "2026-08-01T00:00:00.000Z",
+    }));
+    vi.mocked(reconstructOrderAuthorityFromDurableEvidence).mockResolvedValue(reconstructed);
+
+    const result = await saveOrderStatusesBatchAction([{
+      orderId: "sheet-order-1",
+      changedFields: ["shippingStatus"],
+      expectedShippingStatus: "in_process",
+      requestedShippingStatus: "completed",
+    }]);
+    expect(result.results[0]).toMatchObject({
+      inventoryStatus: "conflict",
+      shippingStatus: "in_process",
+      completionBlockReason: "INVENTORY_REQUIRES_ATTENTION",
+    });
+    expect(applyAdminOrderStatusIntentInSalesSheet).not.toHaveBeenCalled();
   });
 
   it("BATCH-01 applies the same policy independently to valid and blocked rows", async () => {
@@ -1015,6 +1135,7 @@ describe("AUD3 H07-C1 claimed Sheet payment crash recovery", () => {
   });
 
   it("H07C1-FALLBACK-CRASH-03 repairs the missing receipt with canonical payment data", async () => {
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
     vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
       inventoryStatus: "deducted",
       stockDeductedAt: "2026-08-01T00:00:00.000Z",
@@ -1022,7 +1143,7 @@ describe("AUD3 H07-C1 claimed Sheet payment crash recovery", () => {
 
     await save("sheet-order-1");
 
-    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
     expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledTimes(1);
     expect(ensurePurchaseReceiptEventSafely).toHaveBeenCalledWith({
       order: expect.objectContaining({
@@ -1036,6 +1157,7 @@ describe("AUD3 H07-C1 claimed Sheet payment crash recovery", () => {
   });
 
   it("H07C1-FALLBACK-CRASH-04 keeps a fully completed replay effect-free", async () => {
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
     vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
       inventoryStatus: "deducted",
       stockDeductedAt: "2026-08-01T00:00:00.000Z",
@@ -1045,9 +1167,12 @@ describe("AUD3 H07-C1 claimed Sheet payment crash recovery", () => {
     const result = await save("sheet-order-1");
 
     expect(result.ok).toBe(true);
-    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
     expect(ensurePurchaseReceiptEventSafely).not.toHaveBeenCalled();
-    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({ inventoryStatus: "deducted" }),
+    );
   });
 
   it("H07C1-FALLBACK-CRASH-05 repairs inventory before completing combined shipping", async () => {

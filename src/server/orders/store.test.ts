@@ -1,13 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InventoryOperationError } from "@/src/server/inventory/errors";
 import type { Order } from "@/src/server/orders/types";
+import type { RecoveryPaymentEvent } from "@/src/server/recovery/types";
+import type { AdminOrderSheetRow } from "@/src/server/sheets/repository";
 import { setJson } from "@/src/server/kv";
 import * as kv from "@/src/server/kv";
 
 vi.mock("@/src/server/sheets/repository", () => ({
   appendOrderToSalesSheet: vi.fn(),
   decrementProductsStockInSheet: vi.fn(),
+  getUniqueOrderRowById: vi.fn(),
   updateOrderRowInSalesSheet: vi.fn(),
+  SHEETS_GET_WORST_CASE_MS: 20_300,
+  SHEETS_MUTATION_WORST_CASE_MS: 24_400,
   UPDATE_ORDER_ROW_WORST_CASE_MS: 48_800,
 }));
 
@@ -35,9 +40,11 @@ import {
   ORDER_WRITE_LOCK_TTL_SECONDS,
   orderWriteLockCoversWorstCaseSheetUpdate,
   projectCurrentOrderSalesState,
+  reconstructOrderFromAuthorityEvidence,
   reconcileCurrentOrderSalesProjection,
   reconcileMercadoPagoPaymentObservationBatch,
   retryPaidOrderInventory,
+  runMissingOrderSheetFallback,
   updateOrder,
 } from "./store";
 import { AdminOrderStateChangedError } from "./adminIntent";
@@ -46,6 +53,7 @@ import { evaluateFulfillmentCompletion } from "./fulfillmentCompletion";
 import {
   appendOrderToSalesSheet,
   decrementProductsStockInSheet,
+  getUniqueOrderRowById,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
 import { invalidateProductsCatalogCache } from "@/src/server/catalog/getProducts";
@@ -117,6 +125,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(appendOrderToSalesSheet).mockResolvedValue({ deduped: false });
   vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
+  vi.mocked(getUniqueOrderRowById).mockResolvedValue({ outcome: "missing", order: null });
   vi.mocked(invalidateProductsCatalogCache).mockResolvedValue(undefined);
   vi.mocked(decrementProductsStockInSheet).mockResolvedValue({
     deduped: false,
@@ -1946,5 +1955,235 @@ describe("AUD3 H07-D1 serialized KV-derived sales projections", () => {
     expect(vi.mocked(updateOrderRowInSalesSheet).mock.calls.at(-1)?.[1]).toMatchObject({
       mpPreferenceId: "pref-o2",
     });
+  });
+});
+
+describe("AUD3 H07-D2A KV absence authority serialization", () => {
+  const recoveryEvent = (order: Order): RecoveryPaymentEvent => ({
+    eventKey: `event-${order.externalReference}`,
+    paymentId: `payment-${order.externalReference}`,
+    externalReference: order.externalReference,
+    financialStatus: "approved",
+    amount: order.total,
+    currency: order.currency,
+    observedAt: new Date(order.createdAt + 1000).toISOString(),
+    source: "webhook",
+    schemaVersion: 1,
+    snapshotHash: "a".repeat(64),
+    validationState: "validated",
+    processingState: "pending",
+    attemptCount: 0,
+    updatedAt: new Date(order.createdAt + 1000).toISOString(),
+  });
+
+  const authorityEvidence = (order: Order) => ({
+    paymentEvents: [recoveryEvent(order)],
+    receiptEventExists: false,
+  });
+
+  const row = (order: Order): AdminOrderSheetRow => ({
+    orderId: order.externalReference,
+    createdAt: new Date(order.createdAt).toISOString(),
+    createdAtMs: order.createdAt,
+    customerName: "Sheet",
+    whatsapp: "",
+    email: "",
+    total: order.total,
+    currency: "ARS",
+    paymentStatus: "confirmed",
+    shippingStatus: "in_process",
+    inventoryStatus: "pending",
+    inventoryIssueCode: "",
+    inventoryIssueAt: "",
+    stockDeductedAt: "",
+    paymentMethod: "mercadopago",
+    deliveryMethod: order.deliveryMethod,
+    items: order.items,
+    itemsSummary: "1x Producto",
+    notes: "",
+    receiptEmailSentAt: "",
+    raw: {
+      nro_de_compra: order.externalReference,
+      fecha: new Date(order.createdAt).toISOString(),
+      total: order.total,
+      currency: "ARS",
+      estado_de_pago: "Confirmado",
+      estado_de_envio: "En proceso",
+      payment_method_code: "mercadopago",
+      delivery_method_code: order.deliveryMethod,
+    },
+  });
+
+  it("H07D2-KVABS-01 publishes and projects completed without an in_process seed", async () => {
+    const order = makeOrder();
+    const completedRow = {
+      ...row(order),
+      shippingStatus: "completed" as const,
+      raw: { ...row(order).raw, estado_de_envio: "Finalizado" },
+    };
+    vi.mocked(getUniqueOrderRowById).mockResolvedValue({
+      outcome: "unique",
+      order: completedRow,
+    });
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
+
+    const reconstructed = await reconstructOrderFromAuthorityEvidence(
+      order,
+      authorityEvidence(order),
+    );
+    expect(reconstructed.order).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      shippingStatus: "completed",
+    });
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      shippingStatus: "completed",
+    });
+
+    await expect(reconcileCurrentOrderSalesProjection(order.externalReference, {
+      rowExists: true,
+    })).resolves.toMatchObject({ outcome: "projected" });
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      order.externalReference,
+      expect.objectContaining({ shippingStatus: "completed" }),
+    );
+  });
+
+  it("H07D2-RACE-01 lets fallback commit before reconstruction publishes one merged candidate", async () => {
+    const order = makeOrder();
+    const fallbackEntered = deferred();
+    const releaseFallback = deferred();
+    let currentRow = row(order);
+    vi.mocked(getUniqueOrderRowById).mockImplementation(async () => ({
+      outcome: "unique",
+      order: currentRow,
+    }));
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
+
+    const fallback = runMissingOrderSheetFallback(order.externalReference, async () => {
+      fallbackEntered.resolve();
+      await releaseFallback.promise;
+      currentRow = { ...currentRow, paymentStatus: "confirmed" };
+      return "committed";
+    });
+    await fallbackEntered.promise;
+    const reconstruction = reconstructOrderFromAuthorityEvidence(order, authorityEvidence(order));
+    await expect(getOrder(order.externalReference)).resolves.toBeNull();
+    releaseFallback.resolve();
+
+    await expect(fallback).resolves.toEqual({ outcome: "sheet_fallback", result: "committed" });
+    await expect(reconstruction).resolves.toMatchObject({
+      created: true,
+      order: { paymentStatus: "confirmed", inventoryStatus: "deducted" },
+    });
+  });
+
+  it("H07D2-RACE-02 suppresses a stale fallback after reconstruction wins the lock", async () => {
+    const order = makeOrder();
+    const lookupEntered = deferred();
+    const releaseLookup = deferred();
+    vi.mocked(getUniqueOrderRowById).mockImplementationOnce(async () => {
+      lookupEntered.resolve();
+      await releaseLookup.promise;
+      return { outcome: "unique", order: row(order) };
+    });
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
+    const reconstruction = reconstructOrderFromAuthorityEvidence(order, authorityEvidence(order));
+    await lookupEntered.promise;
+    const sheetFallback = vi.fn(async () => "must-not-run");
+    const fallback = runMissingOrderSheetFallback(order.externalReference, sheetFallback);
+    releaseLookup.resolve();
+
+    await expect(reconstruction).resolves.toMatchObject({ created: true });
+    await expect(fallback).resolves.toEqual({ outcome: "kv_authority_returned" });
+    expect(sheetFallback).not.toHaveBeenCalled();
+  });
+
+  it("H07D2-KVERR-01 fails closed without invoking the Sheet fallback", async () => {
+    const order = makeOrder();
+    const sheetFallback = vi.fn(async () => "must-not-run");
+    const getSpy = vi.spyOn(kv, "getJson").mockRejectedValueOnce(new Error("KV unavailable"));
+    await expect(
+      runMissingOrderSheetFallback(order.externalReference, sheetFallback),
+    ).rejects.toThrow("KV unavailable");
+    expect(sheetFallback).not.toHaveBeenCalled();
+    getSpy.mockRestore();
+  });
+
+  it("H07D2-MALFORMED-KV-01 does not treat an incoherent KV value as absence", async () => {
+    const order = makeOrder();
+    await setJson(`es:order:${order.externalReference}`, { externalReference: order.externalReference }, 60);
+    const sheetFallback = vi.fn(async () => "must-not-run");
+    await expect(
+      runMissingOrderSheetFallback(order.externalReference, sheetFallback),
+    ).rejects.toMatchObject({ code: "ORDER_AUTHORITY_MALFORMED_KV_ORDER" });
+    expect(sheetFallback).not.toHaveBeenCalled();
+  });
+
+  it("H07D2-DUP-01 rejects duplicate ventas rows before the first KV claim", async () => {
+    const order = makeOrder();
+    vi.mocked(getUniqueOrderRowById).mockResolvedValue({
+      outcome: "duplicate",
+      order: null,
+      count: 2,
+    });
+    await expect(
+      reconstructOrderFromAuthorityEvidence(order, authorityEvidence(order)),
+    ).rejects.toMatchObject({ code: "ORDER_AUTHORITY_DUPLICATE_SALES_ROWS" });
+    await expect(getOrder(order.externalReference)).resolves.toBeNull();
+  });
+
+  it("H07D2-MALFORMED-SHEET-01 rejects incoherent ventas before inventory or KV", async () => {
+    const order = makeOrder();
+    vi.mocked(getUniqueOrderRowById).mockResolvedValue({
+      outcome: "unique",
+      order: { ...row(order), raw: { estado_de_pago: "???" } },
+    });
+    await expect(
+      reconstructOrderFromAuthorityEvidence(order, authorityEvidence(order)),
+    ).rejects.toMatchObject({ code: "ORDER_AUTHORITY_INCOHERENT_SALES_ROW" });
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    await expect(getOrder(order.externalReference)).resolves.toBeNull();
+  });
+
+  it("H07D2-MALFORMED-EVENT-01 rejects provider evidence before inventory or KV", async () => {
+    const order = makeOrder();
+    vi.mocked(getUniqueOrderRowById).mockResolvedValue({ outcome: "missing", order: null });
+    await expect(
+      reconstructOrderFromAuthorityEvidence(order, {
+        paymentEvents: [{ ...recoveryEvent(order), amount: order.total + 1 }],
+        receiptEventExists: false,
+      }),
+    ).rejects.toMatchObject({ code: "ORDER_AUTHORITY_INVALID_CANDIDATE" });
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    await expect(getOrder(order.externalReference)).resolves.toBeNull();
+  });
+
+  it("H07D2-CRASH-01 leaves KV absent when evidence arbitration fails before claim", async () => {
+    const order = makeOrder();
+    vi.mocked(getUniqueOrderRowById).mockRejectedValueOnce(new Error("ventas unavailable"));
+    await expect(
+      reconstructOrderFromAuthorityEvidence(order, authorityEvidence(order)),
+    ).rejects.toThrow("ventas unavailable");
+    await expect(getOrder(order.externalReference)).resolves.toBeNull();
+  });
+
+  it("H07D2-CRASH-02 leaves the first published KV fully authoritative before projection", async () => {
+    const order = makeOrder();
+    vi.mocked(getUniqueOrderRowById).mockResolvedValue({ outcome: "unique", order: row(order) });
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
+    const reconstructed = await reconstructOrderFromAuthorityEvidence(order, {
+      ...authorityEvidence(order),
+      receiptEventExists: true,
+    });
+
+    expect(reconstructed.order).toMatchObject({
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      shippingStatus: "in_process",
+      receiptOutboxVersion: 1,
+    });
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject(reconstructed.order);
   });
 });

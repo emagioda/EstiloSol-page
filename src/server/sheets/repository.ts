@@ -41,6 +41,10 @@ const DEFAULT_GET_POLICY = {
   retryDelayMs: 300,
 } as const;
 
+export const SHEETS_GET_WORST_CASE_MS =
+  DEFAULT_GET_POLICY.timeoutMs * (DEFAULT_GET_POLICY.retries + 1) +
+  DEFAULT_GET_POLICY.retryDelayMs * DEFAULT_GET_POLICY.retries;
+
 const DEFAULT_MUTATION_POLICY = {
   timeoutMs: 12_000,
   retries: 1,
@@ -1228,4 +1232,23 @@ export async function getOrderRowById(orderId: string): Promise<AdminOrderSheetR
   if (!orderId.trim()) return null;
   const orders = await getOrdersForAdmin();
   return orders.find((order) => order.orderId === orderId) || null;
+}
+
+export type UniqueAdminOrderRowResult =
+  | { outcome: "missing"; order: null }
+  | { outcome: "unique"; order: AdminOrderSheetRow }
+  | { outcome: "duplicate"; order: null; count: number };
+
+/**
+ * The existing bounded Admin ventas read, narrowed without choosing an arbitrary
+ * winner when data corruption produced duplicate Order ids.
+ */
+export async function getUniqueOrderRowById(orderId: string): Promise<UniqueAdminOrderRowResult> {
+  if (!orderId.trim()) return { outcome: "missing", order: null };
+  const matches = (await getOrdersForAdmin()).filter((order) => order.orderId === orderId);
+  if (matches.length === 0) return { outcome: "missing", order: null };
+  if (matches.length > 1) {
+    return { outcome: "duplicate", order: null, count: matches.length };
+  }
+  return { outcome: "unique", order: matches[0]! };
 }
