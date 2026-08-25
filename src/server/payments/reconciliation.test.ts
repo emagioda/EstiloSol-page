@@ -7,7 +7,10 @@ const { scheduledTasks } = vi.hoisted(() => ({ scheduledTasks: [] as Promise<voi
 vi.mock("@/src/server/sheets/repository", () => ({
   appendOrderToSalesSheet: vi.fn(async () => ({ deduped: false })),
   decrementProductsStockInSheet: vi.fn(async () => ({ deduped: false, updated: [] })),
+  getUniqueOrderRowById: vi.fn(async () => ({ outcome: "missing", order: null })),
   updateOrderRowInSalesSheet: vi.fn(async () => undefined),
+  SHEETS_GET_WORST_CASE_MS: 20_300,
+  SHEETS_MUTATION_WORST_CASE_MS: 24_400,
   UPDATE_ORDER_ROW_WORST_CASE_MS: 48_800,
 }));
 vi.mock("@/src/server/catalog/getProducts", () => ({
@@ -26,6 +29,10 @@ vi.mock("@/src/server/recovery/service", () => ({
   prepareProtectedPaymentDurability: vi.fn(async () => ({ protected: false })),
   completeRecoveryEvent: vi.fn(async () => undefined),
   markRecoveryEventRetryableSafely: vi.fn(async () => undefined),
+  loadRecoveryAuthorityEvidence: vi.fn(async ({ currentEvent }) => ({
+    paymentEvents: currentEvent ? [currentEvent] : [],
+    receiptEventExists: false,
+  })),
 }));
 vi.mock("@/src/server/recovery/repository", () => ({
   getRecoverySnapshot: vi.fn(async () => null),

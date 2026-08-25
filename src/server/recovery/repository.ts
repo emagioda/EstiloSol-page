@@ -350,6 +350,20 @@ export const getRecoveryPaymentEvent = async (
   return parseEvent(response.event);
 };
 
+/** Existing bounded durable-event read; callers must treat a missing match as unknown. */
+export const listRecoveryPaymentEvents = async (
+  limit = 50,
+): Promise<RecoveryPaymentEvent[]> => {
+  const response = await postRecoveryAction({
+    action: "listRecoveryPaymentEvents",
+    limit: Math.max(1, Math.min(50, Math.trunc(limit))),
+  });
+  if (response.result !== "RECOVERY_EVENTS_LISTED" || !Array.isArray(response.events)) {
+    throw new RecoveryStoreError("RECOVERY_RESPONSE_INVALID", "Unexpected event list result");
+  }
+  return response.events.map(parseEvent);
+};
+
 export const claimRecoveryWork = async (input: {
   leaseOwner: string;
   claimedAt: string;

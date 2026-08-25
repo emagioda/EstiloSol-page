@@ -5,10 +5,11 @@ import {
 import { logEvent } from "@/src/server/observability/log";
 import {
   ensureOrderDurableInSalesSheet,
-  ensureOrderExists,
   getOrder,
+  reconstructOrderFromAuthorityEvidence,
   reconcileMercadoPagoPaymentObservation,
   reconcileMercadoPagoPaymentObservationBatch,
+  updateOrder,
 } from "@/src/server/orders/store";
 import type { Order } from "@/src/server/orders/types";
 import type { MercadoPagoPaymentObservation } from "./ledger";
@@ -16,6 +17,7 @@ import type { MpPaymentResponse, MpSearchPayment } from "./shared";
 import { amountMatches } from "./shared";
 import {
   completeRecoveryEvent,
+  loadRecoveryAuthorityEvidence,
   markRecoveryEventRetryableSafely,
   prepareProtectedPaymentDurability,
 } from "@/src/server/recovery/service";
@@ -200,6 +202,21 @@ const reconciledObservationResult = (input: {
   };
 };
 
+const ensureReceiptAndProjection = async (
+  order: Order,
+  paymentId: string,
+  approvedAt: number,
+): Promise<Order> => {
+  const ensured = await ensurePurchaseReceiptEventSafely({ order, paymentId, approvedAt });
+  if (!ensured) return order;
+  return (
+    (await updateOrder(
+      order.externalReference,
+      { receiptOutboxVersion: 1 },
+    )) ?? order
+  );
+};
+
 export async function reconcileMercadoPagoPayment(input: {
   externalReference: string;
   payment: MercadoPagoPaymentLike;
@@ -275,14 +292,14 @@ export async function reconcileMercadoPagoPayment(input: {
     return ignored("ledger_capacity", result.order, input.source);
   }
 
-  if (result.firstEffectiveApproval && result.receiptOrder) {
+  if (
+    (result.firstEffectiveApproval && result.receiptOrder) ||
+    (durable.protected && status === "approved" && result.order.paymentStatus === "confirmed")
+  ) {
+    const receiptOrder = result.receiptOrder ?? result.order;
     const approvedAt =
-      result.receiptOrder.mpPaymentLedger?.[paymentId]?.approvedAt ?? observation.observedAt;
-    await ensurePurchaseReceiptEventSafely({
-      order: result.receiptOrder,
-      paymentId,
-      approvedAt,
-    });
+      receiptOrder.mpPaymentLedger?.[paymentId]?.approvedAt ?? observation.observedAt;
+    result.order = await ensureReceiptAndProjection(receiptOrder, paymentId, approvedAt);
   } else if (result.order.paymentStatus === "confirmed") {
     nudgePurchaseReceiptEvent(result.order.externalReference);
   }
@@ -506,19 +523,25 @@ export async function reconcileMercadoPagoPaymentObservations(input: {
     }
   }
 
-  if (result.firstEffectiveApproval && result.receiptOrder) {
+  const durableApprovedEvent = completedEvents.find(
+    (event) => event.financialStatus === "approved",
+  );
+  if (
+    (result.firstEffectiveApproval && result.receiptOrder) ||
+    (durableApprovedEvent && projectedOrder.paymentStatus === "confirmed")
+  ) {
+    const receiptOrder = result.receiptOrder ?? projectedOrder;
     const paymentId =
-      result.receiptOrder.mpPaymentId ?? result.activeApprovedPaymentIds[0];
+      receiptOrder.mpPaymentId ?? durableApprovedEvent?.paymentId ?? result.activeApprovedPaymentIds[0];
     if (paymentId) {
       const approvedAt =
-        result.receiptOrder.mpPaymentLedger?.[paymentId]?.approvedAt ??
-        result.receiptOrder.approvedAt ??
-        Date.now();
-      await ensurePurchaseReceiptEventSafely({
-        order: result.receiptOrder,
-        paymentId,
-        approvedAt,
-      });
+        receiptOrder.mpPaymentLedger?.[paymentId]?.approvedAt ??
+        receiptOrder.approvedAt ??
+        (durableApprovedEvent ? Date.parse(durableApprovedEvent.observedAt) : Number.NaN);
+      if (!Number.isFinite(approvedAt)) {
+        throw new Error("RECOVERY_APPROVAL_TIMESTAMP_MISSING");
+      }
+      projectedOrder = await ensureReceiptAndProjection(receiptOrder, paymentId, approvedAt);
     }
   } else if (projectedOrder.paymentStatus === "confirmed") {
     nudgePurchaseReceiptEvent(projectedOrder.externalReference);
@@ -557,8 +580,16 @@ export async function reconcileRecoveryPaymentEvent(
       const storedSnapshot = await getRecoverySnapshot(event.externalReference);
       if (storedSnapshot?.snapshotJson) {
         const snapshot = parseStoredRecoverySnapshot(storedSnapshot);
+        const authorityEvidence = await loadRecoveryAuthorityEvidence({
+          externalReference: event.externalReference,
+          snapshotHash: storedSnapshot.snapshotHash,
+          currentEvent: event,
+        });
         order = (
-          await ensureOrderExists(recoverySnapshotToOrder(snapshot), { syncSheet: false })
+          await reconstructOrderFromAuthorityEvidence(
+            recoverySnapshotToOrder(snapshot),
+            authorityEvidence,
+          )
         ).order;
       } else if (
         event.financialStatus === "refunded" ||
@@ -627,15 +658,19 @@ export async function reconcileRecoveryPaymentEvent(
     if (!sales.synced) throw new Error("RECOVERY_SALES_ROW_NOT_DURABLE");
     await completeRecoveryEvent(event, leaseOwner);
 
-    if (result.firstEffectiveApproval && result.receiptOrder) {
+    if (
+      (result.firstEffectiveApproval && result.receiptOrder) ||
+      (event.financialStatus === "approved" && sales.order.paymentStatus === "confirmed")
+    ) {
+      const receiptOrder = result.receiptOrder ?? sales.order;
       const approvedAt =
-        result.receiptOrder.mpPaymentLedger?.[event.paymentId]?.approvedAt ??
+        receiptOrder.mpPaymentLedger?.[event.paymentId]?.approvedAt ??
         Date.parse(event.observedAt);
-      await ensurePurchaseReceiptEventSafely({
-        order: result.receiptOrder,
-        paymentId: event.paymentId,
+      sales.order = await ensureReceiptAndProjection(
+        receiptOrder,
+        event.paymentId,
         approvedAt,
-      });
+      );
     } else if (sales.order.paymentStatus === "confirmed") {
       nudgePurchaseReceiptEvent(sales.order.externalReference);
     }

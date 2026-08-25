@@ -13,6 +13,7 @@ import {
   applyAdminOrderStatusIntent,
   getOrder,
   retryPaidOrderInventory,
+  runMissingOrderSheetFallback,
 } from "@/src/server/orders/store";
 import {
   ADMIN_ORDER_STATE_CHANGED,
@@ -26,7 +27,6 @@ import {
   attemptInventoryForPaidOrder,
   inventoryResultToOrderPatch,
   resolveOrderInventoryStatus,
-  shouldAttemptInventoryAutomatically,
 } from "@/src/server/orders/inventory";
 import {
   getFulfillmentCompletionBlockMessage,
@@ -44,13 +44,17 @@ import {
   parseFallbackOrderFulfillment,
   parseFallbackOrderItems,
 } from "@/src/server/orders/sheetFallback";
+import { parseCanonicalManualPaymentEvidence } from "@/src/server/orders/authorityHandoff";
 import { reconcileAdminMercadoPagoConfirmation } from "@/src/server/payments/adminConfirmation";
+import { reconstructOrderAuthorityFromDurableEvidence } from "@/src/server/recovery/service";
 import {
   applyAdminOrderStatusIntentInSalesSheet,
   getOrderRowById,
+  getUniqueOrderRowById,
   updateOrderRowInSalesSheet,
   updateProductRowInSheet,
   type AdminOrderSheetRow,
+  type AdminSheetStatusIntentResult,
 } from "@/src/server/sheets/repository";
 
 const parsePaymentStatus = (value: FormDataEntryValue | null): OrderPaymentStatus | null => {
@@ -200,6 +204,15 @@ const buildFallbackOrderFromSheet = (
   };
 };
 
+const requireUniqueSheetOrder = async (orderId: string): Promise<AdminOrderSheetRow> => {
+  const lookup = await getUniqueOrderRowById(orderId);
+  if (lookup.outcome === "duplicate") {
+    throw new Error("ORDER_AUTHORITY_DUPLICATE_SALES_ROWS");
+  }
+  if (lookup.outcome !== "unique") throw new Error("Pedido no encontrado.");
+  return lookup.order;
+};
+
 export type AdminOrderUpdateInput = {
   orderId: string;
   changedFields: AdminStatusField[];
@@ -300,30 +313,24 @@ const resultFromOrder = ({
 
 const applySheetFallbackOrderStatusesUpdate = async (
   orderId: string,
-  intent: AdminOrderStatusIntent
+  intent: AdminOrderStatusIntent,
+  claimedResult: AdminSheetStatusIntentResult,
 ): Promise<AdminOrderUpdateResult> => {
-  let sheetResult = await applyAdminOrderStatusIntentInSalesSheet(orderId, intent);
+  let sheetResult = claimedResult;
   if (sheetResult.outcome === "provider_confirmation_required") {
-    const providerSheetOrder = await getOrderRowById(orderId);
-    if (!providerSheetOrder) throw new Error("Pedido no encontrado.");
+    const providerSheetOrder = await requireUniqueSheetOrder(orderId);
     const providerOrder = buildFallbackOrderFromSheet(
       providerSheetOrder,
       providerSheetOrder.paymentStatus,
       providerSheetOrder.shippingStatus
     );
     await reconcileVerifiedMercadoPagoApproval(providerOrder);
-    sheetResult = await applyAdminOrderStatusIntentInSalesSheet(orderId, intent);
-    if (sheetResult.outcome === "provider_confirmation_required") {
-      throw new PaymentTransitionBlockedError(
-        PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired
-      );
-    }
+    return applyOrderStatusesUpdate(orderId, intent);
   }
   const paymentBlockReason = sheetResult.paymentBlockReason;
   let completionBlockReason = sheetResult.completionBlockReason;
 
-  let sheetOrder = await getOrderRowById(orderId);
-  if (!sheetOrder) throw new Error("Pedido no encontrado.");
+  let sheetOrder = await requireUniqueSheetOrder(orderId);
   let canonicalOrder = buildFallbackOrderFromSheet(
     sheetOrder,
     sheetResult.current.paymentStatus,
@@ -332,11 +339,12 @@ const applySheetFallbackOrderStatusesUpdate = async (
   const shouldEnsureClaimedManualPaymentEffects =
     isDurablyClaimedManualPaymentIntent(intent, canonicalOrder);
 
-  if (
-    shouldEnsureClaimedManualPaymentEffects &&
-    shouldAttemptInventoryAutomatically(canonicalOrder)
-  ) {
-    const { patch } = await inventoryPatchFromAttempt(canonicalOrder);
+  if (shouldEnsureClaimedManualPaymentEffects) {
+    const { patch } = await inventoryPatchFromAttempt({
+      ...canonicalOrder,
+      inventoryStatus: "pending",
+      stockDeductedAt: undefined,
+    });
     await updateOrderRowInSalesSheet(orderId, {
       inventoryStatus: patch.inventoryStatus ?? null,
       inventoryIssueCode: patch.inventoryIssueCode ?? null,
@@ -358,10 +366,16 @@ const applySheetFallbackOrderStatusesUpdate = async (
       expectedShippingStatus: intent.expectedShippingStatus,
       requestedShippingStatus: intent.requestedShippingStatus,
     };
-    sheetResult = await applyAdminOrderStatusIntentInSalesSheet(orderId, shippingIntent);
+    const shippingClaim = await runMissingOrderSheetFallback(
+      orderId,
+      () => applyAdminOrderStatusIntentInSalesSheet(orderId, shippingIntent),
+    );
+    if (shippingClaim.outcome === "kv_authority_returned") {
+      return applyOrderStatusesUpdate(orderId, shippingIntent);
+    }
+    sheetResult = shippingClaim.result;
     completionBlockReason = sheetResult.completionBlockReason;
-    sheetOrder = await getOrderRowById(orderId);
-    if (!sheetOrder) throw new Error("Pedido no encontrado.");
+    sheetOrder = await requireUniqueSheetOrder(orderId);
     canonicalOrder = buildFallbackOrderFromSheet(
       sheetOrder,
       sheetResult.current.paymentStatus,
@@ -405,7 +419,85 @@ const applyOrderStatusesUpdate = async (
   intent: AdminOrderStatusIntent
 ): Promise<AdminOrderUpdateResult> => {
   let application = await applyAdminOrderStatusIntent(orderId, intent);
-  if (!application) return applySheetFallbackOrderStatusesUpdate(orderId, intent);
+  if (!application) {
+    let sheetFallbackMutation = () =>
+      applyAdminOrderStatusIntentInSalesSheet(orderId, intent);
+    const requestsCompletion =
+      intent.changedFields.includes("shippingStatus") &&
+      intent.requestedShippingStatus === "completed";
+    if (requestsCompletion) {
+      const sheetOrder = await requireUniqueSheetOrder(orderId);
+      if (sheetOrder.paymentMethod === "mercadopago") {
+        const reconstructed = await reconstructOrderAuthorityFromDurableEvidence(orderId);
+        if (!reconstructed) {
+          throw new PaymentTransitionBlockedError(
+            PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired,
+          );
+        }
+        application = await applyAdminOrderStatusIntent(orderId, intent);
+      } else if (
+        (sheetOrder.paymentMethod === "cash" || sheetOrder.paymentMethod === "transfer") &&
+        sheetOrder.paymentStatus === "confirmed"
+      ) {
+        const manualEvidence = parseCanonicalManualPaymentEvidence(
+          sheetOrder,
+          sheetOrder.paymentMethod,
+        );
+        if (!manualEvidence) {
+          throw new PaymentTransitionBlockedError(
+            PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired,
+          );
+        }
+        if (!intent.changedFields.includes("paymentStatus")) {
+          const canonicalOrder = buildFallbackOrderFromSheet(
+            sheetOrder,
+            "confirmed",
+            sheetOrder.shippingStatus,
+          );
+          const { patch } = await inventoryPatchFromAttempt({
+            ...canonicalOrder,
+            inventoryStatus: "pending",
+            stockDeductedAt: undefined,
+          });
+          await updateOrderRowInSalesSheet(orderId, {
+            inventoryStatus: patch.inventoryStatus ?? null,
+            inventoryIssueCode: patch.inventoryIssueCode ?? null,
+            inventoryIssueAt: patch.inventoryIssueAt ?? null,
+            stockDeductedAt: patch.stockDeductedAt ?? null,
+            updatedAt: Date.now(),
+          });
+
+          sheetFallbackMutation = async () => {
+            const latestSheetOrder = await requireUniqueSheetOrder(orderId);
+            if (
+              !parseCanonicalManualPaymentEvidence(
+                latestSheetOrder,
+                manualEvidence.paymentMethod,
+              )
+            ) {
+              throw new PaymentTransitionBlockedError(
+                PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired,
+              );
+            }
+            return applyAdminOrderStatusIntentInSalesSheet(orderId, intent);
+          };
+        }
+      }
+    }
+
+    if (!application) {
+      const claim = await runMissingOrderSheetFallback(
+        orderId,
+        sheetFallbackMutation,
+      );
+      if (claim.outcome === "kv_authority_returned") {
+        application = await applyAdminOrderStatusIntent(orderId, intent);
+        if (!application) throw new Error("KV_AUTHORITY_RETURNED_WITHOUT_ORDER");
+      } else {
+        return applySheetFallbackOrderStatusesUpdate(orderId, intent, claim.result);
+      }
+    }
+  }
 
   if (application.outcome === "provider_confirmation_required") {
     await reconcileVerifiedMercadoPagoApproval(application.order);

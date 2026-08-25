@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  SHEETS_GET_WORST_CASE_MS,
   SHEETS_MUTATION_WORST_CASE_MS,
   UPDATE_ORDER_ROW_WORST_CASE_MS,
 } from "@/src/server/sheets/repository";
 import {
   ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS,
   ORDER_WRITE_LOCK_TTL_SECONDS,
+  orderWriteLockCoversAuthorityHandoff,
   orderWriteLockCoversWorstCaseSheetUpdate,
 } from "./store";
 
@@ -20,6 +22,16 @@ describe("PR 2 order write lock policy", () => {
       UPDATE_ORDER_ROW_WORST_CASE_MS + ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS
     );
     expect(orderWriteLockCoversWorstCaseSheetUpdate()).toBe(true);
+  });
+
+  it("H07D2-LOCK-TTL-01 covers the final Sheet read, journal mutation and margin", () => {
+    expect(SHEETS_GET_WORST_CASE_MS).toBe(20_300);
+    expect(
+      SHEETS_GET_WORST_CASE_MS +
+        SHEETS_MUTATION_WORST_CASE_MS +
+        ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS,
+    ).toBeLessThanOrEqual(ORDER_WRITE_LOCK_TTL_SECONDS * 1000);
+    expect(orderWriteLockCoversAuthorityHandoff()).toBe(true);
   });
 
   it("H07D1-NESTED-LOCK-01 locked sales projection never calls updateOrder", () => {
@@ -55,5 +67,34 @@ describe("PR 2 order write lock policy", () => {
     expect(recoverySource).toContain("reconcileCurrentOrderSalesProjection");
     expect(recoverySource).not.toContain("removePendingSalesSheetOrder");
     expect(adminSource).not.toContain("removePendingSalesSheetOrder");
+  });
+
+  it("H07D2-NESTED-LOCK-01 missing-KV fallback never enters another Order mutation", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/server/orders/store.ts"), "utf8");
+    const start = source.indexOf("export async function runMissingOrderSheetFallback");
+    const end = source.indexOf("const buildCurrentSalesSheetUpdates", start);
+    const implementation = source.slice(start, end);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(implementation).toContain("withOrderWriteLock");
+    expect(implementation).not.toContain("applyAdminOrderStatusIntent(");
+    expect(implementation).not.toContain("updateOrder(");
+  });
+
+  it("H07D2-NOSEED-01 H06 missing-KV paths no longer publish with ensureOrderExists", () => {
+    const recoverySource = readFileSync(
+      resolve(process.cwd(), "src/server/recovery/service.ts"),
+      "utf8",
+    );
+    const reconciliationSource = readFileSync(
+      resolve(process.cwd(), "src/server/payments/reconciliation.ts"),
+      "utf8",
+    );
+
+    expect(recoverySource).toContain("reconstructOrderFromAuthorityEvidence");
+    expect(reconciliationSource).toContain("reconstructOrderFromAuthorityEvidence");
+    expect(recoverySource).not.toContain("ensureOrderExists");
+    expect(reconciliationSource).not.toContain("ensureOrderExists");
   });
 });

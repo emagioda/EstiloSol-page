@@ -5,6 +5,7 @@ import {
   buildSalesSheetRow,
   decrementProductsStockInSheet,
   getOrdersForAdmin,
+  getUniqueOrderRowById,
   parseInventoryStatus,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
@@ -343,6 +344,34 @@ describe("inventory mutation contract", () => {
     await expect(
       decrementProductsStockInSheet("order-inconsistent-outcome", [{ productId: "a", qty: 1 }]),
     ).rejects.toMatchObject({ code: "INVENTORY_VALIDATION_FAILED", origin: "response" });
+  });
+
+  it("H07D2-DUP-01 reports duplicate ventas rows without selecting a winner", async () => {
+    vi.stubEnv("SHEETS_ENDPOINT", "https://sheets.example.test/catalog");
+    vi.stubEnv("SHEETS_ADMIN_TOKEN", "admin-token");
+    const duplicate = {
+      Nro_de_compra: "es-duplicate-order",
+      Fecha: "2026-06-15T19:06:58.000Z",
+      Nombre: "Rocio",
+      Apellido: "Gonzalez",
+      WhatsApp: "3413432914",
+      Email: "rocio@example.com",
+      Forma_de_Pago: "Mercado Pago",
+      Estado_de_Pago: "Confirmado",
+      Estado_de_Envio: "En proceso",
+      Total: 15225,
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, items: [duplicate, duplicate] }), {
+        status: 200,
+      }),
+    );
+
+    await expect(getUniqueOrderRowById("es-duplicate-order")).resolves.toEqual({
+      outcome: "duplicate",
+      order: null,
+      count: 2,
+    });
   });
 });
 

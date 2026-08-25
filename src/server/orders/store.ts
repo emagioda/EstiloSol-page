@@ -5,6 +5,9 @@ import { trackBusinessEvent } from "@/src/server/observability/metrics";
 import { privacyPolicy } from "@/src/server/privacy/policy";
 import {
   appendOrderToSalesSheet,
+  getUniqueOrderRowById,
+  SHEETS_GET_WORST_CASE_MS,
+  SHEETS_MUTATION_WORST_CASE_MS,
   UPDATE_ORDER_ROW_WORST_CASE_MS,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
@@ -47,6 +50,15 @@ import {
   MULTIPLE_APPROVED_MP_PAYMENTS,
   type MercadoPagoPaymentObservation,
 } from "@/src/server/payments/ledger";
+import type { RecoveryPaymentEvent } from "@/src/server/recovery/types";
+import {
+  assertCoherentSalesAuthorityRow,
+  assertCoherentOperationalOrder,
+  buildRecoveryAuthorityCandidate,
+  ORDER_AUTHORITY_HANDOFF_ERRORS,
+  OrderAuthorityHandoffError,
+  validateRecoveryPaymentEvidence,
+} from "./authorityHandoff";
 
 export const WEBHOOK_DEDUPE_TTL_SECONDS = 7 * 24 * 3600;
 
@@ -77,6 +89,15 @@ type CreateOrderOptions = {
 type EnsureOrderResult = {
   order: Order;
   created: boolean;
+};
+
+export type MissingOrderSheetFallbackResult<T> =
+  | { outcome: "sheet_fallback"; result: T }
+  | { outcome: "kv_authority_returned" };
+
+export type RecoveryAuthorityEvidence = {
+  paymentEvents: RecoveryPaymentEvent[];
+  receiptEventExists: boolean;
 };
 
 type OrderPatch = Partial<Omit<Order, "externalReference" | "createdAt">>;
@@ -148,6 +169,22 @@ const ensureOrderDefaults = (order: StoredOrder): Order => ({
   paymentStatus: order.paymentStatus ?? statusToPaymentStatus(order.status),
   shippingStatus: order.shippingStatus ?? "in_process",
 });
+
+const normalizeAuthorityOrder = (value: unknown, externalReference: string): Order => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new OrderAuthorityHandoffError(
+      ORDER_AUTHORITY_HANDOFF_ERRORS.malformedKvOrder,
+      `Malformed KV Order ${externalReference}`,
+    );
+  }
+  const normalized: Order = ensureOrderDefaults(value as StoredOrder);
+  assertCoherentOperationalOrder(
+    normalized,
+    externalReference,
+    ORDER_AUTHORITY_HANDOFF_ERRORS.malformedKvOrder,
+  );
+  return normalized;
+};
 
 export async function createOrder(order: Order, options: CreateOrderOptions = {}): Promise<void> {
   const shouldSyncSheet = options.syncSheet !== false;
@@ -235,6 +272,89 @@ export async function ensureOrderExists(
       orderId: candidate.externalReference,
     });
     return { order: candidate, created: true };
+  });
+}
+
+/** Publishes the merged authoritative candidate as the first operational KV Order. */
+export async function reconstructOrderFromAuthorityEvidence(
+  snapshotOrder: Order,
+  evidence: RecoveryAuthorityEvidence,
+): Promise<EnsureOrderResult> {
+  return withOrderWriteLock(snapshotOrder.externalReference, async () => {
+    const stored = await getJson<StoredOrder>(orderKey(snapshotOrder.externalReference));
+    if (stored) {
+      const current = normalizeAuthorityOrder(stored, snapshotOrder.externalReference);
+      if (!recoveryOrderIdentityMatches(current, snapshotOrder)) {
+        throw new Error(
+          `Recovery order conflicts with existing order ${snapshotOrder.externalReference}`,
+        );
+      }
+      return { order: current, created: false };
+    }
+
+    const salesLookup = await getUniqueOrderRowById(snapshotOrder.externalReference);
+    if (salesLookup.outcome === "duplicate") {
+      throw new OrderAuthorityHandoffError(
+        ORDER_AUTHORITY_HANDOFF_ERRORS.duplicateSalesRows,
+        `ventas contains ${salesLookup.count} rows for ${snapshotOrder.externalReference}`,
+      );
+    }
+    const salesRow = salesLookup.outcome === "unique" ? salesLookup.order : null;
+    if (salesRow) assertCoherentSalesAuthorityRow(snapshotOrder, salesRow);
+    const hasCanonicalApproval = validateRecoveryPaymentEvidence(
+      snapshotOrder,
+      evidence.paymentEvents,
+    );
+    const inventoryResult = hasCanonicalApproval
+      ? await attemptInventoryForPaidOrder({
+          externalReference: snapshotOrder.externalReference,
+          items: snapshotOrder.items,
+          stockDeductedAt: undefined,
+        })
+      : undefined;
+    const candidate = buildRecoveryAuthorityCandidate({
+      snapshotOrder,
+      paymentEvents: evidence.paymentEvents,
+      salesRow,
+      inventoryResult,
+      receiptEventExists: evidence.receiptEventExists,
+    });
+    const created = await setJsonIfNotExists(
+      orderKey(candidate.externalReference),
+      candidate,
+      privacyPolicy.ttlSecondsForStatus(candidate.status),
+    );
+    if (!created) {
+      const winner = await getJson<StoredOrder>(orderKey(candidate.externalReference));
+      if (!winner) throw new Error("Recovery authority claim could not be recovered");
+      const normalized = normalizeAuthorityOrder(winner, candidate.externalReference);
+      if (!recoveryOrderIdentityMatches(normalized, candidate)) {
+        throw new Error(`Recovery order conflicts with existing order ${candidate.externalReference}`);
+      }
+      return { order: normalized, created: false };
+    }
+    logEvent("info", "recovery.order_authority_handoff", {
+      orderId: candidate.externalReference,
+      paymentStatus: candidate.paymentStatus,
+      inventoryStatus: resolveOrderInventoryStatus(candidate) ?? "unknown",
+      shippingStatus: candidate.shippingStatus,
+    });
+    return { order: candidate, created: true };
+  });
+}
+
+/** Keeps the healthy missing-key check and conditional Sheet fallback in one Order lock. */
+export async function runMissingOrderSheetFallback<T>(
+  externalReference: string,
+  fallback: () => Promise<T>,
+): Promise<MissingOrderSheetFallbackResult<T>> {
+  return withOrderWriteLock(externalReference, async () => {
+    const stored = await getJson<StoredOrder>(orderKey(externalReference));
+    if (stored) {
+      normalizeAuthorityOrder(stored, externalReference);
+      return { outcome: "kv_authority_returned" as const };
+    }
+    return { outcome: "sheet_fallback" as const, result: await fallback() };
   });
 }
 
@@ -540,6 +660,12 @@ export async function getOrder(externalReference: string): Promise<Order | null>
 export const orderWriteLockCoversWorstCaseSheetUpdate = (): boolean =>
   ORDER_WRITE_LOCK_TTL_SECONDS * 1000 >=
   UPDATE_ORDER_ROW_WORST_CASE_MS + ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS;
+
+export const orderWriteLockCoversAuthorityHandoff = (): boolean =>
+  ORDER_WRITE_LOCK_TTL_SECONDS * 1000 >=
+  SHEETS_GET_WORST_CASE_MS +
+    SHEETS_MUTATION_WORST_CASE_MS +
+    ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS;
 
 export const mergeOrderUpdate = (
   current: Order,

@@ -1,10 +1,12 @@
 import "server-only";
 
 import { logEvent } from "@/src/server/observability/log";
-import { ensureOrderExists, getOrder } from "@/src/server/orders/store";
+import { getOrder, reconstructOrderFromAuthorityEvidence } from "@/src/server/orders/store";
 import type { Order } from "@/src/server/orders/types";
 import type { MpPaymentResponse, MpSearchPayment } from "@/src/server/payments/shared";
 import { getOrderRowById } from "@/src/server/sheets/repository";
+import { buildPurchaseReceiptEventKey } from "@/src/server/emailOutbox/payload";
+import { getEmailOutboxEvent } from "@/src/server/emailOutbox/repository";
 import {
   buildRecoveryPaymentEvent,
   normalizeProtectedPaymentObservation,
@@ -22,6 +24,7 @@ import {
 import {
   appendRecoveryPaymentEvent,
   getRecoverySnapshot,
+  listRecoveryPaymentEvents,
   markRecoveryEventState,
   markRecoverySnapshotState,
   upsertRecoverySnapshot,
@@ -34,6 +37,58 @@ import type {
 } from "./types";
 
 const LEGACY_PREFERENCE_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+export const loadRecoveryAuthorityEvidence = async (input: {
+  externalReference: string;
+  snapshotHash?: string;
+  currentEvent?: RecoveryPaymentEvent;
+}) => {
+  const listed = await listRecoveryPaymentEvents(50);
+  const byKey = new Map<string, RecoveryPaymentEvent>();
+  for (const event of [...listed, ...(input.currentEvent ? [input.currentEvent] : [])]) {
+    if (
+      event.validationState !== "validated" ||
+      event.externalReference !== input.externalReference ||
+      (input.snapshotHash && event.snapshotHash !== input.snapshotHash)
+    ) {
+      continue;
+    }
+    byKey.set(event.eventKey, event);
+  }
+  const receiptEventKey = buildPurchaseReceiptEventKey(input.externalReference);
+  const receiptEvent = await getEmailOutboxEvent(receiptEventKey);
+  if (
+    receiptEvent &&
+    (receiptEvent.eventKey !== receiptEventKey ||
+      receiptEvent.externalReference !== input.externalReference)
+  ) {
+    throw new Error("EMAIL_OUTBOX_AUTHORITY_MISMATCH");
+  }
+  return {
+    paymentEvents: [...byKey.values()],
+    receiptEventExists: receiptEvent !== null,
+  };
+};
+
+export const reconstructOrderAuthorityFromDurableEvidence = async (
+  externalReference: string,
+  currentEvent?: RecoveryPaymentEvent,
+): Promise<Order | null> => {
+  const storedSnapshot = await getRecoverySnapshot(externalReference);
+  if (!storedSnapshot?.snapshotJson) return null;
+  const snapshot = parseStoredRecoverySnapshot(storedSnapshot);
+  const authorityEvidence = await loadRecoveryAuthorityEvidence({
+    externalReference,
+    snapshotHash: storedSnapshot.snapshotHash,
+    currentEvent,
+  });
+  return (
+    await reconstructOrderFromAuthorityEvidence(
+      recoverySnapshotToOrder(snapshot),
+      authorityEvidence,
+    )
+  ).order;
+};
 
 export type PreparedProtectedPayment =
   | { protected: false }
@@ -309,9 +364,15 @@ export const prepareProtectedPaymentDurability = async (input: {
   }
 
   if (!order) {
-    const ensured = await ensureOrderExists(recoverySnapshotToOrder(snapshot!), {
-      syncSheet: false,
+    const authorityEvidence = await loadRecoveryAuthorityEvidence({
+      externalReference: snapshot!.externalReference,
+      snapshotHash: storedSnapshot?.snapshotHash,
+      currentEvent: persisted.event,
     });
+    const ensured = await reconstructOrderFromAuthorityEvidence(
+      recoverySnapshotToOrder(snapshot!),
+      authorityEvidence,
+    );
     order = ensured.order;
   }
   return { protected: true, outcome: "ready", event: persisted.event, order };

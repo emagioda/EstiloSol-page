@@ -4,7 +4,10 @@ import type { RecoveryPaymentEvent, StoredRecoverySnapshot } from "./types";
 
 vi.mock("@/src/server/orders/store", () => ({
   getOrder: vi.fn(),
-  ensureOrderExists: vi.fn(),
+  reconstructOrderFromAuthorityEvidence: vi.fn(),
+}));
+vi.mock("@/src/server/emailOutbox/repository", () => ({
+  getEmailOutboxEvent: vi.fn(async () => null),
 }));
 vi.mock("@/src/server/sheets/repository", () => ({
   getOrderRowById: vi.fn(),
@@ -12,16 +15,18 @@ vi.mock("@/src/server/sheets/repository", () => ({
 vi.mock("./repository", () => ({
   appendRecoveryPaymentEvent: vi.fn(),
   getRecoverySnapshot: vi.fn(),
+  listRecoveryPaymentEvents: vi.fn(async () => []),
   markRecoveryEventState: vi.fn(),
   markRecoverySnapshotState: vi.fn(),
   upsertRecoverySnapshot: vi.fn(),
 }));
 
-import { ensureOrderExists, getOrder } from "@/src/server/orders/store";
+import { getOrder, reconstructOrderFromAuthorityEvidence } from "@/src/server/orders/store";
 import { getOrderRowById } from "@/src/server/sheets/repository";
 import {
   appendRecoveryPaymentEvent,
   getRecoverySnapshot,
+  listRecoveryPaymentEvents,
   markRecoveryEventState,
   markRecoverySnapshotState,
   upsertRecoverySnapshot,
@@ -83,10 +88,11 @@ describe("AUD3-H06 recovery durability service", () => {
     vi.mocked(getOrderRowById).mockResolvedValue(null);
     vi.mocked(markRecoverySnapshotState).mockResolvedValue(storedSnapshot());
     vi.mocked(markRecoveryEventState).mockResolvedValue({} as RecoveryPaymentEvent);
-    vi.mocked(ensureOrderExists).mockImplementation(async (candidate) => ({
+    vi.mocked(reconstructOrderFromAuthorityEvidence).mockImplementation(async (candidate) => ({
       order: candidate,
       created: true,
     }));
+    vi.mocked(listRecoveryPaymentEvents).mockResolvedValue([]);
     vi.mocked(appendRecoveryPaymentEvent).mockImplementation(async (candidate) => ({
       outcome: "stored",
       event: {
@@ -115,14 +121,17 @@ describe("AUD3-H06 recovery durability service", () => {
       snapshotHash: stored.snapshotHash,
     }));
     expect(vi.mocked(appendRecoveryPaymentEvent).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(ensureOrderExists).mock.invocationCallOrder[0],
+      vi.mocked(reconstructOrderFromAuthorityEvidence).mock.invocationCallOrder[0],
     );
-    expect(ensureOrderExists).toHaveBeenCalledWith(
+    expect(reconstructOrderFromAuthorityEvidence).toHaveBeenCalledWith(
       expect.objectContaining({
         externalReference: order().externalReference,
         paymentStatus: "pending",
       }),
-      { syncSheet: false },
+      expect.objectContaining({
+        paymentEvents: [expect.objectContaining({ financialStatus: "approved" })],
+        receiptEventExists: false,
+      }),
     );
     expect(markRecoverySnapshotState).toHaveBeenCalledWith({
       externalReference: stored.externalReference,
@@ -159,7 +168,7 @@ describe("AUD3-H06 recovery durability service", () => {
       processingState: "attention",
       lastErrorCode: "RECOVERY_SNAPSHOT_NOT_FOUND",
     }));
-    expect(ensureOrderExists).not.toHaveBeenCalled();
+    expect(reconstructOrderFromAuthorityEvidence).not.toHaveBeenCalled();
   });
 
   it("H06-20 validates a reversal against durable ventas after snapshot PII redaction", async () => {
@@ -184,7 +193,7 @@ describe("AUD3-H06 recovery durability service", () => {
       financialStatus: "refunded",
       snapshotHash: stored.snapshotHash,
     }));
-    expect(ensureOrderExists).not.toHaveBeenCalled();
+    expect(reconstructOrderFromAuthorityEvidence).not.toHaveBeenCalled();
   });
 
   it("does not validate a redacted reversal when ventas amount conflicts", async () => {
@@ -226,7 +235,7 @@ describe("AUD3-H06 recovery durability service", () => {
     expect(appendRecoveryPaymentEvent).not.toHaveBeenCalled();
     expect(markRecoveryEventState).not.toHaveBeenCalled();
     expect(markRecoverySnapshotState).not.toHaveBeenCalled();
-    expect(ensureOrderExists).not.toHaveBeenCalled();
+    expect(reconstructOrderFromAuthorityEvidence).not.toHaveBeenCalled();
   });
 
   it("minimizes completed snapshot PII only after the durable event is completed", async () => {
