@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InventoryOperationError } from "@/src/server/inventory/errors";
 import type { Order } from "@/src/server/orders/types";
 import { setJson } from "@/src/server/kv";
+import * as kv from "@/src/server/kv";
 
 vi.mock("@/src/server/sheets/repository", () => ({
   appendOrderToSalesSheet: vi.fn(),
@@ -23,6 +24,7 @@ import {
   assertAdminPaymentTransitionRequest,
   createOrder,
   ensureOrderDurableInSalesSheet,
+  ensureOrderExists,
   getOrder,
   markApproved,
   markCancelled,
@@ -32,6 +34,8 @@ import {
   ORDER_WRITE_LOCK_MINIMUM_MARGIN_MS,
   ORDER_WRITE_LOCK_TTL_SECONDS,
   orderWriteLockCoversWorstCaseSheetUpdate,
+  projectCurrentOrderSalesState,
+  reconcileCurrentOrderSalesProjection,
   reconcileMercadoPagoPaymentObservationBatch,
   retryPaidOrderInventory,
   updateOrder,
@@ -51,7 +55,9 @@ import {
   isPendingSalesSheetOrder,
   removePendingSalesSheetOrder,
 } from "./salesSheetSync";
+import * as salesSheetSync from "./salesSheetSync";
 import { recoverPendingSalesSheetOrder } from "./salesSheetRecovery";
+import { getOrdersForAdminWithKvState } from "./admin";
 
 let sequence = 0;
 const makeOrder = (patch: Partial<Order> = {}): Order => {
@@ -109,7 +115,7 @@ const timeoutAfterCommit = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(appendOrderToSalesSheet).mockResolvedValue(undefined);
+  vi.mocked(appendOrderToSalesSheet).mockResolvedValue({ deduped: false });
   vi.mocked(updateOrderRowInSalesSheet).mockResolvedValue(undefined);
   vi.mocked(invalidateProductsCatalogCache).mockResolvedValue(undefined);
   vi.mocked(decrementProductsStockInSheet).mockResolvedValue({
@@ -1314,5 +1320,631 @@ describe("AUD3 H07-B locked payment authority", () => {
       order.externalReference,
       "pending"
     )).rejects.toMatchObject({ reason: "PAYMENT_CONFIRMED_CANNOT_BE_DOWNGRADED" });
+  });
+});
+
+describe("AUD3 H07-D1 serialized KV-derived sales projections", () => {
+  const enrolledOrder = (patch: Partial<Order> = {}) =>
+    makeOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      shippingStatus: "in_process",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 100,
+      approvedAt: 90,
+      receiptOutboxVersion: 1,
+      salesSheetDeferredUntilApprovedAt: 1,
+      salesSheetSyncFailedAt: 2,
+      ...patch,
+    });
+
+  const confirmManualPayment = (externalReference: string) =>
+    applyAdminOrderStatusIntent(externalReference, {
+      changedFields: ["paymentStatus"],
+      expectedPaymentStatus: "pending",
+      requestedPaymentStatus: "confirmed",
+    });
+
+  const runRecoveryAfterNormalMutation = async (
+    order: Order,
+    mutate: () => Promise<unknown>,
+  ) => {
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    const recoveryReached = deferred();
+    const releaseRecovery = deferred();
+    const recovery = recoverPendingSalesSheetOrder(
+      order.externalReference,
+      { rowExists: true },
+      {
+        isPending: async () => {
+          recoveryReached.resolve();
+          await releaseRecovery.promise;
+          return true;
+        },
+      },
+    );
+    await recoveryReached.promise;
+    await mutate();
+    releaseRecovery.resolve();
+    await expect(recovery).resolves.toMatchObject({ outcome: "reconciled" });
+    return getOrder(order.externalReference);
+  };
+
+  const boundaryCases: Array<{
+    name: string;
+    order: () => Order;
+    mutate: (order: Order) => Promise<unknown>;
+    expected: Partial<Order>;
+  }> = [
+    {
+      name: "H07D1-BND-01 projects O2 after recovery captured earlier workflow state",
+      order: () => enrolledOrder({ mpPreferenceId: "pref-o1" }),
+      mutate: (order) => updateOrder(order.externalReference, { mpPreferenceId: "pref-o2" }),
+      expected: { mpPreferenceId: "pref-o2" },
+    },
+    {
+      name: "H07D1-BND-02 cannot reopen completed shipping to in_process",
+      order: () => enrolledOrder(),
+      mutate: (order) => updateOrder(order.externalReference, { shippingStatus: "completed" }),
+      expected: { shippingStatus: "completed" },
+    },
+    {
+      name: "H07D1-BND-03 cannot regress a provider refund to confirmed",
+      order: () => enrolledOrder(),
+      mutate: (order) =>
+        markRefunded(
+          order.externalReference,
+          { paymentId: "pay-refund", mpStatus: "refunded" },
+          "mp_authoritative",
+        ),
+      expected: { status: "refunded", paymentStatus: "refunded", mpStatus: "refunded" },
+    },
+    {
+      name: "H07D1-BND-04 cannot regress a chargeback to confirmed",
+      order: () => enrolledOrder(),
+      mutate: (order) =>
+        markChargedBack(
+          order.externalReference,
+          { paymentId: "pay-chargeback", mpStatus: "charged_back" },
+          "mp_authoritative",
+        ),
+      expected: {
+        status: "charged_back",
+        paymentStatus: "charged_back",
+        mpStatus: "charged_back",
+      },
+    },
+    {
+      name: "H07D1-BND-05 preserves one journal-backed inventory deduction",
+      order: () => enrolledOrder({ inventoryStatus: "pending", stockDeductedAt: undefined }),
+      mutate: (order) => retryPaidOrderInventory(order.externalReference),
+      expected: { inventoryStatus: "deducted", stockDeductedAt: expect.any(Number) },
+    },
+    {
+      name: "H07D1-BND-06 preserves current inventory conflict evidence",
+      order: () => enrolledOrder({ inventoryStatus: "pending", stockDeductedAt: undefined }),
+      mutate: async (order) => {
+        vi.mocked(decrementProductsStockInSheet).mockRejectedValueOnce(
+          new InventoryOperationError({ code: "INSUFFICIENT_STOCK", message: "insufficient" }),
+        );
+        return retryPaidOrderInventory(order.externalReference);
+      },
+      expected: {
+        inventoryStatus: "conflict",
+        inventoryIssueCode: "INSUFFICIENT_STOCK",
+        inventoryIssueAt: expect.any(Number),
+      },
+    },
+    {
+      name: "H07D1-BND-07 preserves newer canonical MP metadata",
+      order: () =>
+        enrolledOrder({
+          status: "created",
+          paymentStatus: "pending",
+          inventoryStatus: "pending",
+          stockDeductedAt: undefined,
+          approvedAt: undefined,
+          mpPaymentId: undefined,
+          mpStatus: undefined,
+        }),
+      mutate: (order) =>
+        updateOrder(
+          order.externalReference,
+          {
+            status: "approved",
+            paymentStatus: "confirmed",
+            mpPaymentId: "pay-o2",
+            mpStatus: "approved",
+            approvedAt: 300,
+          },
+          { paymentAuthority: "system" },
+        ),
+      expected: {
+        paymentStatus: "confirmed",
+        mpPaymentId: "pay-o2",
+        mpStatus: "approved",
+        approvedAt: 300,
+      },
+    },
+    {
+      name: "H07D1-BND-08 preserves current receipt enrollment and delivery markers",
+      order: () => enrolledOrder({ receiptEmailSentAt: undefined }),
+      mutate: (order) => updateOrder(order.externalReference, { receiptEmailSentAt: 400 }),
+      expected: { receiptOutboxVersion: 1, receiptEmailSentAt: 400 },
+    },
+  ];
+
+  it.each(boundaryCases)("$name", async ({ order: makeBoundaryOrder, mutate, expected }) => {
+    const order = makeBoundaryOrder();
+    const finalOrder = await runRecoveryAfterNormalMutation(order, () => mutate(order));
+
+    expect(finalOrder).toMatchObject({
+      ...expected,
+      salesSheetSyncedAt: expect.any(Number),
+      salesSheetSyncFailedAt: undefined,
+    });
+    const { status: expectedStatus, ...expectedSheetFields } = expected;
+    const finalProjection = vi.mocked(updateOrderRowInSalesSheet).mock.calls.at(-1);
+    expect(finalProjection?.[0]).toBe(order.externalReference);
+    expect(finalProjection?.[1]).toMatchObject({
+      ...(expectedStatus ? { orderStatus: expectedStatus } : {}),
+      ...expectedSheetFields,
+    });
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(false);
+    if (expected.inventoryStatus === "deducted" && order.inventoryStatus === "pending") {
+      expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("H07D1-BND-09 keeps the safe reverse interleaving serialized", async () => {
+    const order = enrolledOrder({ mpPreferenceId: "pref-o1" });
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    const projectionEntered = deferred();
+    const releaseProjection = deferred();
+    vi.mocked(updateOrderRowInSalesSheet).mockImplementationOnce(async () => {
+      projectionEntered.resolve();
+      await releaseProjection.promise;
+    });
+
+    const recovery = recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true });
+    await projectionEntered.promise;
+    let normalCompleted = false;
+    const normal = updateOrder(order.externalReference, { mpPreferenceId: "pref-o2" }).then(() => {
+      normalCompleted = true;
+    });
+    await Promise.resolve();
+    expect(normalCompleted).toBe(false);
+    releaseProjection.resolve();
+    await Promise.all([recovery, normal]);
+
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      mpPreferenceId: "pref-o2",
+    });
+    expect(vi.mocked(updateOrderRowInSalesSheet).mock.calls.at(-1)?.[1]).toMatchObject({
+      mpPreferenceId: "pref-o2",
+    });
+  });
+
+  it("H07D1-INDEX-01 serializes old recovery success before a newer projection failure", async () => {
+    const order = enrolledOrder({ mpPreferenceId: "pref-o1" });
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    const removeEntered = deferred();
+    const releaseRemove = deferred();
+    const originalRemovePending = salesSheetSync.removePendingSalesSheetOrder;
+    const removePendingSpy = vi
+      .spyOn(salesSheetSync, "removePendingSalesSheetOrder")
+      .mockImplementationOnce(async (orderId) => {
+        removeEntered.resolve();
+        await releaseRemove.promise;
+        return originalRemovePending(orderId);
+      });
+
+    const recovery = recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true });
+    await removeEntered.promise;
+    vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(new Error("new O2 projection failed"));
+    const newerMutation = updateOrder(order.externalReference, { mpPreferenceId: "pref-o2" });
+    await Promise.resolve();
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      mpPreferenceId: "pref-o1",
+    });
+
+    releaseRemove.resolve();
+    await expect(recovery).resolves.toMatchObject({ outcome: "reconciled" });
+    await expect(newerMutation).resolves.toMatchObject({ mpPreferenceId: "pref-o2" });
+    removePendingSpy.mockRestore();
+
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      mpPreferenceId: "pref-o2",
+      salesSheetSyncFailedAt: expect.any(Number),
+    });
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(true);
+  });
+
+  it("H07D1-INDEX-02 cannot finish with a newer failure marker and an absent pending member", async () => {
+    const order = enrolledOrder({ mpPreferenceId: "pref-o1" });
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    const removalCommitted = deferred();
+    const releaseRemoveResponse = deferred();
+    const originalRemovePending = salesSheetSync.removePendingSalesSheetOrder;
+    const removePendingSpy = vi
+      .spyOn(salesSheetSync, "removePendingSalesSheetOrder")
+      .mockImplementationOnce(async (orderId) => {
+        const removed = await originalRemovePending(orderId);
+        removalCommitted.resolve();
+        await releaseRemoveResponse.promise;
+        return removed;
+      });
+
+    const recovery = recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true });
+    await removalCommitted.promise;
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(false);
+    vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(new Error("new O2 projection failed"));
+    const newerMutation = updateOrder(order.externalReference, { mpPreferenceId: "pref-o2" });
+    await Promise.resolve();
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      mpPreferenceId: "pref-o1",
+    });
+
+    releaseRemoveResponse.resolve();
+    await Promise.all([recovery, newerMutation]);
+    removePendingSpy.mockRestore();
+
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      mpPreferenceId: "pref-o2",
+      salesSheetSyncFailedAt: expect.any(Number),
+    });
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(true);
+  });
+
+  it("H07D1-INDEX-03 serializes stale not-eligible cleanup before later eligibility and failure", async () => {
+    const order = makeOrder({
+      paymentMethod: "cash",
+      salesSheetDeferredUntilApprovedAt: 1,
+    });
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    const removeEntered = deferred();
+    const releaseRemove = deferred();
+    const originalRemovePending = salesSheetSync.removePendingSalesSheetOrder;
+    const removePendingSpy = vi
+      .spyOn(salesSheetSync, "removePendingSalesSheetOrder")
+      .mockImplementationOnce(async (orderId) => {
+        removeEntered.resolve();
+        await releaseRemove.promise;
+        return originalRemovePending(orderId);
+      });
+
+    const recovery = recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true });
+    await removeEntered.promise;
+    vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(
+      new Error("eligible projection failed"),
+    );
+    const confirmation = confirmManualPayment(order.externalReference);
+    await Promise.resolve();
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      paymentStatus: "pending",
+    });
+
+    releaseRemove.resolve();
+    await expect(recovery).resolves.toMatchObject({ outcome: "not_eligible" });
+    await expect(confirmation).resolves.toMatchObject({
+      order: { paymentStatus: "confirmed" },
+    });
+    removePendingSpy.mockRestore();
+
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      paymentStatus: "confirmed",
+      salesSheetSyncFailedAt: expect.any(Number),
+    });
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(true);
+  });
+
+  it("H07D1-INDEX-04 serializes missing-order cleanup before reconstruction and later failure", async () => {
+    const reconstructed = enrolledOrder({
+      externalReference: `h07d1-reconstructed-${Date.now()}-${sequence}`,
+      mpPreferenceId: "pref-o1",
+    });
+    await addPendingSalesSheetOrder(reconstructed.externalReference);
+    const removeEntered = deferred();
+    const releaseRemove = deferred();
+    const originalRemovePending = salesSheetSync.removePendingSalesSheetOrder;
+    const removePendingSpy = vi
+      .spyOn(salesSheetSync, "removePendingSalesSheetOrder")
+      .mockImplementationOnce(async (orderId) => {
+        removeEntered.resolve();
+        await releaseRemove.promise;
+        return originalRemovePending(orderId);
+      });
+
+    const recovery = recoverPendingSalesSheetOrder(reconstructed.externalReference, {
+      rowExists: true,
+    });
+    await removeEntered.promise;
+    const reconstruction = ensureOrderExists(reconstructed, { syncSheet: false });
+    await Promise.resolve();
+    await expect(getOrder(reconstructed.externalReference)).resolves.toBeNull();
+
+    releaseRemove.resolve();
+    await expect(recovery).resolves.toMatchObject({ outcome: "stale", order: null });
+    await expect(reconstruction).resolves.toMatchObject({ created: true });
+    removePendingSpy.mockRestore();
+
+    vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(
+      new Error("reconstructed projection failed"),
+    );
+    await updateOrder(reconstructed.externalReference, { mpPreferenceId: "pref-o2" });
+    await expect(getOrder(reconstructed.externalReference)).resolves.toMatchObject({
+      mpPreferenceId: "pref-o2",
+      salesSheetSyncFailedAt: expect.any(Number),
+    });
+    expect(await isPendingSalesSheetOrder(reconstructed.externalReference)).toBe(true);
+  });
+
+  it("H07D1-INDEX-05 restores pending membership after removal commits but its response is lost", async () => {
+    const order = enrolledOrder();
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    const originalRemovePending = salesSheetSync.removePendingSalesSheetOrder;
+    const removePendingSpy = vi
+      .spyOn(salesSheetSync, "removePendingSalesSheetOrder")
+      .mockImplementationOnce(async (orderId) => {
+        await originalRemovePending(orderId);
+        throw timeoutAfterCommit();
+      });
+
+    await expect(
+      recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }),
+    ).resolves.toMatchObject({ outcome: "pending" });
+    removePendingSpy.mockRestore();
+
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      salesSheetSyncedAt: expect.any(Number),
+      salesSheetSyncFailedAt: undefined,
+    });
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(true);
+  });
+
+  it("H07D1-INDEX-06 serializes approved append cleanup before a newer projection failure", async () => {
+    const order = enrolledOrder({ mpPreferenceId: "pref-o1" });
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    const removeEntered = deferred();
+    const releaseRemove = deferred();
+    const originalRemovePending = salesSheetSync.removePendingSalesSheetOrder;
+    const removePendingSpy = vi
+      .spyOn(salesSheetSync, "removePendingSalesSheetOrder")
+      .mockImplementationOnce(async (orderId) => {
+        removeEntered.resolve();
+        await releaseRemove.promise;
+        return originalRemovePending(orderId);
+      });
+
+    const durable = ensureOrderDurableInSalesSheet(order);
+    await removeEntered.promise;
+    vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(new Error("new O2 projection failed"));
+    const newerMutation = updateOrder(order.externalReference, { mpPreferenceId: "pref-o2" });
+    await Promise.resolve();
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      mpPreferenceId: "pref-o1",
+    });
+
+    releaseRemove.resolve();
+    await expect(durable).resolves.toMatchObject({ synced: true });
+    await newerMutation;
+    removePendingSpy.mockRestore();
+
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      mpPreferenceId: "pref-o2",
+      salesSheetSyncFailedAt: expect.any(Number),
+    });
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(true);
+  });
+
+  it("H07D1-INDEX-07 keeps the real Admin pending cleanup inside Order serialization", async () => {
+    const order = makeOrder({
+      paymentMethod: "cash",
+      salesSheetDeferredUntilApprovedAt: 1,
+    });
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    const removeEntered = deferred();
+    const releaseRemove = deferred();
+    const originalRemovePending = salesSheetSync.removePendingSalesSheetOrder;
+    const removePendingSpy = vi
+      .spyOn(salesSheetSync, "removePendingSalesSheetOrder")
+      .mockImplementationOnce(async (orderId) => {
+        removeEntered.resolve();
+        await releaseRemove.promise;
+        return originalRemovePending(orderId);
+      });
+
+    const adminRead = getOrdersForAdminWithKvState({
+      getSheetOrders: async () => [],
+      listPendingOrderIds: async () => [order.externalReference],
+    });
+    await removeEntered.promise;
+    vi.mocked(updateOrderRowInSalesSheet).mockRejectedValueOnce(
+      new Error("eligible projection failed"),
+    );
+    const confirmation = confirmManualPayment(order.externalReference);
+    await Promise.resolve();
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+
+    releaseRemove.resolve();
+    await expect(adminRead).resolves.toEqual([]);
+    await expect(confirmation).resolves.toMatchObject({
+      order: { paymentStatus: "confirmed" },
+    });
+    removePendingSpy.mockRestore();
+
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      paymentStatus: "confirmed",
+      salesSheetSyncFailedAt: expect.any(Number),
+    });
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(true);
+  });
+
+  it("H07D1-APPEND-01 does not bind a deduped append as projection success", async () => {
+    const order = enrolledOrder();
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    vi.mocked(appendOrderToSalesSheet).mockResolvedValueOnce({ deduped: true });
+
+    const result = await reconcileCurrentOrderSalesProjection(order.externalReference, {
+      rowExists: false,
+      requirePending: true,
+    });
+
+    expect(result.outcome).toBe("deduped");
+    expect(result.order?.salesSheetSyncFailedAt).toBe(2);
+    expect(result.order?.salesSheetSyncedAt).toBeUndefined();
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(true);
+  });
+
+  it("H07D1-CRASH-01 retries current O2 after Sheet success and marker persistence failure", async () => {
+    const order = enrolledOrder({ mpPreferenceId: "pref-o1" });
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    const originalSetJson = kv.setJson;
+    const setJsonSpy = vi
+      .spyOn(kv, "setJson")
+      .mockRejectedValueOnce(new Error("KV marker write unavailable"))
+      .mockImplementation(originalSetJson);
+
+    const first = await reconcileCurrentOrderSalesProjection(order.externalReference, {
+      rowExists: true,
+      requirePending: true,
+    });
+    setJsonSpy.mockRestore();
+
+    expect(first).toMatchObject({ outcome: "failed" });
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(true);
+    await updateOrder(order.externalReference, { mpPreferenceId: "pref-o2" });
+    await expect(
+      recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }),
+    ).resolves.toMatchObject({ outcome: "reconciled" });
+    expect(vi.mocked(updateOrderRowInSalesSheet).mock.calls.at(-1)?.[1]).toMatchObject({
+      mpPreferenceId: "pref-o2",
+    });
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      mpPreferenceId: "pref-o2",
+      salesSheetSyncedAt: expect.any(Number),
+      salesSheetSyncFailedAt: undefined,
+    });
+  });
+
+  it("H07D1-CRASH-02 retries current O2 after marker success and index removal failure", async () => {
+    const order = enrolledOrder({ mpPreferenceId: "pref-o1" });
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    const originalRemovePending = salesSheetSync.removePendingSalesSheetOrder;
+    const removePendingSpy = vi
+      .spyOn(salesSheetSync, "removePendingSalesSheetOrder")
+      .mockRejectedValueOnce(new Error("pending index unavailable"))
+      .mockImplementation(originalRemovePending);
+
+    await expect(
+      recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }),
+    ).resolves.toMatchObject({ outcome: "pending" });
+    removePendingSpy.mockRestore();
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      salesSheetSyncedAt: expect.any(Number),
+      salesSheetSyncFailedAt: undefined,
+    });
+
+    await updateOrder(order.externalReference, { mpPreferenceId: "pref-o2" });
+    await expect(
+      recoverPendingSalesSheetOrder(order.externalReference, { rowExists: true }),
+    ).resolves.toMatchObject({ outcome: "reconciled" });
+    expect(vi.mocked(updateOrderRowInSalesSheet).mock.calls.at(-1)?.[1]).toMatchObject({
+      mpPreferenceId: "pref-o2",
+    });
+    expect(await isPendingSalesSheetOrder(order.externalReference)).toBe(false);
+  });
+
+  it("H07D1-DURABLE-01 final durable projection ignores caller O1", async () => {
+    const order = enrolledOrder({ salesSheetSyncedAt: undefined, mpPreferenceId: "pref-o1" });
+    await createOrder(order, { syncSheet: false });
+    const appendEntered = deferred();
+    const releaseAppend = deferred();
+    vi.mocked(appendOrderToSalesSheet).mockImplementationOnce(async () => {
+      appendEntered.resolve();
+      await releaseAppend.promise;
+      return { deduped: false };
+    });
+
+    const durable = ensureOrderDurableInSalesSheet(order);
+    await appendEntered.promise;
+    await updateOrder(order.externalReference, { mpPreferenceId: "pref-o2" });
+    releaseAppend.resolve();
+    await expect(durable).resolves.toMatchObject({
+      synced: true,
+      order: { mpPreferenceId: "pref-o2" },
+    });
+    expect(vi.mocked(updateOrderRowInSalesSheet).mock.calls.at(-1)?.[1]).toMatchObject({
+      mpPreferenceId: "pref-o2",
+    });
+  });
+
+  it("H07D1-RECOVERY-01 overlapping workers and a normal mutation cannot end stale", async () => {
+    const order = enrolledOrder({ mpPreferenceId: "pref-o1" });
+    await createOrder(order, { syncSheet: false });
+    await addPendingSalesSheetOrder(order.externalReference);
+    const firstProjectionEntered = deferred();
+    const releaseFirstProjection = deferred();
+    vi.mocked(updateOrderRowInSalesSheet).mockImplementationOnce(async () => {
+      firstProjectionEntered.resolve();
+      await releaseFirstProjection.promise;
+    });
+
+    const firstWorker = reconcileCurrentOrderSalesProjection(order.externalReference, {
+      rowExists: true,
+      requirePending: true,
+    });
+    await firstProjectionEntered.promise;
+    const secondWorker = reconcileCurrentOrderSalesProjection(order.externalReference, {
+      rowExists: true,
+      requirePending: true,
+    });
+    const normal = updateOrder(order.externalReference, { mpPreferenceId: "pref-o2" });
+    releaseFirstProjection.resolve();
+    await Promise.all([firstWorker, secondWorker, normal]);
+
+    await expect(getOrder(order.externalReference)).resolves.toMatchObject({
+      mpPreferenceId: "pref-o2",
+    });
+    expect(vi.mocked(updateOrderRowInSalesSheet).mock.calls.at(-1)?.[1]).toMatchObject({
+      mpPreferenceId: "pref-o2",
+    });
+  });
+
+  it("selective current-state projection holds the normal lock through its Sheet write", async () => {
+    const order = enrolledOrder({ mpPreferenceId: "pref-o1" });
+    await createOrder(order, { syncSheet: false });
+    const projectionEntered = deferred();
+    const releaseProjection = deferred();
+    vi.mocked(updateOrderRowInSalesSheet).mockImplementationOnce(async () => {
+      projectionEntered.resolve();
+      await releaseProjection.promise;
+    });
+
+    const projection = projectCurrentOrderSalesState(order.externalReference, (current) => ({
+      mpPreferenceId: current.mpPreferenceId,
+      updatedAt: current.updatedAt,
+    }));
+    await projectionEntered.promise;
+    const normal = updateOrder(order.externalReference, { mpPreferenceId: "pref-o2" });
+    releaseProjection.resolve();
+    await Promise.all([projection, normal]);
+
+    expect(vi.mocked(updateOrderRowInSalesSheet).mock.calls.at(-1)?.[1]).toMatchObject({
+      mpPreferenceId: "pref-o2",
+    });
   });
 });

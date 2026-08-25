@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/src/server/sheets/repository", () => ({
-  appendOrderToSalesSheet: vi.fn(async () => undefined),
+  appendOrderToSalesSheet: vi.fn(async () => ({ deduped: false })),
   decrementProductsStockInSheet: vi.fn(async () => undefined),
   updateOrderRowInSalesSheet: vi.fn(async () => undefined),
 }));

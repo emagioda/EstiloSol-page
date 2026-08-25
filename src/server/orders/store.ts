@@ -32,7 +32,9 @@ import {
 } from "./paymentTransition";
 import {
   addPendingSalesSheetOrder,
+  isPendingSalesSheetOrder,
   removePendingSalesSheetOrder,
+  shouldRecoverOrderInSalesSheet,
 } from "./salesSheetSync";
 import type { Order, OrderPaymentStatus, OrderStatus } from "./types";
 import {
@@ -78,6 +80,24 @@ type EnsureOrderResult = {
 };
 
 type OrderPatch = Partial<Omit<Order, "externalReference" | "createdAt">>;
+
+type SalesSheetUpdates = Parameters<typeof updateOrderRowInSalesSheet>[1];
+
+export type CurrentSalesProjectionOutcome =
+  | "appended"
+  | "projected"
+  | "deduped"
+  | "pending"
+  | "failed"
+  | "missing"
+  | "not_eligible"
+  | "not_indexed";
+
+export type CurrentSalesProjectionResult = {
+  outcome: CurrentSalesProjectionOutcome;
+  order: Order | null;
+  error?: unknown;
+};
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -218,10 +238,180 @@ export async function ensureOrderExists(
   });
 }
 
-async function appendApprovedOrderToSalesSheet(order: Order): Promise<{ order: Order; synced: boolean }> {
-  if (!order.salesSheetDeferredUntilApprovedAt || order.salesSheetSyncedAt) {
-    return { order, synced: true };
+const buildCurrentSalesSheetUpdates = (order: Order): SalesSheetUpdates => ({
+  paymentStatus: order.paymentStatus,
+  shippingStatus: order.shippingStatus,
+  orderStatus: order.status,
+  mpStatus: order.mpStatus,
+  mpPaymentId: order.mpPaymentId,
+  mpPreferenceId: order.mpPreferenceId,
+  approvedAt: order.approvedAt ?? null,
+  receiptOutboxVersion: order.receiptOutboxVersion,
+  receiptEmailSentAt: order.receiptEmailSentAt,
+  inventoryStatus: resolveOrderInventoryStatus(order) ?? null,
+  inventoryIssueCode: order.inventoryIssueCode ?? null,
+  inventoryIssueAt: order.inventoryIssueAt ?? null,
+  stockDeductedAt: order.stockDeductedAt ?? null,
+  updatedAt: order.updatedAt,
+});
+
+const persistSalesProjectionStateWithinLock = async (
+  order: Order,
+  patch: Pick<Order, "salesSheetSyncedAt" | "salesSheetSyncFailedAt"> & Partial<Order>,
+): Promise<Order> => {
+  const updated: Order = { ...order, ...patch };
+  await setJson(
+    orderKey(order.externalReference),
+    updated,
+    privacyPolicy.ttlSecondsForStatus(updated.status),
+  );
+  return updated;
+};
+
+const ensurePendingSalesProjectionWithinLock = async (
+  order: Order,
+): Promise<boolean> => {
+  try {
+    await addPendingSalesSheetOrder(order.externalReference);
+    return true;
+  } catch (error) {
+    logEvent("error", "orders.sales_sheet_pending_index_failed", {
+      orderId: order.externalReference,
+      paymentStatus: order.paymentStatus,
+      inventoryStatus: resolveOrderInventoryStatus(order) ?? "legacy",
+      outcome: error instanceof Error ? error.name : "unknown",
+    });
+    return false;
   }
+};
+
+const clearPendingSalesProjectionWithinLock = async (
+  externalReference: string,
+  order: Order | null,
+): Promise<boolean> => {
+  try {
+    await removePendingSalesSheetOrder(externalReference);
+    return true;
+  } catch (error) {
+    const restored = order
+      ? await ensurePendingSalesProjectionWithinLock(order)
+      : await addPendingSalesSheetOrder(externalReference).then(
+          () => true,
+          () => false,
+        );
+    logEvent("warn", "orders.sales_sheet_pending_index_remove_failed", {
+      orderId: externalReference,
+      paymentStatus: order?.paymentStatus ?? "unknown",
+      inventoryStatus: order ? resolveOrderInventoryStatus(order) ?? "legacy" : "unknown",
+      outcome: error instanceof Error ? error.name : "unknown",
+      pendingRestored: restored,
+    });
+    return false;
+  }
+};
+
+/**
+ * Projects the current KV Order while holding the same lock used by normal
+ * mutations. A deduped append deliberately does not bind success: callers must
+ * retry with rowExists=true so only one Sheet mutation occupies each lock lease.
+ */
+export async function reconcileCurrentOrderSalesProjection(
+  externalReference: string,
+  options: { rowExists: boolean; requirePending?: boolean; managePending?: boolean },
+): Promise<CurrentSalesProjectionResult> {
+  return withOrderWriteLock(externalReference, async () => {
+    const managesPending = options.requirePending || options.managePending;
+    if (options.requirePending && !(await isPendingSalesSheetOrder(externalReference))) {
+      return { outcome: "not_indexed", order: await getOrder(externalReference) };
+    }
+
+    const stored = await getJson<StoredOrder>(orderKey(externalReference));
+    if (!stored) {
+      if (managesPending && !(await clearPendingSalesProjectionWithinLock(externalReference, null))) {
+        return { outcome: "pending", order: null };
+      }
+      return { outcome: "missing", order: null };
+    }
+    const current = ensureOrderDefaults(stored);
+    if (options.requirePending && !shouldRecoverOrderInSalesSheet(current)) {
+      if (!(await clearPendingSalesProjectionWithinLock(externalReference, current))) {
+        return { outcome: "pending", order: current };
+      }
+      return { outcome: "not_eligible", order: current };
+    }
+
+    try {
+      let outcome: "appended" | "projected" = "projected";
+      if (options.rowExists) {
+        await updateOrderRowInSalesSheet(
+          externalReference,
+          buildCurrentSalesSheetUpdates(current),
+        );
+      } else {
+        const appendResult = await appendOrderToSalesSheet(current);
+        if (appendResult?.deduped) {
+          return { outcome: "deduped", order: current };
+        }
+        outcome = "appended";
+      }
+
+      const salesSheetSyncedAt = Date.now();
+      const bound = await persistSalesProjectionStateWithinLock(current, {
+        salesSheetSyncedAt,
+        salesSheetSyncFailedAt: undefined,
+        ...(privacyPolicy.minimizeApprovedOrderPII
+          ? {
+              customer: privacyPolicy.anonymizeCustomer(current.customer),
+              notes: undefined,
+            }
+          : {}),
+      });
+      if (managesPending && !(await clearPendingSalesProjectionWithinLock(externalReference, bound))) {
+        return { outcome: "pending", order: bound };
+      }
+      return { outcome, order: bound };
+    } catch (error) {
+      let failed = current;
+      try {
+        failed = await persistSalesProjectionStateWithinLock(current, {
+          salesSheetSyncedAt: current.salesSheetSyncedAt,
+          salesSheetSyncFailedAt: Date.now(),
+        });
+      } catch (stateError) {
+        logEvent("error", "orders.sales_sheet_sync_failure_state_failed", {
+          orderId: externalReference,
+          paymentStatus: current.paymentStatus,
+          inventoryStatus: resolveOrderInventoryStatus(current) ?? "legacy",
+          outcome: stateError instanceof Error ? stateError.name : "unknown",
+        });
+      }
+      if (managesPending) {
+        await ensurePendingSalesProjectionWithinLock(failed);
+      }
+      return { outcome: "failed", order: failed, error };
+    }
+  });
+}
+
+/** A selective Admin read repair; the selector is synchronous and receives only the locked current Order. */
+export async function projectCurrentOrderSalesState(
+  externalReference: string,
+  selectUpdates: (current: Order) => SalesSheetUpdates | null,
+): Promise<Order | null> {
+  return withOrderWriteLock(externalReference, async () => {
+    const stored = await getJson<StoredOrder>(orderKey(externalReference));
+    if (!stored) return null;
+    const current = ensureOrderDefaults(stored);
+    const updates = selectUpdates(current);
+    if (updates) {
+      await updateOrderRowInSalesSheet(externalReference, updates);
+    }
+    return current;
+  });
+}
+
+async function ensureApprovedOrderSalesRowIdentity(order: Order): Promise<boolean> {
+  if (!order.salesSheetDeferredUntilApprovedAt || order.salesSheetSyncedAt) return true;
 
   const lockAcquired = await setJsonIfNotExists(
     salesSheetSyncKey(order.externalReference),
@@ -231,49 +421,19 @@ async function appendApprovedOrderToSalesSheet(order: Order): Promise<{ order: O
 
   if (!lockAcquired) {
     const marker = await getJson<string>(salesSheetSyncKey(order.externalReference));
-    if (marker === "synced") {
-      const salesSheetSyncedAt = Date.now();
-      const updated = await updateOrder(
-        order.externalReference,
-        { salesSheetSyncedAt },
-        { syncSheet: false },
-      );
-      return {
-        order: updated ?? { ...order, salesSheetSyncedAt },
-        synced: true,
-      };
-    }
+    if (marker === "synced") return true;
     logEvent("info", "orders.sales_sheet_sync_already_running", {
       externalReference: order.externalReference,
     });
-    return { order, synced: false };
+    return false;
   }
 
   let appendCompleted = false;
   try {
     await appendOrderToSalesSheet(order);
     appendCompleted = true;
-    const salesSheetSyncedAt = Date.now();
     await setJson(salesSheetSyncKey(order.externalReference), "synced", WEBHOOK_DEDUPE_TTL_SECONDS);
-    const updated = await updateOrder(
-      order.externalReference,
-      { salesSheetSyncedAt },
-      { syncSheet: false }
-    );
-    try {
-      await removePendingSalesSheetOrder(order.externalReference);
-    } catch (error) {
-      logEvent("warn", "orders.sales_sheet_pending_index_remove_failed", {
-        orderId: order.externalReference,
-        paymentStatus: order.paymentStatus,
-        inventoryStatus: resolveOrderInventoryStatus(order) ?? "legacy",
-        outcome: error instanceof Error ? error.name : "unknown",
-      });
-    }
-    return {
-      order: updated ?? { ...order, salesSheetSyncedAt },
-      synced: true,
-    };
+    return true;
   } catch (error) {
     if (!appendCompleted) {
       try {
@@ -304,9 +464,8 @@ async function appendApprovedOrderToSalesSheet(order: Order): Promise<{ order: O
         outcome: metricError instanceof Error ? metricError.name : "unknown",
       });
     }
-    let updated: Order | null = null;
     try {
-      updated = await updateOrder(
+      await updateOrder(
         order.externalReference,
         { salesSheetSyncFailedAt },
         { syncSheet: false }
@@ -329,11 +488,24 @@ async function appendApprovedOrderToSalesSheet(order: Order): Promise<{ order: O
         outcome: indexError instanceof Error ? indexError.name : "unknown",
       });
     }
-    return {
-      order: updated ?? { ...order, salesSheetSyncFailedAt },
-      synced: false,
-    };
+    return false;
   }
+}
+
+async function appendApprovedOrderToSalesSheet(order: Order): Promise<{ order: Order; synced: boolean }> {
+  const identityAvailable = await ensureApprovedOrderSalesRowIdentity(order);
+  if (!identityAvailable) {
+    return { order: (await getOrder(order.externalReference)) ?? order, synced: false };
+  }
+
+  const projection = await reconcileCurrentOrderSalesProjection(order.externalReference, {
+    rowExists: true,
+    managePending: true,
+  });
+  if (projection.outcome !== "projected" || !projection.order) {
+    return { order: projection.order ?? order, synced: false };
+  }
+  return { order: projection.order, synced: true };
 }
 
 export async function ensureOrderDurableInSalesSheet(
@@ -352,21 +524,6 @@ export async function ensureOrderDurableInSalesSheet(
   if (!appendResult.synced) return appendResult;
 
   const projected = appendResult.order;
-  await updateOrderRowInSalesSheet(projected.externalReference, {
-    paymentStatus: projected.paymentStatus,
-    shippingStatus: projected.shippingStatus,
-    orderStatus: projected.status,
-    mpStatus: projected.mpStatus,
-    mpPaymentId: projected.mpPaymentId,
-    mpPreferenceId: projected.mpPreferenceId,
-    approvedAt: projected.approvedAt ?? null,
-    receiptOutboxVersion: projected.receiptOutboxVersion,
-    inventoryStatus: projected.inventoryStatus ?? null,
-    inventoryIssueCode: projected.inventoryIssueCode ?? null,
-    inventoryIssueAt: projected.inventoryIssueAt ?? null,
-    stockDeductedAt: projected.stockDeductedAt ?? null,
-    updatedAt: projected.updatedAt,
-  });
   logEvent("info", "recovery.sales_row_ensured", {
     orderId: projected.externalReference,
     paymentStatus: projected.paymentStatus,

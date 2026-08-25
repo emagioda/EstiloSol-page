@@ -1,19 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { delIfValue, setJsonIfNotExists } from "@/src/server/kv";
 import { logEvent } from "@/src/server/observability/log";
-import { privacyPolicy } from "@/src/server/privacy/policy";
-import {
-  appendOrderToSalesSheet,
-  updateOrderRowInSalesSheet,
-} from "@/src/server/sheets/repository";
 import { resolveOrderInventoryStatus } from "./inventory";
 import {
-  addPendingSalesSheetOrder,
   isPendingSalesSheetOrder,
-  removePendingSalesSheetOrder,
-  shouldRecoverOrderInSalesSheet,
 } from "./salesSheetSync";
-import { getOrder, ORDER_WRITE_LOCK_TTL_SECONDS, updateOrder } from "./store";
+import {
+  getOrder,
+  ORDER_WRITE_LOCK_TTL_SECONDS,
+  reconcileCurrentOrderSalesProjection,
+  type CurrentSalesProjectionResult,
+} from "./store";
 import type { Order } from "./types";
 
 const recoveryLockKey = (orderId: string) =>
@@ -37,36 +34,14 @@ export type SalesSheetRecoveryResult = {
 type SalesSheetRecoveryDependencies = {
   isPending?: typeof isPendingSalesSheetOrder;
   readOrder?: typeof getOrder;
-  appendOrder?: typeof appendOrderToSalesSheet;
-  updateSheetRow?: typeof updateOrderRowInSalesSheet;
-  persistOrder?: typeof updateOrder;
-  addPending?: typeof addPendingSalesSheetOrder;
-  removePending?: typeof removePendingSalesSheetOrder;
-  now?: () => number;
+  reconcileProjection?: typeof reconcileCurrentOrderSalesProjection;
 };
-
-const buildOperationalSheetUpdates = (order: Order, updatedAt: number) => ({
-  paymentStatus: order.paymentStatus,
-  shippingStatus: order.shippingStatus,
-  orderStatus: order.status,
-  mpStatus: order.mpStatus,
-  mpPaymentId: order.mpPaymentId,
-  mpPreferenceId: order.mpPreferenceId,
-  approvedAt: order.approvedAt ?? null,
-  receiptOutboxVersion: order.receiptOutboxVersion,
-  receiptEmailSentAt: order.receiptEmailSentAt,
-  inventoryStatus: resolveOrderInventoryStatus(order) ?? null,
-  inventoryIssueCode: order.inventoryIssueCode ?? null,
-  inventoryIssueAt: order.inventoryIssueAt ?? null,
-  stockDeductedAt: order.stockDeductedAt ?? null,
-  updatedAt,
-});
 
 const logRecovery = (
   level: "info" | "warn",
   event: string,
   order: Order,
-  outcome: SalesSheetRecoveryOutcome
+  outcome: SalesSheetRecoveryOutcome,
 ) => {
   logEvent(level, event, {
     orderId: order.externalReference,
@@ -76,25 +51,32 @@ const logRecovery = (
   });
 };
 
+const mapProjectionOutcome = (
+  projection: CurrentSalesProjectionResult,
+): SalesSheetRecoveryOutcome => {
+  if (projection.outcome === "appended") return "appended";
+  if (projection.outcome === "projected") return "reconciled";
+  if (projection.outcome === "missing") return "stale";
+  if (projection.outcome === "not_eligible") return "not_eligible";
+  if (projection.outcome === "not_indexed") return "not_indexed";
+  return "pending";
+};
+
 export async function recoverPendingSalesSheetOrder(
   orderId: string,
   options: { rowExists: boolean },
-  dependencies: SalesSheetRecoveryDependencies = {}
+  dependencies: SalesSheetRecoveryDependencies = {},
 ): Promise<SalesSheetRecoveryResult> {
   const checkPending = dependencies.isPending ?? isPendingSalesSheetOrder;
   const readOrder = dependencies.readOrder ?? getOrder;
-  const appendOrder = dependencies.appendOrder ?? appendOrderToSalesSheet;
-  const updateSheetRow = dependencies.updateSheetRow ?? updateOrderRowInSalesSheet;
-  const persistOrder = dependencies.persistOrder ?? updateOrder;
-  const addPending = dependencies.addPending ?? addPendingSalesSheetOrder;
-  const removePending = dependencies.removePending ?? removePendingSalesSheetOrder;
-  const now = dependencies.now ?? Date.now;
+  const reconcileProjection =
+    dependencies.reconcileProjection ?? reconcileCurrentOrderSalesProjection;
   const ownerToken = randomUUID();
   const lockKey = recoveryLockKey(orderId);
   const acquired = await setJsonIfNotExists(
     lockKey,
     ownerToken,
-    ORDER_WRITE_LOCK_TTL_SECONDS
+    ORDER_WRITE_LOCK_TTL_SECONDS,
   );
 
   if (!acquired) {
@@ -106,86 +88,54 @@ export async function recoverPendingSalesSheetOrder(
       return { outcome: "not_indexed", order: await readOrder(orderId) };
     }
 
-    const order = await readOrder(orderId);
-    if (!order) {
-      await removePending(orderId);
-      logEvent("warn", "orders.sales_sheet_pending_index_stale", {
-        orderId,
-        inventoryStatus: "unknown",
-        paymentStatus: "unknown",
-        outcome: "stale",
+    let projection = await reconcileProjection(orderId, {
+      rowExists: options.rowExists,
+      requirePending: true,
+    });
+
+    // Append identity dedupe is not a freshness acknowledgement. Re-enter the
+    // normal Order lock and project current KV into the now-existing row.
+    if (projection.outcome === "deduped") {
+      projection = await reconcileProjection(orderId, {
+        rowExists: true,
+        requirePending: true,
       });
-      return { outcome: "stale", order: null };
     }
 
-    if (!shouldRecoverOrderInSalesSheet(order)) {
-      await removePending(orderId);
-      logRecovery("warn", "orders.sales_sheet_pending_index_stale", order, "not_eligible");
-      return { outcome: "not_eligible", order };
-    }
-
-    if (order.salesSheetSyncedAt && !order.salesSheetSyncFailedAt) {
-      await removePending(orderId);
-      logRecovery("info", "orders.sales_sheet_append_recovered", order, "already_synced");
-      return { outcome: "already_synced", order };
-    }
-
-    try {
-      if (options.rowExists) {
-        await updateSheetRow(
-          orderId,
-          buildOperationalSheetUpdates(order, now())
-        );
+    const outcome = mapProjectionOutcome(projection);
+    if (outcome === "stale" || outcome === "not_eligible") {
+      if (projection.order) {
+        logRecovery("warn", "orders.sales_sheet_pending_index_stale", projection.order, outcome);
       } else {
-        logRecovery("warn", "orders.sales_sheet_missing_detected", order, "pending");
-        await appendOrder(order);
-      }
-
-      const salesSheetSyncedAt = now();
-      const updated = await persistOrder(
-        orderId,
-        {
-          salesSheetSyncedAt,
-          salesSheetSyncFailedAt: undefined,
-          ...(privacyPolicy.minimizeApprovedOrderPII
-            ? {
-                customer: privacyPolicy.anonymizeCustomer(order.customer),
-                notes: undefined,
-              }
-            : {}),
-        },
-        { syncSheet: false }
-      );
-      if (!updated) throw new Error("Order disappeared while reconciling sales sheet");
-
-      await removePending(orderId);
-      const outcome = options.rowExists ? "reconciled" : "appended";
-      logRecovery("info", "orders.sales_sheet_append_recovered", updated, outcome);
-      return { outcome, order: updated };
-    } catch (error) {
-      try {
-        await addPending(orderId);
-        await persistOrder(
+        logEvent("warn", "orders.sales_sheet_pending_index_stale", {
           orderId,
-          { salesSheetSyncFailedAt: now() },
-          { syncSheet: false }
-        );
-      } catch (stateError) {
-        logEvent("error", "orders.sales_sheet_pending_state_failed", {
-          orderId,
-          inventoryStatus: resolveOrderInventoryStatus(order) ?? "legacy",
-          paymentStatus: order.paymentStatus,
-          outcome: stateError instanceof Error ? stateError.name : "unknown",
+          inventoryStatus: "unknown",
+          paymentStatus: "unknown",
+          outcome,
         });
       }
-      logEvent("warn", "orders.sales_sheet_append_pending", {
-        orderId,
-        inventoryStatus: resolveOrderInventoryStatus(order) ?? "legacy",
-        paymentStatus: order.paymentStatus,
-        outcome: error instanceof Error ? error.name : "unknown",
-      });
-      return { outcome: "pending", order: (await readOrder(orderId)) ?? order };
+      return { outcome, order: projection.order };
     }
+
+    if (outcome === "not_indexed") {
+      return { outcome, order: projection.order };
+    }
+
+    if (outcome === "appended" || outcome === "reconciled") {
+      if (projection.order) {
+        logRecovery("info", "orders.sales_sheet_append_recovered", projection.order, outcome);
+      }
+      return { outcome, order: projection.order };
+    }
+
+    const current = (await readOrder(orderId)) ?? projection.order;
+    logEvent("warn", "orders.sales_sheet_append_pending", {
+      orderId,
+      inventoryStatus: current ? resolveOrderInventoryStatus(current) ?? "legacy" : "unknown",
+      paymentStatus: current?.paymentStatus ?? "unknown",
+      outcome: projection.error instanceof Error ? projection.error.name : projection.outcome,
+    });
+    return { outcome: "pending", order: current };
   } finally {
     try {
       await delIfValue(lockKey, ownerToken);
@@ -199,9 +149,11 @@ export async function recoverPendingSalesSheetOrder(
 }
 
 export const salesSheetRecoveryCompleted = (
-  outcome: SalesSheetRecoveryOutcome
+  outcome: SalesSheetRecoveryOutcome,
 ): boolean =>
   outcome === "appended" ||
   outcome === "reconciled" ||
   outcome === "already_synced" ||
+  outcome === "stale" ||
+  outcome === "not_eligible" ||
   outcome === "not_indexed";

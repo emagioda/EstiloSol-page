@@ -838,12 +838,17 @@ export const buildSalesSheetRow = (order: Order): Record<string, unknown> => {
   };
 };
 
-export async function appendOrderToSalesSheet(order: Order): Promise<void> {
-  await postMutation({
+export type AppendOrderResult = {
+  deduped: boolean;
+};
+
+export async function appendOrderToSalesSheet(order: Order): Promise<AppendOrderResult> {
+  const response = await postMutation({
     action: "appendRow",
     sheet: SALES_SHEET_NAME,
     row: buildSalesSheetRow(order),
   }, "write");
+  return { deduped: response.deduped === true };
 }
 
 export async function appendOrderAndDecrementStockInSheet(

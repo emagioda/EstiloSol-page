@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/src/server/sheets/repository", () => ({
-  appendOrderToSalesSheet: vi.fn(async () => undefined),
+  appendOrderToSalesSheet: vi.fn(async () => ({ deduped: false })),
   decrementProductsStockInSheet: vi.fn(async () => undefined),
   updateOrderRowInSalesSheet: vi.fn(async () => undefined),
 }));
@@ -281,6 +281,7 @@ describe("orders create manual payment flow", () => {
       vi.mocked(appendOrderToSalesSheet).mockImplementationOnce(async () => {
         signalSheetAppendEntered();
         await sheetAppendGate;
+        return { deduped: false };
       });
       const createOrderSpy = vi.spyOn(orderStore, "createOrder");
       const kvSetSpy = vi.spyOn(kv, "set");
@@ -344,6 +345,7 @@ describe("orders create manual payment flow", () => {
       })
       .mockImplementationOnce(async (order) => {
         logicalRows.add(order.externalReference);
+        return { deduped: true };
       });
     const checkoutAttemptId = newAttemptId("sheet-response-lost");
     const body = buildManualBody({ checkoutAttemptId });
