@@ -9,10 +9,14 @@ import {
   reconstructOrderFromAuthorityEvidence,
   reconcileMercadoPagoPaymentObservation,
   reconcileMercadoPagoPaymentObservationBatch,
+  runMissingOrderDestinationArbitration,
   updateOrder,
 } from "@/src/server/orders/store";
 import type { Order } from "@/src/server/orders/types";
-import type { MercadoPagoPaymentObservation } from "./ledger";
+import {
+  resolveTerminalPaymentStatusByLedgerPrecedence,
+  type MercadoPagoPaymentObservation,
+} from "./ledger";
 import type { MpPaymentResponse, MpSearchPayment } from "./shared";
 import { amountMatches } from "./shared";
 import {
@@ -595,15 +599,41 @@ export async function reconcileRecoveryPaymentEvent(
         event.financialStatus === "refunded" ||
         event.financialStatus === "charged_back"
       ) {
-        await updateOrderRowInSalesSheet(event.externalReference, {
-          paymentStatus: event.financialStatus,
-          orderStatus: event.financialStatus,
-          mpStatus: event.financialStatus,
-          mpPaymentId: event.paymentId,
-          updatedAt: Date.parse(event.observedAt),
-        });
-        await completeRecoveryEvent(event, leaseOwner);
-        return { outcome: "completed", order: null };
+        const terminalEventStatus = event.financialStatus;
+        const destination = await runMissingOrderDestinationArbitration(
+          event.externalReference,
+          {
+            onKvAuthority: (current) => current,
+            onSheetFallback: async (salesOrder) => {
+              if (
+                salesOrder.orderId !== event.externalReference ||
+                Math.abs(salesOrder.total - event.amount) > 0.01 ||
+                salesOrder.currency !== event.currency
+              ) {
+                throw new Error("RECOVERY_SALES_AUTHORITY_CHANGED");
+              }
+              const terminalStatus = resolveTerminalPaymentStatusByLedgerPrecedence(
+                salesOrder.paymentStatus,
+                terminalEventStatus,
+              );
+              if (terminalStatus === terminalEventStatus) {
+                await updateOrderRowInSalesSheet(event.externalReference, {
+                  paymentStatus: terminalEventStatus,
+                  orderStatus: terminalEventStatus,
+                  mpStatus: terminalEventStatus,
+                  mpPaymentId: event.paymentId,
+                  updatedAt: Date.parse(event.observedAt),
+                });
+              }
+              return null;
+            },
+          },
+        );
+        if (destination.outcome === "sheet_fallback") {
+          await completeRecoveryEvent(event, leaseOwner);
+          return { outcome: "completed", order: null };
+        }
+        order = destination.order;
       } else {
         await markRecoveryEventState({
           eventKey: event.eventKey,

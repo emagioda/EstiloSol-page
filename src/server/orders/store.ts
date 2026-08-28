@@ -10,6 +10,7 @@ import {
   SHEETS_MUTATION_WORST_CASE_MS,
   UPDATE_ORDER_ROW_WORST_CASE_MS,
   updateOrderRowInSalesSheet,
+  type AdminOrderSheetRow,
 } from "@/src/server/sheets/repository";
 import {
   attemptInventoryForPaidOrder,
@@ -94,6 +95,16 @@ type EnsureOrderResult = {
 export type MissingOrderSheetFallbackResult<T> =
   | { outcome: "sheet_fallback"; result: T }
   | { outcome: "kv_authority_returned" };
+
+export type MissingOrderDestinationArbitrationResult<T> =
+  | { outcome: "kv_authority"; order: Order; result: T }
+  | { outcome: "sheet_fallback"; order: AdminOrderSheetRow; result: T };
+
+type MissingOrderDestinationArbitrationOptions<T> = {
+  projectCurrentKv?: boolean;
+  onKvAuthority: (current: Order) => Promise<T> | T;
+  onSheetFallback: (current: AdminOrderSheetRow) => Promise<T> | T;
+};
 
 export type RecoveryAuthorityEvidence = {
   paymentEvents: RecoveryPaymentEvent[];
@@ -355,6 +366,61 @@ export async function runMissingOrderSheetFallback<T>(
       return { outcome: "kv_authority_returned" as const };
     }
     return { outcome: "sheet_fallback" as const, result: await fallback() };
+  });
+}
+
+/**
+ * Final authority-epoch arbitration for work prepared while an Order key was
+ * absent. Slow evidence and inventory work stays outside this function. The
+ * final KV read, unique ventas re-read, evidence validation supplied by the
+ * caller, and narrow fallback commit all share the normal per-Order lock.
+ */
+export async function runMissingOrderDestinationArbitration<T>(
+  externalReference: string,
+  options: MissingOrderDestinationArbitrationOptions<T>,
+): Promise<MissingOrderDestinationArbitrationResult<T>> {
+  return withOrderWriteLock(externalReference, async () => {
+    const stored = await getJson<StoredOrder>(orderKey(externalReference));
+    if (stored) {
+      const current = normalizeAuthorityOrder(stored, externalReference);
+      if (options.projectCurrentKv) {
+        await updateOrderRowInSalesSheet(
+          externalReference,
+          buildCurrentSalesSheetUpdates(current),
+        );
+      }
+      logEvent("info", "orders.destination_arbitration_routed_to_kv", {
+        orderId: externalReference,
+      });
+      return {
+        outcome: "kv_authority" as const,
+        order: current,
+        result: await options.onKvAuthority(current),
+      };
+    }
+
+    const salesLookup = await getUniqueOrderRowById(externalReference);
+    if (salesLookup.outcome === "duplicate") {
+      logEvent("warn", "orders.destination_arbitration_duplicate_sales_blocked", {
+        orderId: externalReference,
+      });
+      throw new OrderAuthorityHandoffError(
+        ORDER_AUTHORITY_HANDOFF_ERRORS.duplicateSalesRows,
+        `ventas authority is ambiguous for ${externalReference}`,
+      );
+    }
+    if (salesLookup.outcome !== "unique") {
+      throw new OrderAuthorityHandoffError(
+        ORDER_AUTHORITY_HANDOFF_ERRORS.invalidCandidate,
+        `ventas authority is missing for ${externalReference}`,
+      );
+    }
+
+    return {
+      outcome: "sheet_fallback" as const,
+      order: salesLookup.order,
+      result: await options.onSheetFallback(salesLookup.order),
+    };
   });
 }
 

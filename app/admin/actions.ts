@@ -13,6 +13,7 @@ import {
   applyAdminOrderStatusIntent,
   getOrder,
   retryPaidOrderInventory,
+  runMissingOrderDestinationArbitration,
   runMissingOrderSheetFallback,
 } from "@/src/server/orders/store";
 import {
@@ -25,6 +26,7 @@ import {
 } from "@/src/server/orders/adminIntent";
 import {
   attemptInventoryForPaidOrder,
+  buildInventoryDemandIdentity,
   inventoryResultToOrderPatch,
   resolveOrderInventoryStatus,
 } from "@/src/server/orders/inventory";
@@ -44,7 +46,11 @@ import {
   parseFallbackOrderFulfillment,
   parseFallbackOrderItems,
 } from "@/src/server/orders/sheetFallback";
-import { parseCanonicalManualPaymentEvidence } from "@/src/server/orders/authorityHandoff";
+import {
+  assertCoherentOperationalOrder,
+  ORDER_AUTHORITY_HANDOFF_ERRORS,
+  parseCanonicalManualPaymentEvidence,
+} from "@/src/server/orders/authorityHandoff";
 import { reconcileAdminMercadoPagoConfirmation } from "@/src/server/payments/adminConfirmation";
 import { reconstructOrderAuthorityFromDurableEvidence } from "@/src/server/recovery/service";
 import {
@@ -213,6 +219,80 @@ const requireUniqueSheetOrder = async (orderId: string): Promise<AdminOrderSheet
   return lookup.order;
 };
 
+type PreparedManualFallbackInventory = {
+  paymentMethod: "cash" | "transfer";
+  paymentId: string;
+  approvedAt: number;
+  demandIdentity: string;
+  inventoryProjectionIdentity: string;
+};
+
+const inventoryProjectionIdentity = (row: AdminOrderSheetRow): string =>
+  JSON.stringify({
+    inventoryStatus: row.inventoryStatus ?? null,
+    inventoryIssueCode: row.inventoryIssueCode || null,
+    inventoryIssueAt: row.inventoryIssueAt || null,
+    stockDeductedAt: row.stockDeductedAt || null,
+  });
+
+const prepareManualFallbackInventory = (
+  row: AdminOrderSheetRow,
+): { evidence: PreparedManualFallbackInventory; order: Order } => {
+  const manual = parseCanonicalManualPaymentEvidence(row, row.paymentMethod);
+  if (!manual) {
+    throw new PaymentTransitionBlockedError(
+      PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired,
+    );
+  }
+  const order = buildFallbackOrderFromSheet(row, "confirmed", row.shippingStatus);
+  assertCoherentOperationalOrder(
+    order,
+    row.orderId,
+    ORDER_AUTHORITY_HANDOFF_ERRORS.incoherentSalesRow,
+  );
+  return {
+    order,
+    evidence: {
+      ...manual,
+      demandIdentity: buildInventoryDemandIdentity(order.items),
+      inventoryProjectionIdentity: inventoryProjectionIdentity(row),
+    },
+  };
+};
+
+const revalidatePreparedManualFallbackInventory = (
+  orderId: string,
+  prepared: PreparedManualFallbackInventory,
+  current: AdminOrderSheetRow,
+): Order => {
+  const manual = parseCanonicalManualPaymentEvidence(current, prepared.paymentMethod);
+  if (
+    !manual ||
+    manual.paymentId !== prepared.paymentId ||
+    manual.approvedAt !== prepared.approvedAt
+  ) {
+    throw new PaymentTransitionBlockedError(
+      PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired,
+    );
+  }
+
+  const currentOrder = buildFallbackOrderFromSheet(
+    current,
+    current.paymentStatus,
+    current.shippingStatus,
+  );
+  if (
+    buildInventoryDemandIdentity(currentOrder.items) !== prepared.demandIdentity ||
+    inventoryProjectionIdentity(current) !== prepared.inventoryProjectionIdentity
+  ) {
+    throw new AdminOrderStateChangedError(orderId, {
+      paymentStatus: current.paymentStatus,
+      shippingStatus: current.shippingStatus,
+    });
+  }
+  return currentOrder;
+};
+
 export type AdminOrderUpdateInput = {
   orderId: string;
   changedFields: AdminStatusField[];
@@ -249,6 +329,16 @@ const inventoryPatchFromAttempt = async (order: Order) => {
     ...(result.status === "deducted" ? { deduped: result.deduped } : { issueCode: result.issueCode }),
   });
   return { result, patch: inventoryResultToOrderPatch(result) };
+};
+
+const repairCurrentKvInventoryIfPending = async (order: Order): Promise<void> => {
+  const inventoryStatus = resolveOrderInventoryStatus(order);
+  if (
+    order.paymentStatus === "confirmed" &&
+    (inventoryStatus === undefined || inventoryStatus === "pending")
+  ) {
+    await retryPaidOrderInventory(order.externalReference);
+  }
 };
 
 const isDurablyClaimedManualPaymentIntent = (
@@ -340,19 +430,37 @@ const applySheetFallbackOrderStatusesUpdate = async (
     isDurablyClaimedManualPaymentIntent(intent, canonicalOrder);
 
   if (shouldEnsureClaimedManualPaymentEffects) {
+    const prepared = prepareManualFallbackInventory(sheetOrder);
     const { patch } = await inventoryPatchFromAttempt({
-      ...canonicalOrder,
+      ...prepared.order,
       inventoryStatus: "pending",
       stockDeductedAt: undefined,
     });
-    await updateOrderRowInSalesSheet(orderId, {
-      inventoryStatus: patch.inventoryStatus ?? null,
-      inventoryIssueCode: patch.inventoryIssueCode ?? null,
-      inventoryIssueAt: patch.inventoryIssueAt ?? null,
-      stockDeductedAt: patch.stockDeductedAt ?? null,
-      updatedAt: Date.now(),
+    const destination = await runMissingOrderDestinationArbitration(orderId, {
+      projectCurrentKv: true,
+      onKvAuthority: (current) => current,
+      onSheetFallback: async (latestSheetOrder) => {
+        const latestOrder = revalidatePreparedManualFallbackInventory(
+          orderId,
+          prepared.evidence,
+          latestSheetOrder,
+        );
+        await updateOrderRowInSalesSheet(orderId, {
+          inventoryStatus: patch.inventoryStatus ?? null,
+          inventoryIssueCode: patch.inventoryIssueCode ?? null,
+          inventoryIssueAt: patch.inventoryIssueAt ?? null,
+          stockDeductedAt: patch.stockDeductedAt ?? null,
+          updatedAt: Date.now(),
+        });
+        return { ...latestOrder, ...patch };
+      },
     });
-    canonicalOrder = { ...canonicalOrder, ...patch };
+    if (destination.outcome === "kv_authority") {
+      await repairCurrentKvInventoryIfPending(destination.order);
+      return applyOrderStatusesUpdate(orderId, intent);
+    }
+    sheetOrder = destination.order;
+    canonicalOrder = destination.result;
   }
 
   const shouldReevaluateShippingAfterClaimedPayment =
@@ -449,23 +557,37 @@ const applyOrderStatusesUpdate = async (
           );
         }
         if (!intent.changedFields.includes("paymentStatus")) {
-          const canonicalOrder = buildFallbackOrderFromSheet(
-            sheetOrder,
-            "confirmed",
-            sheetOrder.shippingStatus,
-          );
+          const prepared = prepareManualFallbackInventory(sheetOrder);
           const { patch } = await inventoryPatchFromAttempt({
-            ...canonicalOrder,
+            ...prepared.order,
             inventoryStatus: "pending",
             stockDeductedAt: undefined,
           });
-          await updateOrderRowInSalesSheet(orderId, {
-            inventoryStatus: patch.inventoryStatus ?? null,
-            inventoryIssueCode: patch.inventoryIssueCode ?? null,
-            inventoryIssueAt: patch.inventoryIssueAt ?? null,
-            stockDeductedAt: patch.stockDeductedAt ?? null,
-            updatedAt: Date.now(),
+          const destination = await runMissingOrderDestinationArbitration(orderId, {
+            projectCurrentKv: true,
+            onKvAuthority: (current) => current,
+            onSheetFallback: async (latestSheetOrder) => {
+              const latestOrder = revalidatePreparedManualFallbackInventory(
+                orderId,
+                prepared.evidence,
+                latestSheetOrder,
+              );
+              await updateOrderRowInSalesSheet(orderId, {
+                inventoryStatus: patch.inventoryStatus ?? null,
+                inventoryIssueCode: patch.inventoryIssueCode ?? null,
+                inventoryIssueAt: patch.inventoryIssueAt ?? null,
+                stockDeductedAt: patch.stockDeductedAt ?? null,
+                updatedAt: Date.now(),
+              });
+              return { ...latestOrder, ...patch };
+            },
           });
+
+          if (destination.outcome === "kv_authority") {
+            await repairCurrentKvInventoryIfPending(destination.order);
+            application = await applyAdminOrderStatusIntent(orderId, intent);
+            if (!application) throw new Error("KV_AUTHORITY_RETURNED_WITHOUT_ORDER");
+          }
 
           sheetFallbackMutation = async () => {
             const latestSheetOrder = await requireUniqueSheetOrder(orderId);
@@ -571,34 +693,67 @@ export async function retryOrderInventoryAction(orderIdInput: string) {
     if (!updated) throw new Error("Pedido no encontrado.");
     inventoryStatus = resolveOrderInventoryStatus(updated);
   } else {
-    const sheetOrder = await getOrderRowById(orderId);
-    if (!sheetOrder) throw new Error("Pedido no encontrado.");
-    if (sheetOrder.paymentStatus !== "confirmed") {
-      throw new Error("El inventario solo puede reintentarse para un pago confirmado.");
-    }
-
-    const fallbackOrder = buildFallbackOrderFromSheet(
-      sheetOrder,
-      sheetOrder.paymentStatus,
-      sheetOrder.shippingStatus
-    );
-
-    if (resolveOrderInventoryStatus(fallbackOrder) === "deducted") {
-      inventoryStatus = "deducted";
+    const reconstructed = await reconstructOrderAuthorityFromDurableEvidence(orderId);
+    if (reconstructed) {
+      const updated = await retryPaidOrderInventory(orderId);
+      if (!updated) throw new Error("Pedido no encontrado.");
+      inventoryStatus = resolveOrderInventoryStatus(updated);
     } else {
-      const { patch } = await inventoryPatchFromAttempt(fallbackOrder);
-      const shouldResetInvalidCompletion =
-        fallbackOrder.shippingStatus === "completed" &&
-        !isTrustedHistoricalCompletion(fallbackOrder);
-      await updateOrderRowInSalesSheet(orderId, {
-        inventoryStatus: patch.inventoryStatus ?? null,
-        inventoryIssueCode: patch.inventoryIssueCode ?? null,
-        inventoryIssueAt: patch.inventoryIssueAt ?? null,
-        stockDeductedAt: patch.stockDeductedAt,
-        ...(shouldResetInvalidCompletion ? { shippingStatus: "in_process" } : {}),
-        updatedAt: Date.now(),
+      const sheetOrder = await requireUniqueSheetOrder(orderId);
+      if (sheetOrder.paymentStatus !== "confirmed") {
+        throw new Error("El inventario solo puede reintentarse para un pago confirmado.");
+      }
+      if (sheetOrder.paymentMethod === "mercadopago") {
+        throw new PaymentTransitionBlockedError(
+          PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired,
+        );
+      }
+      if (sheetOrder.paymentMethod !== "cash" && sheetOrder.paymentMethod !== "transfer") {
+        throw new PaymentTransitionBlockedError(
+          PAYMENT_TRANSITION_BLOCK_REASONS.providerAuthorityRequired,
+        );
+      }
+
+      const prepared = prepareManualFallbackInventory(sheetOrder);
+      const { patch } = await inventoryPatchFromAttempt({
+        ...prepared.order,
+        inventoryStatus: "pending",
+        stockDeductedAt: undefined,
       });
-      inventoryStatus = patch.inventoryStatus;
+      const destination = await runMissingOrderDestinationArbitration(orderId, {
+        projectCurrentKv: true,
+        onKvAuthority: (current) => current,
+        onSheetFallback: async (latestSheetOrder) => {
+          const latestOrder = revalidatePreparedManualFallbackInventory(
+            orderId,
+            prepared.evidence,
+            latestSheetOrder,
+          );
+          const projectedOrder = { ...latestOrder, ...patch };
+          const shouldResetInvalidCompletion =
+            latestOrder.shippingStatus === "completed" &&
+            !isTrustedHistoricalCompletion(projectedOrder);
+          await updateOrderRowInSalesSheet(orderId, {
+            inventoryStatus: patch.inventoryStatus ?? null,
+            inventoryIssueCode: patch.inventoryIssueCode ?? null,
+            inventoryIssueAt: patch.inventoryIssueAt ?? null,
+            stockDeductedAt: patch.stockDeductedAt ?? null,
+            ...(shouldResetInvalidCompletion ? { shippingStatus: "in_process" } : {}),
+            updatedAt: Date.now(),
+          });
+          return shouldResetInvalidCompletion
+            ? { ...projectedOrder, shippingStatus: "in_process" as const }
+            : projectedOrder;
+        },
+      });
+
+      if (destination.outcome === "kv_authority") {
+        const updated = await retryPaidOrderInventory(orderId);
+        if (!updated) throw new Error("Pedido no encontrado.");
+        inventoryStatus = resolveOrderInventoryStatus(updated);
+      } else {
+        inventoryStatus = resolveOrderInventoryStatus(destination.result);
+      }
     }
   }
 

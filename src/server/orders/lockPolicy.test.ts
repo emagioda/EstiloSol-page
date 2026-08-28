@@ -97,4 +97,33 @@ describe("PR 2 order write lock policy", () => {
     expect(recoverySource).not.toContain("ensureOrderExists");
     expect(reconciliationSource).not.toContain("ensureOrderExists");
   });
+
+  it("D2B-LOCK-01 all three writer families use the shared destination arbitration", () => {
+    const storeSource = readFileSync(
+      resolve(process.cwd(), "src/server/orders/store.ts"),
+      "utf8",
+    );
+    const actionsSource = readFileSync(
+      resolve(process.cwd(), "app/admin/actions.ts"),
+      "utf8",
+    );
+    const reconciliationSource = readFileSync(
+      resolve(process.cwd(), "src/server/payments/reconciliation.ts"),
+      "utf8",
+    );
+    const start = storeSource.indexOf(
+      "export async function runMissingOrderDestinationArbitration",
+    );
+    const end = storeSource.indexOf("const buildCurrentSalesSheetUpdates", start);
+    const implementation = storeSource.slice(start, end);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(implementation).toContain("withOrderWriteLock");
+    expect(implementation).toContain("getJson<StoredOrder>");
+    expect(implementation).toContain("getUniqueOrderRowById");
+    expect(implementation).not.toContain("attemptInventoryForPaidOrder");
+    expect(actionsSource.match(/runMissingOrderDestinationArbitration\(/g)).toHaveLength(3);
+    expect(reconciliationSource.match(/runMissingOrderDestinationArbitration\(/g)).toHaveLength(1);
+  });
 });

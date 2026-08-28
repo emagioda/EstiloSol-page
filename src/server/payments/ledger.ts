@@ -54,6 +54,16 @@ const statusPriority = (status: string) => {
   return 1;
 };
 
+export const resolveTerminalPaymentStatusByLedgerPrecedence = (
+  current: OrderPaymentStatus,
+  incoming: Extract<OrderPaymentStatus, "refunded" | "charged_back">,
+): Extract<OrderPaymentStatus, "refunded" | "charged_back"> =>
+  current === "refunded" || current === "charged_back"
+    ? statusPriority(current) > statusPriority(incoming)
+      ? current
+      : incoming
+    : incoming;
+
 const toOrderState = (
   status: string
 ): { status: OrderStatus; paymentStatus: OrderPaymentStatus } => {

@@ -18,6 +18,7 @@ vi.mock("@/src/server/orders/store", () => ({
   getOrder: vi.fn(),
   markApproved: vi.fn(),
   retryPaidOrderInventory: vi.fn(),
+  runMissingOrderDestinationArbitration: vi.fn(),
   runMissingOrderSheetFallback: vi.fn(),
   updateOrder: vi.fn(),
 }));
@@ -49,6 +50,7 @@ import {
   getOrder,
   markApproved,
   retryPaidOrderInventory,
+  runMissingOrderDestinationArbitration,
   runMissingOrderSheetFallback,
   updateOrder,
 } from "@/src/server/orders/store";
@@ -205,6 +207,25 @@ beforeEach(() => {
     outcome: "sheet_fallback" as const,
     result: await fallback(),
   }));
+  vi.mocked(runMissingOrderDestinationArbitration).mockImplementation(
+    async (id, options) => {
+      const current = await vi.mocked(getOrder)(id);
+      if (current) {
+        return {
+          outcome: "kv_authority" as const,
+          order: current,
+          result: await options.onKvAuthority(current),
+        };
+      }
+      const lookup = await vi.mocked(getUniqueOrderRowById)(id);
+      if (lookup.outcome !== "unique") throw new Error("ORDER_AUTHORITY_UNAVAILABLE");
+      return {
+        outcome: "sheet_fallback" as const,
+        order: lookup.order,
+        result: await options.onSheetFallback(lookup.order),
+      };
+    },
+  );
   vi.mocked(updateOrder).mockImplementation(async (_id, patch) => baseOrder(patch));
   vi.mocked(assertAdminPaymentTransitionRequest).mockImplementation(async (id, requested) => {
     const order = await vi.mocked(getOrder)(id);
@@ -527,8 +548,7 @@ describe("PR 2 explicit inventory retry action", () => {
 
   it("PR2-RETRY-11 lost response plus retry dedupe does not create a second decrement", async () => {
     vi.mocked(getOrder).mockResolvedValue(null);
-    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
-      paymentStatus: "confirmed",
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
       inventoryStatus: "error",
       inventoryIssueCode: "SHEETS_TIMEOUT",
     }));
@@ -1251,7 +1271,7 @@ describe("AUD3 H07-D2 manual confirmed shipping-only fallback", () => {
       shippingBlocked: false,
     });
     expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
-    expect(getUniqueOrderRowById).toHaveBeenCalledTimes(3);
+    expect(getUniqueOrderRowById).toHaveBeenCalledTimes(4);
     expect(applyAdminOrderStatusIntentInSalesSheet).toHaveBeenCalledWith(
       "sheet-order-1",
       {
@@ -1274,15 +1294,18 @@ describe("AUD3 H07-D2 manual confirmed shipping-only fallback", () => {
     );
     expect(projectionIndex).toBeGreaterThanOrEqual(0);
     expect(vi.mocked(decrementProductsStockInSheet).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runMissingOrderDestinationArbitration).mock.invocationCallOrder[0],
+    );
+    expect(vi.mocked(runMissingOrderDestinationArbitration).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(getUniqueOrderRowById).mock.invocationCallOrder[1],
+    );
+    expect(vi.mocked(getUniqueOrderRowById).mock.invocationCallOrder[1]).toBeLessThan(
       vi.mocked(updateOrderRowInSalesSheet).mock.invocationCallOrder[projectionIndex],
     );
     expect(vi.mocked(updateOrderRowInSalesSheet).mock.invocationCallOrder[projectionIndex]).toBeLessThan(
       vi.mocked(runMissingOrderSheetFallback).mock.invocationCallOrder[0],
     );
     expect(vi.mocked(runMissingOrderSheetFallback).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(getUniqueOrderRowById).mock.invocationCallOrder[1],
-    );
-    expect(vi.mocked(getUniqueOrderRowById).mock.invocationCallOrder[1]).toBeLessThan(
       vi.mocked(applyAdminOrderStatusIntentInSalesSheet).mock.invocationCallOrder[0],
     );
   });
@@ -1432,6 +1455,271 @@ describe("AUD3 H07-D2 manual confirmed shipping-only fallback", () => {
         requestedShippingStatus: "completed",
       },
     );
+  });
+});
+
+describe("AUD3 H07-D2B destination writer arbitration", () => {
+  const deductedKvOrder = (patch: Partial<Order> = {}) => baseOrder({
+    externalReference: "sheet-order-1",
+    status: "approved",
+    paymentStatus: "confirmed",
+    inventoryStatus: "deducted",
+    stockDeductedAt: 50,
+    mpPaymentId: "manual-sheet-order-1",
+    mpStatus: "manual_confirmed",
+    approvedAt: 10,
+    receiptOutboxVersion: 1,
+    ...patch,
+  });
+
+  it("D2B-WA-01 suppresses a prepared Writer A projection when KV appears", async () => {
+    const sheetOrder = claimedManualSheetOrder({ paymentMethod: "cash" });
+    const current = deductedKvOrder({ paymentMethod: "cash" });
+    vi.mocked(getOrderRowById).mockResolvedValue(sheetOrder);
+    vi.mocked(applyAdminOrderStatusIntent)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        order: current,
+        outcome: "idempotent_replay",
+        paymentApplied: false,
+        shippingApplied: false,
+        receiptEnrollmentRequired: false,
+        shippingBlocked: false,
+      });
+    vi.mocked(runMissingOrderDestinationArbitration).mockImplementationOnce(
+      async (_id, options) => ({
+        outcome: "kv_authority" as const,
+        order: current,
+        result: await options.onKvAuthority(current),
+      }),
+    );
+
+    const result = await save("sheet-order-1");
+
+    expect(result.results[0]).toMatchObject({
+      status: "success",
+      inventoryStatus: "deducted",
+    });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({ inventoryStatus: "deducted" }),
+    );
+  });
+
+  it("D2B-WA-02 rejects an old conflict after a newer deducted projection", async () => {
+    const preparedRow = claimedManualSheetOrder({ paymentMethod: "cash" });
+    const newerRow = claimedManualSheetOrder({
+      paymentMethod: "cash",
+      inventoryStatus: "deducted",
+      stockDeductedAt: new Date(50).toISOString(),
+    });
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(preparedRow);
+    vi.mocked(decrementProductsStockInSheet).mockRejectedValue(
+      new InventoryOperationError({ code: "INSUFFICIENT_STOCK", message: "none" }),
+    );
+    vi.mocked(runMissingOrderDestinationArbitration).mockImplementationOnce(
+      async (_id, options) => ({
+        outcome: "sheet_fallback" as const,
+        order: newerRow,
+        result: await options.onSheetFallback(newerRow),
+      }),
+    );
+
+    const result = await save("sheet-order-1");
+
+    expect(result.results[0]).toMatchObject({ status: "conflict", code: "ORDER_STATE_CHANGED" });
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({ inventoryStatus: "conflict" }),
+    );
+  });
+
+  it("D2B-IDENTITY-01 rejects a prepared projection when ventas items change", async () => {
+    const preparedRow = claimedManualSheetOrder({ paymentMethod: "transfer" });
+    const changedRow = claimedManualSheetOrder({
+      paymentMethod: "transfer",
+      items: [{ productId: "p1", title: "Producto", qty: 2, unitPrice: 1000 }],
+      raw: {
+        items_json: JSON.stringify([
+          { productId: "p1", title: "Producto", qty: 2, unitPrice: 1000 },
+        ]),
+      },
+    });
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(preparedRow);
+    vi.mocked(runMissingOrderDestinationArbitration).mockImplementationOnce(
+      async (_id, options) => ({
+        outcome: "sheet_fallback" as const,
+        order: changedRow,
+        result: await options.onSheetFallback(changedRow),
+      }),
+    );
+
+    const result = await save("sheet-order-1");
+
+    expect(result.results[0]).toMatchObject({ status: "conflict", code: "ORDER_STATE_CHANGED" });
+    expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({ inventoryStatus: "deducted" }),
+    );
+  });
+
+  it("D2B-RETRY-01 routes a missing-KV retry to the normal path after handoff", async () => {
+    const sheetOrder = claimedManualSheetOrder({ paymentMethod: "cash" });
+    const current = deductedKvOrder({ paymentMethod: "cash" });
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(sheetOrder);
+    vi.mocked(runMissingOrderDestinationArbitration).mockImplementationOnce(
+      async (_id, options) => ({
+        outcome: "kv_authority" as const,
+        order: current,
+        result: await options.onKvAuthority(current),
+      }),
+    );
+    vi.mocked(retryPaidOrderInventory).mockResolvedValue(current);
+
+    await expect(retryOrderInventoryAction("sheet-order-1")).resolves.toMatchObject({
+      ok: true,
+      inventoryStatus: "deducted",
+    });
+    expect(retryPaidOrderInventory).toHaveBeenCalledWith("sheet-order-1");
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+  });
+
+  it("D2B-RETRY-02 never resets trusted completed after KV handoff", async () => {
+    const sheetOrder = claimedManualSheetOrder({
+      paymentMethod: "cash",
+      shippingStatus: "completed",
+    });
+    const current = deductedKvOrder({
+      paymentMethod: "cash",
+      shippingStatus: "completed",
+    });
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(sheetOrder);
+    vi.mocked(runMissingOrderDestinationArbitration).mockImplementationOnce(
+      async (_id, options) => ({
+        outcome: "kv_authority" as const,
+        order: current,
+        result: await options.onKvAuthority(current),
+      }),
+    );
+    vi.mocked(retryPaidOrderInventory).mockResolvedValue(current);
+
+    await expect(retryOrderInventoryAction("sheet-order-1")).resolves.toMatchObject({ ok: true });
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({ shippingStatus: "in_process" }),
+    );
+  });
+
+  it("D2B-RETRY-03 rejects duplicate ventas rows before the journal", async () => {
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getUniqueOrderRowById).mockResolvedValue({
+      outcome: "duplicate",
+      order: null,
+      count: 2,
+    });
+
+    await expect(retryOrderInventoryAction("sheet-order-1")).rejects.toThrow(
+      "ORDER_AUTHORITY_DUPLICATE_SALES_ROWS",
+    );
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+  });
+
+  it.each(["cash", "transfer"] as const)(
+    "D2B-RETRY-04 fails closed for weak %s confirmation evidence",
+    async (paymentMethod) => {
+      vi.mocked(getOrder).mockResolvedValue(null);
+      vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
+        paymentStatus: "confirmed",
+        paymentMethod,
+      }));
+
+      await expect(retryOrderInventoryAction("sheet-order-1")).rejects.toBeInstanceOf(
+        PaymentTransitionBlockedError,
+      );
+      expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    },
+  );
+
+  it("D2B-RETRY-04 fails closed for Mercado Pago without durable evidence", async () => {
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(baseSheetOrder({
+      paymentStatus: "confirmed",
+      paymentMethod: "mercadopago",
+    }));
+
+    await expect(retryOrderInventoryAction("sheet-order-1")).rejects.toBeInstanceOf(
+      PaymentTransitionBlockedError,
+    );
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+  });
+
+  it.each(["cash", "transfer"] as const)(
+    "D2B-RETRY-05 accepts exact canonical %s evidence",
+    async (paymentMethod) => {
+      vi.mocked(getOrder).mockResolvedValue(null);
+      vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({ paymentMethod }));
+      vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
+
+      await expect(retryOrderInventoryAction("sheet-order-1")).resolves.toMatchObject({
+        ok: true,
+        inventoryStatus: "deducted",
+      });
+      expect(decrementProductsStockInSheet).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("D2B-RETRY-05 reconstructs durable Mercado Pago authority before normal retry", async () => {
+    const reconstructed = deductedKvOrder({ paymentMethod: "mercadopago" });
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(reconstructOrderAuthorityFromDurableEvidence).mockResolvedValue(reconstructed);
+    vi.mocked(retryPaidOrderInventory).mockResolvedValue(reconstructed);
+
+    await expect(retryOrderInventoryAction("sheet-order-1")).resolves.toMatchObject({ ok: true });
+    expect(retryPaidOrderInventory).toHaveBeenCalledWith("sheet-order-1");
+    expect(getUniqueOrderRowById).not.toHaveBeenCalled();
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+  });
+
+  it("D2B-FALSE-SHEET-DEDUCTED lets journal conflict override a false projection", async () => {
+    vi.mocked(getOrder).mockResolvedValue(null);
+    vi.mocked(getOrderRowById).mockResolvedValue(claimedManualSheetOrder({
+      paymentMethod: "cash",
+      inventoryStatus: "deducted",
+      stockDeductedAt: new Date(40).toISOString(),
+    }));
+    vi.mocked(decrementProductsStockInSheet).mockRejectedValue(
+      new InventoryOperationError({ code: "INVENTORY_IDEMPOTENCY_CONFLICT", message: "mismatch" }),
+    );
+
+    await expect(retryOrderInventoryAction("sheet-order-1")).resolves.toMatchObject({
+      ok: false,
+      inventoryStatus: "conflict",
+    });
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      "sheet-order-1",
+      expect.objectContaining({
+        inventoryStatus: "conflict",
+        inventoryIssueCode: "INVENTORY_IDEMPOTENCY_CONFLICT",
+        stockDeductedAt: null,
+      }),
+    );
+  });
+
+  it("D2B-KV-OUTAGE fails closed without reading or mutating ventas", async () => {
+    vi.mocked(getOrder).mockRejectedValue(new Error("KV unavailable"));
+
+    await expect(retryOrderInventoryAction("sheet-order-1")).rejects.toThrow("KV unavailable");
+    expect(reconstructOrderAuthorityFromDurableEvidence).not.toHaveBeenCalled();
+    expect(getUniqueOrderRowById).not.toHaveBeenCalled();
+    expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
   });
 });
 

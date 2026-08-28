@@ -64,6 +64,37 @@ export const isInventoryBlockingShipping = (
   return status === "conflict" || status === "error";
 };
 
+/**
+ * Mirrors the order-independent product/quantity demand that the inventory
+ * journal fingerprints. It is intentionally unhashed because callers only use
+ * it to prove that a prepared fallback still targets the same demand.
+ */
+export const buildInventoryDemandIdentity = (
+  items: Array<Pick<Order["items"][number], "productId" | "qty">>
+): string => {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error("INVALID_INVENTORY_DEMAND_IDENTITY");
+  }
+
+  const quantities = new Map<string, number>();
+  for (const item of items) {
+    const productId = String(item?.productId ?? "").trim().toLowerCase();
+    if (!productId || !Number.isInteger(item?.qty) || item.qty <= 0) {
+      throw new Error("INVALID_INVENTORY_DEMAND_IDENTITY");
+    }
+    const nextQuantity = (quantities.get(productId) ?? 0) + item.qty;
+    if (!Number.isSafeInteger(nextQuantity)) {
+      throw new Error("INVALID_INVENTORY_DEMAND_IDENTITY");
+    }
+    quantities.set(productId, nextQuantity);
+  }
+
+  return [...quantities.entries()]
+    .map(([productId, qty]) => `${productId}\t${qty}`)
+    .sort()
+    .join("\n");
+};
+
 const technicalIssueCode = (error: unknown): InventoryTechnicalIssueCode => {
   if (error instanceof InventoryOperationError && error.origin === "response") {
     return "INVENTORY_RESPONSE_INVALID";
