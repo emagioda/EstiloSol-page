@@ -4,7 +4,7 @@ import { logEvent } from "@/src/server/observability/log";
 import { getOrder, reconstructOrderFromAuthorityEvidence } from "@/src/server/orders/store";
 import type { Order } from "@/src/server/orders/types";
 import type { MpPaymentResponse, MpSearchPayment } from "@/src/server/payments/shared";
-import { getOrderRowById } from "@/src/server/sheets/repository";
+import { getUniqueOrderRowById } from "@/src/server/sheets/repository";
 import { buildPurchaseReceiptEventKey } from "@/src/server/emailOutbox/payload";
 import { getEmailOutboxEvent } from "@/src/server/emailOutbox/repository";
 import {
@@ -291,7 +291,17 @@ export const prepareProtectedPaymentDurability = async (input: {
     (observation.financialStatus === "refunded" ||
       observation.financialStatus === "charged_back")
   ) {
-    const salesOrder = await getOrderRowById(observation.externalReference);
+    const salesLookup = await getUniqueOrderRowById(observation.externalReference);
+    if (salesLookup.outcome === "duplicate") {
+      return persistAttentionEvent({
+        ...input,
+        snapshotHash: storedSnapshot.snapshotHash,
+        validationState: "conflict",
+        errorCode: "RECOVERY_SALES_AUTHORITY_AMBIGUOUS",
+        order: null,
+      });
+    }
+    const salesOrder = salesLookup.outcome === "unique" ? salesLookup.order : null;
     if (
       salesOrder &&
       salesOrder.orderId === observation.externalReference &&

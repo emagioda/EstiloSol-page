@@ -10,7 +10,7 @@ vi.mock("@/src/server/emailOutbox/repository", () => ({
   getEmailOutboxEvent: vi.fn(async () => null),
 }));
 vi.mock("@/src/server/sheets/repository", () => ({
-  getOrderRowById: vi.fn(),
+  getUniqueOrderRowById: vi.fn(),
 }));
 vi.mock("./repository", () => ({
   appendRecoveryPaymentEvent: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock("./repository", () => ({
 }));
 
 import { getOrder, reconstructOrderFromAuthorityEvidence } from "@/src/server/orders/store";
-import { getOrderRowById } from "@/src/server/sheets/repository";
+import { getUniqueOrderRowById } from "@/src/server/sheets/repository";
 import {
   appendRecoveryPaymentEvent,
   getRecoverySnapshot,
@@ -85,7 +85,7 @@ describe("AUD3-H06 recovery durability service", () => {
     vi.clearAllMocks();
     vi.mocked(getOrder).mockResolvedValue(null);
     vi.mocked(getRecoverySnapshot).mockResolvedValue(null);
-    vi.mocked(getOrderRowById).mockResolvedValue(null);
+    vi.mocked(getUniqueOrderRowById).mockResolvedValue({ outcome: "missing", order: null });
     vi.mocked(markRecoverySnapshotState).mockResolvedValue(storedSnapshot());
     vi.mocked(markRecoveryEventState).mockResolvedValue({} as RecoveryPaymentEvent);
     vi.mocked(reconstructOrderFromAuthorityEvidence).mockImplementation(async (candidate) => ({
@@ -174,11 +174,14 @@ describe("AUD3-H06 recovery durability service", () => {
   it("H06-20 validates a reversal against durable ventas after snapshot PII redaction", async () => {
     const stored = storedSnapshot(true);
     vi.mocked(getRecoverySnapshot).mockResolvedValue(stored);
-    vi.mocked(getOrderRowById).mockResolvedValue({
-      orderId: order().externalReference,
-      total: 1000,
-      currency: "ARS",
-    } as Awaited<ReturnType<typeof getOrderRowById>>);
+    vi.mocked(getUniqueOrderRowById).mockResolvedValue({
+      outcome: "unique",
+      order: {
+        orderId: order().externalReference,
+        total: 1000,
+        currency: "ARS",
+      } as never,
+    });
 
     const result = await prepareProtectedPaymentDurability({
       expectedExternalReference: order().externalReference,
@@ -198,11 +201,14 @@ describe("AUD3-H06 recovery durability service", () => {
 
   it("does not validate a redacted reversal when ventas amount conflicts", async () => {
     vi.mocked(getRecoverySnapshot).mockResolvedValue(storedSnapshot(true));
-    vi.mocked(getOrderRowById).mockResolvedValue({
-      orderId: order().externalReference,
-      total: 999,
-      currency: "ARS",
-    } as Awaited<ReturnType<typeof getOrderRowById>>);
+    vi.mocked(getUniqueOrderRowById).mockResolvedValue({
+      outcome: "unique",
+      order: {
+        orderId: order().externalReference,
+        total: 999,
+        currency: "ARS",
+      } as never,
+    });
     const result = await prepareProtectedPaymentDurability({
       expectedExternalReference: order().externalReference,
       payment: payment("charged_back"),
@@ -230,7 +236,7 @@ describe("AUD3-H06 recovery durability service", () => {
     expect(result).toEqual({ protected: true, outcome: "reference_mismatch" });
     expect(getOrder).not.toHaveBeenCalled();
     expect(getRecoverySnapshot).not.toHaveBeenCalled();
-    expect(getOrderRowById).not.toHaveBeenCalled();
+    expect(getUniqueOrderRowById).not.toHaveBeenCalled();
     expect(upsertRecoverySnapshot).not.toHaveBeenCalled();
     expect(appendRecoveryPaymentEvent).not.toHaveBeenCalled();
     expect(markRecoveryEventState).not.toHaveBeenCalled();

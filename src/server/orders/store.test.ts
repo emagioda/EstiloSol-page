@@ -44,6 +44,7 @@ import {
   reconcileCurrentOrderSalesProjection,
   reconcileMercadoPagoPaymentObservationBatch,
   retryPaidOrderInventory,
+  runMissingOrderDestinationArbitration,
   runMissingOrderSheetFallback,
   updateOrder,
 } from "./store";
@@ -2185,5 +2186,153 @@ describe("AUD3 H07-D2A KV absence authority serialization", () => {
     });
     expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
     await expect(getOrder(order.externalReference)).resolves.toMatchObject(reconstructed.order);
+  });
+
+  it("D2B-ARB-01 projects current KV and suppresses the prepared fallback under the Order lock", async () => {
+    const order = makeOrder({
+      status: "approved",
+      paymentStatus: "confirmed",
+      inventoryStatus: "deducted",
+      stockDeductedAt: 50,
+    });
+    await createOrder(order, { syncSheet: false });
+    const sheetFallback = vi.fn(async () => "must-not-run");
+
+    await expect(runMissingOrderDestinationArbitration(order.externalReference, {
+      projectCurrentKv: true,
+      onKvAuthority: (current) => current.externalReference,
+      onSheetFallback: sheetFallback,
+    })).resolves.toMatchObject({
+      outcome: "kv_authority",
+      result: order.externalReference,
+    });
+
+    expect(sheetFallback).not.toHaveBeenCalled();
+    expect(getUniqueOrderRowById).not.toHaveBeenCalled();
+    expect(updateOrderRowInSalesSheet).toHaveBeenCalledWith(
+      order.externalReference,
+      expect.objectContaining({
+        paymentStatus: "confirmed",
+        inventoryStatus: "deducted",
+        stockDeductedAt: 50,
+      }),
+    );
+  });
+
+  it("D2B-ARB-02 owns the final unique ventas re-read and fallback commit", async () => {
+    const order = makeOrder();
+    const currentRow = row(order);
+    vi.mocked(getUniqueOrderRowById).mockResolvedValue({
+      outcome: "unique",
+      order: currentRow,
+    });
+    const fallbackCommit = vi.fn(async (latest: AdminOrderSheetRow) => latest.orderId);
+
+    await expect(runMissingOrderDestinationArbitration(order.externalReference, {
+      onKvAuthority: () => "kv",
+      onSheetFallback: fallbackCommit,
+    })).resolves.toEqual({
+      outcome: "sheet_fallback",
+      order: currentRow,
+      result: order.externalReference,
+    });
+    expect(fallbackCommit).toHaveBeenCalledWith(currentRow);
+  });
+
+  it("D2B-ARB-03 rejects duplicate ventas authority before the fallback callback", async () => {
+    const order = makeOrder();
+    vi.mocked(getUniqueOrderRowById).mockResolvedValue({
+      outcome: "duplicate",
+      order: null,
+      count: 2,
+    });
+    const fallbackCommit = vi.fn(async () => "must-not-run");
+
+    await expect(runMissingOrderDestinationArbitration(order.externalReference, {
+      onKvAuthority: () => "kv",
+      onSheetFallback: fallbackCommit,
+    })).rejects.toMatchObject({ code: "ORDER_AUTHORITY_DUPLICATE_SALES_ROWS" });
+    expect(fallbackCommit).not.toHaveBeenCalled();
+  });
+
+  it("D2B-ARB-04 treats a KV outage as failure rather than key absence", async () => {
+    const order = makeOrder();
+    const fallbackCommit = vi.fn(async () => "must-not-run");
+    const getSpy = vi.spyOn(kv, "getJson").mockRejectedValueOnce(new Error("KV unavailable"));
+
+    await expect(runMissingOrderDestinationArbitration(order.externalReference, {
+      onKvAuthority: () => "kv",
+      onSheetFallback: fallbackCommit,
+    })).rejects.toThrow("KV unavailable");
+    expect(getUniqueOrderRowById).not.toHaveBeenCalled();
+    expect(fallbackCommit).not.toHaveBeenCalled();
+    getSpy.mockRestore();
+  });
+
+  it("D2B-CONC-01 serializes overlapping fallback commits and exposes the newer epoch", async () => {
+    const order = makeOrder();
+    let currentRow = row(order);
+    vi.mocked(getUniqueOrderRowById).mockImplementation(async () => ({
+      outcome: "unique",
+      order: currentRow,
+    }));
+    const firstEntered = deferred();
+    const releaseFirst = deferred();
+    const first = runMissingOrderDestinationArbitration(order.externalReference, {
+      onKvAuthority: () => "kv",
+      onSheetFallback: async () => {
+        firstEntered.resolve();
+        await releaseFirst.promise;
+        currentRow = {
+          ...currentRow,
+          inventoryStatus: "deducted",
+          stockDeductedAt: new Date(50).toISOString(),
+        };
+        return "first";
+      },
+    });
+    await firstEntered.promise;
+    const secondFallback = vi.fn(async (latest: AdminOrderSheetRow) => {
+      if (latest.inventoryStatus !== "pending") throw new Error("ORDER_STATE_CHANGED");
+      return "second";
+    });
+    const second = runMissingOrderDestinationArbitration(order.externalReference, {
+      onKvAuthority: () => "kv",
+      onSheetFallback: secondFallback,
+    });
+    releaseFirst.resolve();
+
+    await expect(first).resolves.toMatchObject({ outcome: "sheet_fallback", result: "first" });
+    await expect(second).rejects.toThrow("ORDER_STATE_CHANGED");
+    expect(secondFallback).toHaveBeenCalledWith(expect.objectContaining({
+      inventoryStatus: "deducted",
+    }));
+  });
+
+  it("D2B-CONC-02 suppresses fallback when reconstruction publishes KV first", async () => {
+    const order = makeOrder();
+    const lookupEntered = deferred();
+    const releaseLookup = deferred();
+    vi.mocked(getUniqueOrderRowById).mockImplementationOnce(async () => {
+      lookupEntered.resolve();
+      await releaseLookup.promise;
+      return { outcome: "unique", order: row(order) };
+    });
+    vi.mocked(decrementProductsStockInSheet).mockResolvedValue({ deduped: true, updated: [] });
+    const reconstruction = reconstructOrderFromAuthorityEvidence(order, authorityEvidence(order));
+    await lookupEntered.promise;
+    const fallbackCommit = vi.fn(async () => "must-not-run");
+    const arbitration = runMissingOrderDestinationArbitration(order.externalReference, {
+      onKvAuthority: (current) => current.paymentStatus,
+      onSheetFallback: fallbackCommit,
+    });
+    releaseLookup.resolve();
+
+    await expect(reconstruction).resolves.toMatchObject({ created: true });
+    await expect(arbitration).resolves.toMatchObject({
+      outcome: "kv_authority",
+      result: "confirmed",
+    });
+    expect(fallbackCommit).not.toHaveBeenCalled();
   });
 });

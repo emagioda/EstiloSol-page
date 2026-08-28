@@ -4,6 +4,7 @@ import {
   applyMercadoPagoPaymentObservation,
   MAX_MERCADO_PAGO_PAYMENT_LEDGER_ENTRIES,
   MULTIPLE_APPROVED_MP_PAYMENTS,
+  resolveTerminalPaymentStatusByLedgerPrecedence,
   type MercadoPagoPaymentObservation,
 } from "./ledger";
 
@@ -41,6 +42,18 @@ const apply = (order: Order, paymentId: string, status: string, observedAt: numb
 });
 
 describe("AUD3 Mercado Pago payment ledger aggregation", () => {
+  it("D2B-RECOVERY-PRECEDENCE reuses charged_back over refunded for legacy projection", () => {
+    expect(resolveTerminalPaymentStatusByLedgerPrecedence("confirmed", "refunded")).toBe(
+      "refunded",
+    );
+    expect(resolveTerminalPaymentStatusByLedgerPrecedence("refunded", "charged_back")).toBe(
+      "charged_back",
+    );
+    expect(resolveTerminalPaymentStatusByLedgerPrecedence("charged_back", "refunded")).toBe(
+      "charged_back",
+    );
+  });
+
   it("AUD3-PAY-01 and PAY-20 keep one entry for duplicate approval", () => {
     const first = apply(baseOrder(), "A", "approved", 10);
     const secondResult = applyMercadoPagoPaymentObservation(first, observation("A", "approved", 20));

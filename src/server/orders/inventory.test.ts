@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { InventoryOperationError } from "@/src/server/inventory/errors";
-import { attemptInventoryForPaidOrder, classifyInventoryFailure } from "./inventory";
+import {
+  attemptInventoryForPaidOrder,
+  buildInventoryDemandIdentity,
+  classifyInventoryFailure,
+} from "./inventory";
 
 const order = (externalReference: string) => ({
   externalReference,
@@ -111,6 +115,28 @@ describe("PR 2 authoritative concurrency simulations", () => {
     expect(first.status).toBe("error");
     expect(retry).toMatchObject({ status: "deducted", deduped: true });
     expect(applied).toBe(1);
+  });
+
+  it("D2B-DEMAND-01 matches journal ordering and aggregates equivalent product ids", () => {
+    expect(buildInventoryDemandIdentity([
+      { productId: " P2 ", qty: 1 },
+      { productId: "p1", qty: 2 },
+      { productId: "p2", qty: 3 },
+    ])).toBe("p1\t2\np2\t4");
+    expect(buildInventoryDemandIdentity([
+      { productId: "P2", qty: 4 },
+      { productId: "P1", qty: 2 },
+    ])).toBe("p1\t2\np2\t4");
+  });
+
+  it("D2B-DEMAND-02 rejects an incoherent fallback demand", () => {
+    expect(() => buildInventoryDemandIdentity([])).toThrow("INVALID_INVENTORY_DEMAND_IDENTITY");
+    expect(() => buildInventoryDemandIdentity([{ productId: "", qty: 1 }])).toThrow(
+      "INVALID_INVENTORY_DEMAND_IDENTITY",
+    );
+    expect(() => buildInventoryDemandIdentity([{ productId: "p1", qty: 1.5 }])).toThrow(
+      "INVALID_INVENTORY_DEMAND_IDENTITY",
+    );
   });
 });
 

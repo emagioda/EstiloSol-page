@@ -44,6 +44,7 @@ import { createOrder, getOrder } from "@/src/server/orders/store";
 import {
   appendOrderToSalesSheet,
   decrementProductsStockInSheet,
+  getUniqueOrderRowById,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
 import {
@@ -328,6 +329,15 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
       }),
       financialStatus: "charged_back",
     };
+    vi.mocked(getUniqueOrderRowById).mockResolvedValueOnce({
+      outcome: "unique",
+      order: {
+        orderId: event.externalReference,
+        total: event.amount,
+        currency: event.currency,
+        paymentStatus: "confirmed",
+      } as never,
+    });
 
     const result = await reconcileRecoveryPaymentEvent(event, "worker:h06:20");
 
@@ -341,6 +351,131 @@ describe("AUD3 shared Mercado Pago reconciliation", () => {
     });
     expect(decrementProductsStockInSheet).not.toHaveBeenCalled();
     expect(completeRecoveryEvent).toHaveBeenCalledWith(event, "worker:h06:20");
+  });
+
+  it("D2B-RECOVERY-01 suppresses direct fallback when KV returns before terminal projection", async () => {
+    const now = Date.now();
+    const externalReference = `es-reversal-handoff-${now}-${++sequence}`;
+    const event: RecoveryPaymentEvent = {
+      ...durableEvent({
+        externalReference,
+        status: "approved",
+        paymentStatus: "confirmed",
+        shippingStatus: "in_process",
+        paymentMethod: "mercadopago",
+        items: [],
+        total: 1000,
+        currency: "ARS",
+        createdAt: now,
+        updatedAt: now,
+      }),
+      financialStatus: "charged_back",
+    };
+    const current: Order = {
+      externalReference,
+      status: "approved",
+      paymentStatus: "confirmed",
+      shippingStatus: "in_process",
+      inventoryStatus: "deducted",
+      stockDeductedAt: now,
+      paymentMethod: "mercadopago",
+      deliveryMethod: "pickup",
+      items: [{ productId: "p1", title: "Producto", unitPrice: 1000, qty: 1, currency: "ARS" }],
+      total: 1000,
+      currency: "ARS",
+      createdAt: now,
+      updatedAt: now,
+      mpPaymentId: event.paymentId,
+      mpStatus: "approved",
+      approvedAt: now,
+      receiptOutboxVersion: 1,
+    };
+    vi.mocked(getRecoverySnapshot).mockImplementationOnce(async () => {
+      await createOrder(current, { syncSheet: false });
+      return null;
+    });
+
+    const result = await reconcileRecoveryPaymentEvent(event, "worker:d2b:handoff");
+
+    expect(result).toMatchObject({
+      outcome: "completed",
+      order: { paymentStatus: "charged_back" },
+    });
+    await expect(getOrder(externalReference)).resolves.toMatchObject({
+      paymentStatus: "charged_back",
+      mpPaymentLedger: {
+        [event.paymentId]: expect.objectContaining({ status: "charged_back" }),
+      },
+    });
+    expect(completeRecoveryEvent).toHaveBeenCalledWith(event, "worker:d2b:handoff");
+  });
+
+  it("D2B-RECOVERY-PRECEDENCE keeps charged_back over an older refunded fallback", async () => {
+    const event: RecoveryPaymentEvent = {
+      ...durableEvent({
+        externalReference: `es-reversal-precedence-${Date.now()}-${++sequence}`,
+        status: "approved",
+        paymentStatus: "confirmed",
+        shippingStatus: "in_process",
+        paymentMethod: "mercadopago",
+        items: [],
+        total: 1000,
+        currency: "ARS",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+      financialStatus: "refunded",
+    };
+    vi.mocked(getUniqueOrderRowById).mockResolvedValueOnce({
+      outcome: "unique",
+      order: {
+        orderId: event.externalReference,
+        total: event.amount,
+        currency: event.currency,
+        paymentStatus: "charged_back",
+      } as never,
+    });
+
+    await expect(reconcileRecoveryPaymentEvent(event, "worker:d2b:precedence")).resolves.toEqual({
+      outcome: "completed",
+      order: null,
+    });
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+    expect(completeRecoveryEvent).toHaveBeenCalledWith(event, "worker:d2b:precedence");
+  });
+
+  it("D2B-RECOVERY-DUP fails closed before terminal projection and event completion", async () => {
+    const event: RecoveryPaymentEvent = {
+      ...durableEvent({
+        externalReference: `es-reversal-duplicate-${Date.now()}-${++sequence}`,
+        status: "approved",
+        paymentStatus: "confirmed",
+        shippingStatus: "in_process",
+        paymentMethod: "mercadopago",
+        items: [],
+        total: 1000,
+        currency: "ARS",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+      financialStatus: "charged_back",
+    };
+    vi.mocked(getUniqueOrderRowById).mockResolvedValueOnce({
+      outcome: "duplicate",
+      order: null,
+      count: 2,
+    });
+
+    await expect(reconcileRecoveryPaymentEvent(event, "worker:d2b:duplicate")).rejects.toMatchObject({
+      code: "ORDER_AUTHORITY_DUPLICATE_SALES_ROWS",
+    });
+    expect(updateOrderRowInSalesSheet).not.toHaveBeenCalled();
+    expect(completeRecoveryEvent).not.toHaveBeenCalled();
+    expect(markRecoveryEventRetryableSafely).toHaveBeenCalledWith(
+      event,
+      expect.any(String),
+      "worker:d2b:duplicate",
+    );
   });
 
   it("AUD3-PAY-01 duplicate approval triggers inventory and receipt once", async () => {
