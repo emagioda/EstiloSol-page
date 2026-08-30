@@ -4,6 +4,7 @@ import {
   fallbackFulfillmentConfig,
   getActivePickupPointById,
   getShippingFeeForDeliveryMethod,
+  isDeliveryOptionAvailable,
   type FulfillmentConfig,
 } from "@/src/config/fulfillment";
 import type { AuthoritativeCheckoutItem } from "@/src/server/catalog/stock";
@@ -142,6 +143,9 @@ export const buildOrderFromCheckout = (input: BuildOrderInput): BuildOrderResult
   );
   const discountAmount = getPaymentDiscountAmount(subtotalProducts, input.paymentMethod);
   const fulfillmentConfig = input.fulfillmentConfig ?? fallbackFulfillmentConfig;
+  if (input.deliveryMethod === "delivery" && !isDeliveryOptionAvailable(fulfillmentConfig)) {
+    return { order: null };
+  }
   const shippingFee = getShippingFeeForDeliveryMethod(
     input.deliveryMethod,
     fulfillmentConfig,

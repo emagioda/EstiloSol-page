@@ -55,6 +55,38 @@ const scriptManifest = JSON.parse(readFileSync(
   "utf8",
 )) as Record<string, unknown>;
 
+const requiredSalesFulfillmentHeaders = [
+  "subtotal_productos",
+  "descuento",
+  "costo_envio",
+  "total_final",
+  "delivery_zone_id",
+  "delivery_zone_name",
+  "delivery_inside_zone_confirmed",
+  "delivery_address_street",
+  "delivery_address_number",
+  "delivery_address_floor",
+  "delivery_address_between_streets",
+  "delivery_address_notes",
+  "pickup_point_id",
+  "pickup_point_name",
+  "pickup_point_address",
+  "pickup_point_reference",
+  "fulfillment_summary",
+] as const;
+
+const completeSalesHeaders = [
+  "nro_de_compra",
+  "items_json",
+  ...requiredSalesFulfillmentHeaders,
+];
+
+const completeSalesRowInput = (orderId: string): Record<string, unknown> => ({
+  nro_de_compra: orderId,
+  items_json: "[]",
+  ...Object.fromEntries(requiredSalesFulfillmentHeaders.map((header) => [header, ""])),
+});
+
 const createHarness = (products: ProductRow[], options: HarnessOptions = {}) => {
   const productHeaders = [
     "id",
@@ -570,11 +602,13 @@ describe("Apps Script authoritative inventory planning", () => {
   });
 
   it("AS-20 combined append uses the same aggregation and strict stock plan", () => {
-    const harness = createHarness([availableProduct({ stockQty: 3 })]);
+    const harness = createHarness([availableProduct({ stockQty: 3 })], {
+      salesHeaders: completeSalesHeaders,
+    });
     const result = harness.api.handleAppendOrderAndDecrementStock({
       sheet: "ventas",
       orderId: "order-20",
-      row: { nro_de_compra: "order-20", items_json: "[]" },
+      row: completeSalesRowInput("order-20"),
       items: [{ productId: "a", qty: 1 }, { productId: "a", qty: 2 }],
     }) as Record<string, unknown>;
     expect(result).toMatchObject({ ok: true, deduped: false });
@@ -583,18 +617,81 @@ describe("Apps Script authoritative inventory planning", () => {
   });
 
   it("does not append a sales row when combined planning fails", () => {
-    const harness = createHarness([availableProduct({ stockQty: 1 })]);
+    const harness = createHarness([availableProduct({ stockQty: 1 })], {
+      salesHeaders: completeSalesHeaders,
+    });
     expectInventoryError(
       () => harness.api.handleAppendOrderAndDecrementStock({
         sheet: "ventas",
         orderId: "order-combined-fail",
-        row: { nro_de_compra: "order-combined-fail" },
+        row: completeSalesRowInput("order-combined-fail"),
         items: [{ productId: "a", qty: 2 }],
       }),
       "INSUFFICIENT_STOCK",
     );
     expect(harness.salesRows).toHaveLength(0);
     expect(harness.stockWrites()).toHaveLength(0);
+  });
+
+  it("EF-E-01-01 appends Ventas when every fulfillment header exists", () => {
+    const harness = createHarness([], { salesHeaders: completeSalesHeaders });
+    const output = harness.api.doPost({
+      postData: {
+        contents: JSON.stringify({
+          action: "appendRow",
+          token: "write-token",
+          sheet: "ventas",
+          row: completeSalesRowInput("order-schema-complete"),
+        }),
+      },
+    }) as { getContent: () => string };
+
+    expect(JSON.parse(output.getContent())).toMatchObject({ ok: true, action: "appendRow" });
+    expect(harness.salesRows).toHaveLength(1);
+  });
+
+  it("EF-E-01-02 rejects an incomplete Ventas schema with a stable safe error and no partial append", () => {
+    const missingHeader = "pickup_point_reference";
+    const harness = createHarness([], {
+      salesHeaders: completeSalesHeaders.filter((header) => header !== missingHeader),
+    });
+    const output = harness.api.doPost({
+      postData: {
+        contents: JSON.stringify({
+          action: "appendRow",
+          token: "write-token",
+          sheet: "ventas",
+          row: completeSalesRowInput("order-schema-incomplete"),
+        }),
+      },
+    }) as { getContent: () => string };
+
+    expect(JSON.parse(output.getContent())).toEqual({
+      ok: false,
+      error: "Server misconfigured",
+      code: "SALES_FULFILLMENT_SCHEMA_INVALID",
+    });
+    expect(harness.salesRows).toHaveLength(0);
+    expect(harness.batchCalls).toHaveLength(0);
+  });
+
+  it("EF-E-01-03 rejects combined append before any Ventas or stock write", () => {
+    const harness = createHarness([availableProduct({ stockQty: 3 })], {
+      salesHeaders: completeSalesHeaders.filter((header) => header !== "delivery_address_notes"),
+    });
+
+    expectInventoryError(
+      () => harness.api.handleAppendOrderAndDecrementStock({
+        sheet: "ventas",
+        orderId: "order-schema-combined",
+        row: completeSalesRowInput("order-schema-combined"),
+        items: [{ productId: "a", qty: 1 }],
+      }),
+      "SALES_FULFILLMENT_SCHEMA_INVALID",
+    );
+    expect(harness.salesRows).toHaveLength(0);
+    expect(harness.stockWrites()).toHaveLength(0);
+    expect(harness.batchCalls).toHaveLength(0);
   });
 
   it("rejects decimal quantities instead of truncating them", () => {
@@ -1195,17 +1292,18 @@ describe("AUD3 H07-C1 Apps Script conditional Admin mutation", () => {
 
 describe("AUD3-H06 Apps Script recovery journal", () => {
   it("AUD3-H06-10 keeps one ventas row when an append response is lost and retried", () => {
-    const harness = createHarness([]);
+    const harness = createHarness([], { salesHeaders: completeSalesHeaders });
     const payload = {
       sheet: "ventas",
-      row: { nro_de_compra: "es-recovery-response-loss-000001", items_json: "[]" },
+      row: completeSalesRowInput("es-recovery-response-loss-000001"),
     };
 
     harness.api.handleAppendRow(payload);
     const retry = harness.api.handleAppendRow(payload) as Record<string, unknown>;
 
     expect(retry).toMatchObject({ ok: true, deduped: true, rowNumber: 2 });
-    expect(harness.salesRows).toEqual([["es-recovery-response-loss-000001", "[]"]]);
+    expect(harness.salesRows).toHaveLength(1);
+    expect(harness.salesRows[0]?.slice(0, 2)).toEqual(["es-recovery-response-loss-000001", "[]"]);
   });
 
   it("bootstraps exact hidden schemas with frozen headers under ScriptLock", () => {

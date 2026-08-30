@@ -8,6 +8,8 @@ import { brandConfig } from "@/src/config/brand";
 import {
   fallbackFulfillmentConfig,
   getActivePickupPointById,
+  getActivePickupPoints,
+  isDeliveryOptionAvailable,
   type FulfillmentConfig,
 } from "@/src/config/fulfillment";
 import type { PaymentMethod } from "../../view-models/useCartStore";
@@ -396,10 +398,9 @@ export default function CheckoutSteps({
       deliveryInsideZoneConfirmed,
     ]
   );
-  const activePickupPoints = useMemo(
-    () => fulfillmentConfig.pickupPoints.filter((point) => point.active),
-    [fulfillmentConfig.pickupPoints]
-  );
+  const deliveryOptionAvailable = isDeliveryOptionAvailable(fulfillmentConfig);
+  const activePickupPoints = useMemo(() => getActivePickupPoints(fulfillmentConfig), [fulfillmentConfig]);
+  const pickupOptionAvailable = activePickupPoints.length > 0;
   const selectedPickupPoint = useMemo(
     () => getActivePickupPointById(fulfillmentConfig, pickupPointId),
     [fulfillmentConfig, pickupPointId]
@@ -408,6 +409,17 @@ export default function CheckoutSteps({
     () => pickupMethodPriceLabel(activePickupPoints, selectedPickupPoint),
     [activePickupPoints, selectedPickupPoint]
   );
+
+  useEffect(() => {
+    if (deliveryMethod === "delivery" && !deliveryOptionAvailable && pickupOptionAvailable) {
+      setDeliveryMethod("pickup");
+      return;
+    }
+    if (deliveryMethod === "pickup" && !pickupOptionAvailable && deliveryOptionAvailable) {
+      setDeliveryMethod("delivery");
+    }
+  }, [deliveryMethod, deliveryOptionAvailable, pickupOptionAvailable]);
+
   const isDiscountMethod = isDiscountPaymentMethod(paymentMethod);
   const priceChangedProducts = useMemo(
     () => (error?.invalidProducts ?? []).filter(isPriceChangedProduct),
@@ -432,7 +444,9 @@ export default function CheckoutSteps({
     isValidWhatsapp(whatsapp) &&
     isValidEmail(email);
   const isDeliveryDetailsValid =
-    deliveryMethod === "delivery" ? isDeliveryAddressValid(deliveryAddress) : Boolean(selectedPickupPoint);
+    deliveryMethod === "delivery"
+      ? deliveryOptionAvailable && isDeliveryAddressValid(deliveryAddress)
+      : pickupOptionAvailable && Boolean(selectedPickupPoint);
   const showFulfillmentValidation = showValidation || isContactFormValid;
   const deliveryAddressFieldsVisible = deliveryMethod === "delivery" && deliveryInsideZoneConfirmed;
   const deliveryStreetError =
@@ -952,7 +966,7 @@ export default function CheckoutSteps({
               <p className="sm:col-span-2">
                 <span className="text-[var(--brand-cream)]/65">Entrega:</span> {deliveryMethodLabel(deliveryMethod)}
               </p>
-              {deliveryMethod === "delivery" ? (
+              {deliveryMethod === "delivery" && deliveryOptionAvailable ? (
                 <>
                   <p className="sm:col-span-2">
                     <span className="text-[var(--brand-cream)]/65">Dirección:</span>{" "}
@@ -1055,62 +1069,72 @@ export default function CheckoutSteps({
               </div>
 
               <div className="grid gap-x-3 gap-y-7 sm:grid-cols-2">
-                <label
-                  className={`${deliveryOptionBaseClassName} ${
-                    deliveryMethod === "delivery" ? selectedDeliveryOptionClassName : unselectedDeliveryOptionClassName
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="delivery-method"
-                    className="sr-only"
-                    checked={deliveryMethod === "delivery"}
-                    onChange={() => setDeliveryMethod("delivery")}
-                  />
-                  <SelectedCheck selected={deliveryMethod === "delivery"} />
-                  <span className="flex w-full items-center gap-3 pr-8">
-                    <DeliveryIcon type="delivery" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-base font-semibold leading-tight">{fulfillmentConfig.delivery.name}</span>
-                      <span className="mt-1 block text-xs leading-relaxed text-[var(--brand-cream)]/66">
-                        {fulfillmentConfig.delivery.subtitle}
+                {deliveryOptionAvailable ? (
+                  <label
+                    className={`${deliveryOptionBaseClassName} ${
+                      deliveryMethod === "delivery" ? selectedDeliveryOptionClassName : unselectedDeliveryOptionClassName
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="delivery-method"
+                      className="sr-only"
+                      checked={deliveryMethod === "delivery"}
+                      onChange={() => setDeliveryMethod("delivery")}
+                    />
+                    <SelectedCheck selected={deliveryMethod === "delivery"} />
+                    <span className="flex w-full items-center gap-3 pr-8">
+                      <DeliveryIcon type="delivery" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-base font-semibold leading-tight">{fulfillmentConfig.delivery.name}</span>
+                        <span className="mt-1 block text-xs leading-relaxed text-[var(--brand-cream)]/66">
+                          {fulfillmentConfig.delivery.subtitle}
+                        </span>
                       </span>
                     </span>
-                  </span>
-                  <span className="pointer-events-none absolute bottom-0 left-1/2 inline-flex -translate-x-1/2 translate-y-[60%] rounded-full border border-[rgba(248,227,176,0.38)] bg-[rgba(216,188,229,0.94)] px-5 py-1.5 text-[13px] font-semibold leading-none text-[var(--brand-gold-300)] shadow-[0_8px_16px_rgba(37,17,58,0.18)]">
-                    {formatMoney(fulfillmentConfig.delivery.price)}
-                  </span>
-                </label>
+                    <span className="pointer-events-none absolute bottom-0 left-1/2 inline-flex -translate-x-1/2 translate-y-[60%] rounded-full border border-[rgba(248,227,176,0.38)] bg-[rgba(216,188,229,0.94)] px-5 py-1.5 text-[13px] font-semibold leading-none text-[var(--brand-gold-300)] shadow-[0_8px_16px_rgba(37,17,58,0.18)]">
+                      {formatMoney(fulfillmentConfig.delivery.price)}
+                    </span>
+                  </label>
+                ) : null}
 
-                <label
-                  className={`${deliveryOptionBaseClassName} ${
-                    deliveryMethod === "pickup" ? selectedDeliveryOptionClassName : unselectedDeliveryOptionClassName
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="delivery-method"
-                    className="sr-only"
-                    checked={deliveryMethod === "pickup"}
-                    onChange={() => setDeliveryMethod("pickup")}
-                  />
-                  <SelectedCheck selected={deliveryMethod === "pickup"} />
-                  <span className="flex w-full items-center gap-3 pr-8">
-                    <DeliveryIcon type="pickup" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-base font-semibold leading-tight">{fulfillmentConfig.pickup.name}</span>
-                      <span className="mt-1 block text-xs leading-relaxed text-[var(--brand-cream)]/66">
-                        {fulfillmentConfig.pickup.subtitle}
+                {pickupOptionAvailable ? (
+                  <label
+                    className={`${deliveryOptionBaseClassName} ${
+                      deliveryMethod === "pickup" ? selectedDeliveryOptionClassName : unselectedDeliveryOptionClassName
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="delivery-method"
+                      className="sr-only"
+                      checked={deliveryMethod === "pickup"}
+                      onChange={() => setDeliveryMethod("pickup")}
+                    />
+                    <SelectedCheck selected={deliveryMethod === "pickup"} />
+                    <span className="flex w-full items-center gap-3 pr-8">
+                      <DeliveryIcon type="pickup" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-base font-semibold leading-tight">{fulfillmentConfig.pickup.name}</span>
+                        <span className="mt-1 block text-xs leading-relaxed text-[var(--brand-cream)]/66">
+                          {fulfillmentConfig.pickup.subtitle}
+                        </span>
                       </span>
                     </span>
-                  </span>
-                  <span className="pointer-events-none absolute bottom-0 left-1/2 inline-flex -translate-x-1/2 translate-y-[60%] rounded-full border border-[rgba(248,227,176,0.38)] bg-[rgba(216,188,229,0.94)] px-5 py-1.5 text-[13px] font-semibold leading-none text-[var(--brand-gold-300)] shadow-[0_8px_16px_rgba(37,17,58,0.18)]">
-                    {pickupMethodPrice}
-                  </span>
-                </label>
+                    <span className="pointer-events-none absolute bottom-0 left-1/2 inline-flex -translate-x-1/2 translate-y-[60%] rounded-full border border-[rgba(248,227,176,0.38)] bg-[rgba(216,188,229,0.94)] px-5 py-1.5 text-[13px] font-semibold leading-none text-[var(--brand-gold-300)] shadow-[0_8px_16px_rgba(37,17,58,0.18)]">
+                      {pickupMethodPrice}
+                    </span>
+                  </label>
+                ) : null}
               </div>
 
-              {deliveryMethod === "delivery" ? (
+              {!deliveryOptionAvailable && !pickupOptionAvailable ? (
+                <p className="mt-4 rounded-xl border border-amber-300/45 bg-amber-100 px-3 py-2 text-sm font-semibold text-amber-950">
+                  No hay opciones de entrega disponibles en este momento.
+                </p>
+              ) : null}
+
+              {deliveryMethod === "delivery" && deliveryOptionAvailable ? (
                 <div className="mt-5 space-y-3 border-t border-white/10 pt-4">
                   <div className="text-sm text-[var(--brand-cream)]">
                     <button
@@ -1263,7 +1287,7 @@ export default function CheckoutSteps({
                     </div>
                   ) : null}
                 </div>
-              ) : (
+              ) : deliveryMethod === "pickup" && pickupOptionAvailable ? (
                 <div className="mt-5 space-y-3 border-t border-white/10 pt-4">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--brand-gold-300)]">
@@ -1314,7 +1338,7 @@ export default function CheckoutSteps({
                     <p className={fieldErrorClassName}>Seleccioná un punto de encuentro para continuar.</p>
                   ) : null}
                 </div>
-              )}
+              ) : null}
             </div>
 
             <div>

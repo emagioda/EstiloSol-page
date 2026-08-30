@@ -4,6 +4,7 @@ import { env } from "@/src/config/env";
 import {
   buildFulfillmentId,
   fallbackFulfillmentConfig,
+  isValidFulfillmentPrice,
   type DeliveryOptionConfig,
   type FulfillmentConfig,
   type FulfillmentSheetType,
@@ -16,6 +17,15 @@ import { getSheetsToken } from "@/src/server/sheets/tokens";
 const FULFILLMENT_SHEET = "envios";
 
 type SheetRow = Record<string, unknown>;
+
+export class FulfillmentConfigurationError extends Error {
+  readonly code = "FULFILLMENT_CONFIGURATION_INVALID";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "FulfillmentConfigurationError";
+  }
+}
 
 const normalizeKey = (value: string) =>
   value
@@ -36,14 +46,17 @@ const textValue = (value: unknown) => {
   return "";
 };
 
-const numberValue = (value: unknown) => {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+const configuredPrice = (value: unknown): number | null => {
+  if (typeof value === "number") {
+    return isValidFulfillmentPrice(value) ? value : null;
+  }
   const text = textValue(value);
-  if (!text) return 0;
-  const compact = text.replace(/\s/g, "").replace(/[^0-9,.-]/g, "");
-  const normalized = compact.includes(",") ? compact.replace(/\./g, "").replace(",", ".") : compact;
+  if (!text) return null;
+  const compact = text.replace(/\s/g, "");
+  if (!/^-?\d+(?:[.,]\d+)?$/.test(compact)) return null;
+  const normalized = compact.replace(",", ".");
   const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return isValidFulfillmentPrice(parsed) ? parsed : null;
 };
 
 const booleanValue = (value: unknown) => {
@@ -89,23 +102,31 @@ export const adaptRowsToFulfillmentConfig = (rows: SheetRow[]): FulfillmentConfi
   let delivery: DeliveryOptionConfig | null = null;
   let pickup: PickupOptionConfig | null = null;
   const pickupPoints: PickupPointConfig[] = [];
+  let sawDeliveryRow = false;
+  let sawPickupRow = false;
+  let sawPickupPointRow = false;
 
   for (const row of normalizedRows) {
     const type = fulfillmentType(row.tipo ?? row.type);
-    const name = textValue(row.nombre ?? row.name);
-    if (!type || !name) continue;
+    if (!type) continue;
 
+    const name = textValue(row.nombre ?? row.name);
     const active = booleanValue(row.activo ?? row.active);
     const subtitle = textValue(row.subtitulo ?? row.subtitle);
-    const price = numberValue(row.precio ?? row.price);
+    const price = configuredPrice(row.precio ?? row.price);
+
+    if (active && (!name || !subtitle || price === null)) {
+      throw new FulfillmentConfigurationError(`Active ${type} fulfillment row is incomplete`);
+    }
 
     if (type === "delivery") {
+      sawDeliveryRow = true;
       delivery = {
         id: "delivery",
         type,
-        name,
-        subtitle,
-        price,
+        name: name || fallbackFulfillmentConfig.delivery.name,
+        subtitle: subtitle || fallbackFulfillmentConfig.delivery.subtitle,
+        price: price ?? 0,
         image: textValue(row.imagen ?? row.image),
         active,
       };
@@ -113,31 +134,35 @@ export const adaptRowsToFulfillmentConfig = (rows: SheetRow[]): FulfillmentConfi
     }
 
     if (type === "pickup") {
+      sawPickupRow = true;
       pickup = {
         id: "pickup",
         type,
-        name,
-        subtitle,
-        price,
+        name: name || fallbackFulfillmentConfig.pickup.name,
+        subtitle: subtitle || fallbackFulfillmentConfig.pickup.subtitle,
+        price: price ?? 0,
         active,
       };
       continue;
     }
+
+    sawPickupPointRow = true;
+    if (!name) continue;
 
     pickupPoints.push({
       id: buildFulfillmentId(type, name),
       type,
       name,
       subtitle,
-      price,
+      price: price ?? 0,
       active,
     });
   }
 
   return {
-    delivery: delivery ?? fallbackFulfillmentConfig.delivery,
-    pickup: pickup ?? fallbackFulfillmentConfig.pickup,
-    pickupPoints: pickupPoints.length > 0 ? pickupPoints : fallbackFulfillmentConfig.pickupPoints,
+    delivery: sawDeliveryRow ? delivery! : fallbackFulfillmentConfig.delivery,
+    pickup: sawPickupRow ? pickup! : fallbackFulfillmentConfig.pickup,
+    pickupPoints: sawPickupPointRow ? pickupPoints : fallbackFulfillmentConfig.pickupPoints,
   };
 };
 
@@ -189,7 +214,8 @@ export async function fetchFulfillmentConfigFromSource(): Promise<FulfillmentCon
 export async function getFulfillmentConfig(): Promise<FulfillmentConfig> {
   try {
     return await fetchFulfillmentConfigFromSource();
-  } catch {
+  } catch (error) {
+    if (error instanceof FulfillmentConfigurationError) throw error;
     return fallbackFulfillmentConfig;
   }
 }

@@ -206,6 +206,46 @@ describe("orders create manual payment flow", () => {
     fetchMock.mockRestore();
   });
 
+  it("EF-F-01A-01 rejects inactive delivery before creating an Order or writing Ventas", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      const method = String(init?.method || "GET").toUpperCase();
+
+      if (url.hostname === "sheets.example.test" && url.searchParams.get("sheet") === "envios" && method === "GET") {
+        return new Response(JSON.stringify([
+          {
+            tipo: "delivery",
+            nombre: "Envío a domicilio",
+            subtitulo: "Dentro de la zona habilitada",
+            precio: 3500,
+            activo: false,
+          },
+        ]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+
+      throw new Error(`Unexpected fetch url: ${url.toString()}`);
+    });
+
+    const response = await POST(createManualRequest(buildManualBody({
+      deliveryMethod: "delivery",
+      fulfillment: {
+        deliveryAddress: {
+          street: "San Lorenzo",
+          number: "1234",
+          betweenStreets: "Mitre y Entre Ríos",
+          insideZoneConfirmed: true,
+        },
+      },
+      checkoutAttemptId: newAttemptId("inactive-delivery"),
+    })));
+    const body = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(body.error).toMatch(/no está disponible/i);
+    expect(appendOrderToSalesSheet).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects pickup orders with invalid pickupPointId", async () => {
     const request = new NextRequest("http://localhost:3000/api/orders/create", {
       method: "POST",

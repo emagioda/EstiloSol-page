@@ -90,6 +90,59 @@ describe("PR 2 admin KV and Sheets reconciliation", () => {
     expect(resolution.syncUpdates).not.toBeNull();
   });
 
+  it("EF-E-02-03 KV fulfillment, delivery method and total override a stale Sheet projection", () => {
+    const staleSheetFulfillment = {
+      subtotalProducts: 900,
+      discountAmount: 0,
+      shippingFee: 100,
+      finalTotal: 1000,
+      pickupPoint: {
+        id: "stale-point",
+        name: "Punto viejo",
+        address: "Dirección vieja",
+        reference: "Referencia vieja",
+      },
+      summary: "Punto viejo",
+    };
+    const canonicalKvFulfillment = {
+      subtotalProducts: 2000,
+      discountAmount: 200,
+      shippingFee: 3500,
+      finalTotal: 5300,
+      deliveryZone: {
+        id: "rosario-zona-habilitada",
+        name: "Rosario - zona de envío",
+        insideZoneConfirmed: true,
+      },
+      deliveryAddress: {
+        street: "San Juan",
+        number: "1234",
+        betweenStreets: "Mitre y Entre Ríos",
+      },
+      summary: "Envío a domicilio: San Juan 1234",
+    };
+
+    const resolution = resolveAdminOrderState(
+      makeSheetOrder({
+        total: 1000,
+        deliveryMethod: "pickup",
+        fulfillment: staleSheetFulfillment,
+      }),
+      makeKvOrder({
+        total: 5300,
+        deliveryMethod: "delivery",
+        fulfillment: canonicalKvFulfillment,
+      }),
+    );
+
+    expect(resolution.order).toMatchObject({
+      total: 5300,
+      deliveryMethod: "delivery",
+      fulfillment: canonicalKvFulfillment,
+    });
+    expect(resolution.order.fulfillment).not.toBe(canonicalKvFulfillment);
+  });
+
   it("PR2-SYNC-04 KV deducted cannot appear pending because Sheets is stale", () => {
     const resolution = resolveAdminOrderState(
       makeSheetOrder(),

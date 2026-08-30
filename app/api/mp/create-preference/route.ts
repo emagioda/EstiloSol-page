@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getActivePickupPointById } from "@/src/config/fulfillment";
+import { getActivePickupPointById, isDeliveryOptionAvailable } from "@/src/config/fulfillment";
 import { env } from "@/src/config/env";
 import { getAuthoritativeProductsCatalog } from "@/src/server/catalog/getProducts";
 import { invalidProductsMessage, validateAuthoritativeInventory } from "@/src/server/catalog/stock";
@@ -172,6 +172,12 @@ export async function POST(request: NextRequest) {
 
     if (!order) {
       const fulfillmentConfig = await getFulfillmentConfig();
+      if (body.deliveryMethod === "delivery" && !isDeliveryOptionAvailable(fulfillmentConfig)) {
+        return NextResponse.json(
+          { error: "El envío a domicilio no está disponible.", checkoutAttemptId: attempt.checkoutAttemptId },
+          { status: 400 }
+        );
+      }
       if (
         body.deliveryMethod === "pickup" &&
         !getActivePickupPointById(fulfillmentConfig, body.fulfillment.pickupPointId || "")

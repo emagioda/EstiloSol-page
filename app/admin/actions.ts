@@ -184,7 +184,8 @@ const buildFallbackOrderFromSheet = (
       : undefined,
     paymentMethod: sheetOrder.paymentMethod,
     deliveryMethod: sheetOrder.deliveryMethod,
-    fulfillment: parseFallbackOrderFulfillment(raw, sheetOrder.deliveryMethod),
+    fulfillment:
+      sheetOrder.fulfillment ?? parseFallbackOrderFulfillment(raw, sheetOrder.deliveryMethod),
     items,
     total: sheetOrder.total,
     currency: "ARS",

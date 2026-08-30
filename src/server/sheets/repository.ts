@@ -5,11 +5,13 @@ import { getSheetsToken, type SheetsTokenPurpose } from "@/src/server/sheets/tok
 import type {
   Order,
   OrderDeliveryMethod,
+  OrderFulfillment,
   OrderInventoryStatus,
   OrderPaymentMethod,
   OrderPaymentStatus,
   OrderShippingStatus,
 } from "@/src/server/orders/types";
+import { parseFallbackOrderFulfillment } from "@/src/server/orders/sheetFallback";
 import {
   ADMIN_ORDER_STATE_CHANGED,
   AdminOrderStateChangedError,
@@ -33,6 +35,26 @@ import {
 } from "@/src/server/inventory/items";
 
 const SALES_SHEET_NAME = "ventas";
+
+export const REQUIRED_SALES_FULFILLMENT_HEADERS = [
+  "subtotal_productos",
+  "descuento",
+  "costo_envio",
+  "total_final",
+  "delivery_zone_id",
+  "delivery_zone_name",
+  "delivery_inside_zone_confirmed",
+  "delivery_address_street",
+  "delivery_address_number",
+  "delivery_address_floor",
+  "delivery_address_between_streets",
+  "delivery_address_notes",
+  "pickup_point_id",
+  "pickup_point_name",
+  "pickup_point_address",
+  "pickup_point_reference",
+  "fulfillment_summary",
+] as const;
 const PRODUCTS_SHEET_NAME = "products";
 
 const DEFAULT_GET_POLICY = {
@@ -112,6 +134,7 @@ export type AdminOrderSheetRow = {
   stockDeductedAt: string;
   paymentMethod?: OrderPaymentMethod;
   deliveryMethod?: OrderDeliveryMethod;
+  fulfillment?: OrderFulfillment;
   items: AdminOrderItem[];
   itemsSummary: string;
   notes: string;
@@ -1097,7 +1120,7 @@ const parseOrderItemsJson = (value: unknown): AdminOrderItem[] => {
   }
 };
 
-const parseAdminOrderRow = (input: SheetRow): AdminOrderSheetRow | null => {
+export const parseAdminOrderRow = (input: SheetRow): AdminOrderSheetRow | null => {
   const row = normalizeRow(input);
   const orderId = toStringValue(
     pickValue(row, ["nro_de_compra", "order_id", "id_pedido", "orderid", "external_reference", "id"])
@@ -1138,6 +1161,9 @@ const parseAdminOrderRow = (input: SheetRow): AdminOrderSheetRow | null => {
     : stockDeductedAt
       ? "deducted"
       : undefined;
+  const deliveryMethod = parseDeliveryMethod(
+    pickValue(row, ["forma_de_entrega", "delivery_method_code", "delivery_method", "metodo_entrega"])
+  );
 
   return {
     orderId,
@@ -1159,9 +1185,8 @@ const parseAdminOrderRow = (input: SheetRow): AdminOrderSheetRow | null => {
     paymentMethod: parsePaymentMethod(
       pickValue(row, ["forma_de_pago", "payment_method_code", "payment_method", "metodo_pago"])
     ),
-    deliveryMethod: parseDeliveryMethod(
-      pickValue(row, ["forma_de_entrega", "delivery_method_code", "delivery_method", "metodo_entrega"])
-    ),
+    deliveryMethod,
+    fulfillment: parseFallbackOrderFulfillment(input, deliveryMethod),
     items,
     itemsSummary,
     notes,
