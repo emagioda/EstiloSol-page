@@ -386,6 +386,82 @@ const deliveryMethodLabel = (value: AdminOrderSheetRow["deliveryMethod"]) => {
   return "No informado";
 };
 
+const fulfillmentMoney = (value: number) =>
+  Number.isFinite(value) && value >= 0 ? formatMoney(value) : "No informado";
+
+export function AdminFulfillmentDetails({ order }: { order: AdminOrderSheetRow }) {
+  const fulfillment = order.fulfillment;
+  if (!fulfillment) {
+    return (
+      <section className="mt-3 rounded-xl border border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+        <p className="font-bold">Datos de entrega incompletos</p>
+        <p className="mt-1">La proyección disponible no contiene el fulfillment canónico.</p>
+      </section>
+    );
+  }
+
+  const address = fulfillment.deliveryAddress;
+  const zone = fulfillment.deliveryZone;
+  const pickupPoint = fulfillment.pickupPoint;
+
+  return (
+    <section aria-label="Detalle de entrega" className="mt-3 rounded-xl border border-[#d8cce4] bg-white px-3 py-3">
+      <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#7a6988]">
+        Fulfillment
+      </p>
+      {order.deliveryMethod === "delivery" ? (
+        <div className="mt-2 space-y-1 text-sm text-[#2a1644]">
+          <p className="font-bold">Envío a domicilio</p>
+          {address ? (
+            <>
+              <p>{`${address.street} ${address.number}`.trim() || "Dirección incompleta"}</p>
+              {address.floor ? <p>Piso/unidad: {address.floor}</p> : null}
+              {address.betweenStreets ? <p>Entre {address.betweenStreets}</p> : null}
+              {address.notes ? <p>Notas de entrega: {address.notes}</p> : null}
+            </>
+          ) : (
+            <p className="text-amber-800">Dirección incompleta</p>
+          )}
+          <p>Zona: {zone?.name || "No informada"}</p>
+        </div>
+      ) : order.deliveryMethod === "pickup" ? (
+        <div className="mt-2 space-y-1 text-sm text-[#2a1644]">
+          <p className="font-bold">Punto de encuentro</p>
+          <p>{pickupPoint?.name || "Punto no informado"}</p>
+          <p>Dirección: {pickupPoint?.address || "No informada"}</p>
+          <p>Referencia: {pickupPoint?.reference || "No informada"}</p>
+        </div>
+      ) : (
+        <p className="mt-2 text-sm text-amber-800">Método de entrega no informado.</p>
+      )}
+
+      <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-[#5a4867]">
+        <div>
+          <dt>Subtotal</dt>
+          <dd className="font-bold text-[#2a1644]">{fulfillmentMoney(fulfillment.subtotalProducts)}</dd>
+        </div>
+        {Number.isFinite(fulfillment.discountAmount) && fulfillment.discountAmount > 0 ? (
+          <div>
+            <dt>Descuento</dt>
+            <dd className="font-bold text-[#2a1644]">-{fulfillmentMoney(fulfillment.discountAmount)}</dd>
+          </div>
+        ) : null}
+        <div>
+          <dt>Envío/entrega</dt>
+          <dd className="font-bold text-[#2a1644]">{fulfillmentMoney(fulfillment.shippingFee)}</dd>
+        </div>
+        <div>
+          <dt>Total final</dt>
+          <dd className="font-bold text-[#2a1644]">{fulfillmentMoney(fulfillment.finalTotal)}</dd>
+        </div>
+      </dl>
+      {fulfillment.summary ? (
+        <p className="mt-2 text-xs text-[#725f80]">{fulfillment.summary}</p>
+      ) : null}
+    </section>
+  );
+}
+
 const buildDraftMap = (orders: AdminOrderSheetRow[]) =>
   Object.fromEntries(
     orders.map((order) => [
@@ -1687,6 +1763,7 @@ export default function VentasTable({ orders }: VentasTableProps) {
                     {deliveryMethodLabel(selectedOrder.deliveryMethod)}
                   </p>
                 </div>
+                <AdminFulfillmentDetails order={selectedOrder} />
               </section>
 
               <section

@@ -48,6 +48,22 @@ const toTimestamp = (value: string): number | undefined => {
 const timestampsMatch = (sheetValue: string, kvValue: number | undefined): boolean =>
   toTimestamp(sheetValue) === kvValue;
 
+const cloneFulfillment = (order: Order) =>
+  order.fulfillment
+    ? {
+        ...order.fulfillment,
+        ...(order.fulfillment.deliveryZone
+          ? { deliveryZone: { ...order.fulfillment.deliveryZone } }
+          : {}),
+        ...(order.fulfillment.deliveryAddress
+          ? { deliveryAddress: { ...order.fulfillment.deliveryAddress } }
+          : {}),
+        ...(order.fulfillment.pickupPoint
+          ? { pickupPoint: { ...order.fulfillment.pickupPoint } }
+          : {}),
+      }
+    : undefined;
+
 const isStrongFinancialStatus = (status: AdminOrderSheetRow["paymentStatus"]) =>
   status === "confirmed" || status === "refunded" || status === "charged_back";
 
@@ -144,6 +160,9 @@ export const resolveAdminOrderState = (
 
   const order: AdminOrderSheetRow = {
     ...sheetOrder,
+    total: kvOrder.total,
+    deliveryMethod: kvOrder.deliveryMethod,
+    fulfillment: cloneFulfillment(kvOrder),
     paymentStatus: financial.status,
     shippingStatus: kvOrder.shippingStatus,
     inventoryStatus,
@@ -208,6 +227,7 @@ export const buildAdminOrderSheetRowFromKv = (
   stockDeductedAt: toIsoString(order.stockDeductedAt),
   paymentMethod: order.paymentMethod,
   deliveryMethod: order.deliveryMethod,
+  fulfillment: cloneFulfillment(order),
   items: order.items.map((item) => ({
     productId: item.productId,
     title: item.title,

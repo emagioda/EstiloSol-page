@@ -34,6 +34,30 @@ export type FulfillmentConfig = {
   pickupPoints: PickupPointConfig[];
 };
 
+export const isValidFulfillmentPrice = (value: number): boolean =>
+  Number.isFinite(value) && value >= 0;
+
+const hasText = (value: string): boolean => value.trim().length > 0;
+
+export const isDeliveryOptionAvailable = (config: FulfillmentConfig): boolean =>
+  config.delivery.active === true &&
+  hasText(config.delivery.name) &&
+  hasText(config.delivery.subtitle) &&
+  isValidFulfillmentPrice(config.delivery.price);
+
+export const isPickupOptionAvailable = (config: FulfillmentConfig): boolean =>
+  config.pickup.active === true &&
+  hasText(config.pickup.name) &&
+  hasText(config.pickup.subtitle) &&
+  isValidFulfillmentPrice(config.pickup.price);
+
+export const isPickupPointAvailable = (point: PickupPointConfig): boolean =>
+  point.active === true &&
+  hasText(point.id) &&
+  hasText(point.name) &&
+  hasText(point.subtitle) &&
+  isValidFulfillmentPrice(point.price);
+
 export const DELIVERY_ZONE = {
   id: "rosario-zona-habilitada",
   name: "Rosario - zona de envio",
@@ -121,14 +145,21 @@ export const fallbackFulfillmentConfig: FulfillmentConfig = {
   ],
 };
 
+export const getActivePickupPoints = (config: FulfillmentConfig): PickupPointConfig[] => {
+  if (!isPickupOptionAvailable(config)) return [];
+  return config.pickupPoints.filter(isPickupPointAvailable);
+};
+
 export const getActivePickupPointById = (config: FulfillmentConfig, id: string) =>
-  config.pickupPoints.find((point) => point.id === id && point.active) ?? null;
+  getActivePickupPoints(config).find((point) => point.id === id) ?? null;
 
 export const getShippingFeeForDeliveryMethod = (
   deliveryMethod: "delivery" | "pickup",
   config: FulfillmentConfig = fallbackFulfillmentConfig,
   pickupPointId?: string
 ) => {
-  if (deliveryMethod === "delivery") return config.delivery.price;
-  return getActivePickupPointById(config, pickupPointId || "")?.price ?? config.pickup.price;
+  if (deliveryMethod === "delivery") {
+    return isDeliveryOptionAvailable(config) ? config.delivery.price : 0;
+  }
+  return getActivePickupPointById(config, pickupPointId || "")?.price ?? 0;
 };

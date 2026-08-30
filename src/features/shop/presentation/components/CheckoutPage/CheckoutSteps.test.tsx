@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import SuccessPage from "@/app/tienda/success/page";
+import { fallbackFulfillmentConfig } from "@/src/config/fulfillment";
 import CheckoutSteps from "./CheckoutSteps";
 import { useCart } from "../../view-models/useCartStore";
 
@@ -445,6 +446,37 @@ describe("CheckoutSteps Auto-Advance", () => {
     expect(screen.getByText("Ingresá la calle.")).toBeInTheDocument();
     expect(screen.getByText("Ingresá el número.")).toBeInTheDocument();
     expect(screen.getByText("Ingresá las calles de referencia.")).toBeInTheDocument();
+  });
+
+  it("EF-F-01A-01 hides inactive delivery and selects the available pickup flow", async () => {
+    mockUseCart.mockReturnValue({
+      items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],
+      paymentMethod: "mercadopago",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts: vi.fn(),
+      clear: vi.fn(),
+      getTotal: () => 100,
+      getDiscountedTotal: () => 100,
+    });
+    const fulfillmentConfig = structuredClone(fallbackFulfillmentConfig);
+    fulfillmentConfig.delivery.active = false;
+
+    render(
+      <CheckoutSteps
+        subtotal={100}
+        discountedTotal={100}
+        fulfillmentConfig={fulfillmentConfig}
+      />,
+    );
+
+    expect(screen.queryByRole("radio", { name: /Envío a domicilio/i })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: /Punto de encuentro/i })).toBeChecked();
+    });
+    expect(await screen.findByText("Elegí un punto de encuentro")).toBeInTheDocument();
   });
 
   it("requires a pickup point before continuing", async () => {

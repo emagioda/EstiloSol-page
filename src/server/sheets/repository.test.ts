@@ -6,7 +6,9 @@ import {
   decrementProductsStockInSheet,
   getOrdersForAdmin,
   getUniqueOrderRowById,
+  parseAdminOrderRow,
   parseInventoryStatus,
+  REQUIRED_SALES_FULFILLMENT_HEADERS,
   updateOrderRowInSalesSheet,
 } from "@/src/server/sheets/repository";
 import { AdminOrderStateChangedError } from "@/src/server/orders/adminIntent";
@@ -155,6 +157,7 @@ describe("buildSalesSheetRow", () => {
     expect(row.delivery_inside_zone_confirmed).toBe("TRUE");
     expect(row.delivery_address_street).toBe("San Lorenzo");
     expect(row.fulfillment_summary).toContain("Envío a domicilio");
+    expect(REQUIRED_SALES_FULFILLMENT_HEADERS.every((header) => header in row)).toBe(true);
   });
 
   it("maps pickup point fulfillment fields", () => {
@@ -183,6 +186,84 @@ describe("buildSalesSheetRow", () => {
     expect(row.pickup_point_id).toBe("santa-fe-mitre");
     expect(row.pickup_point_name).toBe("Santa Fe y Mitre");
     expect(row.fulfillment_summary).toBe("Punto de encuentro: Santa Fe y Mitre");
+  });
+});
+
+describe("AUD3 H07-E2 Admin fulfillment Sheet projection", () => {
+  it("EF-E-02-01 parses the complete delivery snapshot", () => {
+    const order = parseAdminOrderRow({
+      nro_de_compra: "order-admin-delivery",
+      forma_de_entrega: "delivery",
+      total: 22000,
+      subtotal_productos: 20000,
+      descuento: 2000,
+      costo_envio: 4000,
+      total_final: 22000,
+      delivery_zone_id: "rosario-zona-habilitada",
+      delivery_zone_name: "Rosario - zona de envío",
+      delivery_inside_zone_confirmed: "TRUE",
+      delivery_address_street: "San Lorenzo",
+      delivery_address_number: "1234",
+      delivery_address_floor: "2 A",
+      delivery_address_between_streets: "Mitre y Entre Ríos",
+      delivery_address_notes: "Timbre Estilo",
+      fulfillment_summary: "Envío a domicilio: San Lorenzo 1234",
+    });
+
+    expect(order).toMatchObject({
+      deliveryMethod: "delivery",
+      total: 22000,
+      fulfillment: {
+        subtotalProducts: 20000,
+        discountAmount: 2000,
+        shippingFee: 4000,
+        finalTotal: 22000,
+        deliveryZone: {
+          id: "rosario-zona-habilitada",
+          insideZoneConfirmed: true,
+        },
+        deliveryAddress: {
+          street: "San Lorenzo",
+          number: "1234",
+          floor: "2 A",
+          betweenStreets: "Mitre y Entre Ríos",
+          notes: "Timbre Estilo",
+        },
+      },
+    });
+  });
+
+  it("EF-E-02-02 parses the complete pickup snapshot", () => {
+    const order = parseAdminOrderRow({
+      nro_de_compra: "order-admin-pickup",
+      forma_de_entrega: "pickup",
+      total: 18000,
+      subtotal_productos: 20000,
+      descuento: 2000,
+      costo_envio: 0,
+      total_final: 18000,
+      pickup_point_id: "santa-fe-mitre",
+      pickup_point_name: "Santa Fe y Mitre",
+      pickup_point_address: "Santa Fe y Mitre",
+      pickup_point_reference: "Zona centro",
+      fulfillment_summary: "Punto de encuentro: Santa Fe y Mitre",
+    });
+
+    expect(order).toMatchObject({
+      deliveryMethod: "pickup",
+      fulfillment: {
+        subtotalProducts: 20000,
+        discountAmount: 2000,
+        shippingFee: 0,
+        finalTotal: 18000,
+        pickupPoint: {
+          id: "santa-fe-mitre",
+          name: "Santa Fe y Mitre",
+          address: "Santa Fe y Mitre",
+          reference: "Zona centro",
+        },
+      },
+    });
   });
 });
 

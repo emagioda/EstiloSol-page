@@ -509,6 +509,46 @@ describe("create-preference local development flow", () => {
     fetchMock.mockRestore();
   });
 
+  it("EF-F-02 rejects malformed active shipping before any Mercado Pago call", async () => {
+    const mpBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      const method = String(init?.method || "GET").toUpperCase();
+
+      if (url.hostname === "sheets.example.test" && url.searchParams.get("sheet") === "envios" && method === "GET") {
+        return new Response(JSON.stringify([{
+          tipo: "delivery",
+          nombre: "Envío a domicilio",
+          subtitulo: "Dentro de la zona habilitada",
+          precio: -500,
+          activo: true,
+        }]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.hostname === "api.mercadopago.com") {
+        mpBodies.push(JSON.parse(String(init?.body || "{}")) as Record<string, unknown>);
+      }
+      throw new Error(`Unexpected fetch url: ${url.toString()}`);
+    });
+
+    const response = await POST(createRequest(buildCheckoutBody({
+      deliveryMethod: "delivery",
+      fulfillment: {
+        deliveryAddress: {
+          street: "San Lorenzo",
+          number: "1234",
+          betweenStreets: "Mitre y Entre Ríos",
+          insideZoneConfirmed: true,
+        },
+      },
+      checkoutAttemptId: newAttemptId("invalid-delivery-price"),
+    })));
+
+    expect(response.status).toBe(503);
+    expect(mpBodies).toHaveLength(0);
+    expect(persistCheckoutRecoverySnapshot).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("builds one Mercado Pago item from repeated product lines", async () => {
     const { fetchMock, mpBodies } = installPreferenceFetchMock({
       catalog: [{ ...baseCatalogProduct, stock_qty: 3 }],

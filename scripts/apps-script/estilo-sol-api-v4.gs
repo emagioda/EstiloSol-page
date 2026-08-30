@@ -17,6 +17,25 @@
 const SHEET_PRODUCTS = "products";
 const SHEET_SALES = "ventas";
 const SHEET_FULFILLMENT = "envios";
+const SALES_FULFILLMENT_REQUIRED_HEADERS = [
+  "subtotal_productos",
+  "descuento",
+  "costo_envio",
+  "total_final",
+  "delivery_zone_id",
+  "delivery_zone_name",
+  "delivery_inside_zone_confirmed",
+  "delivery_address_street",
+  "delivery_address_number",
+  "delivery_address_floor",
+  "delivery_address_between_streets",
+  "delivery_address_notes",
+  "pickup_point_id",
+  "pickup_point_name",
+  "pickup_point_address",
+  "pickup_point_reference",
+  "fulfillment_summary"
+];
 const SHEET_INVENTORY_TRANSACTIONS = "_inventory_transactions";
 const INVENTORY_TRANSACTION_HEADERS = ["order_id", "demand_fingerprint", "applied_at", "state"];
 const INVENTORY_TRANSACTION_STATE_APPLIED = "APPLIED";
@@ -505,6 +524,20 @@ function findColumnIndex(headers, candidates) {
   return -1;
 }
 
+function salesFulfillmentSchemaError_() {
+  const err = new Error("Required ventas fulfillment columns are missing");
+  err.name = "SalesFulfillmentSchemaError";
+  err.code = "SALES_FULFILLMENT_SCHEMA_INVALID";
+  return err;
+}
+
+function assertSalesFulfillmentHeaders_(headers) {
+  const missing = SALES_FULFILLMENT_REQUIRED_HEADERS.filter(function(header) {
+    return findColumnIndex(headers, [header]) === -1;
+  });
+  if (missing.length > 0) throw salesFulfillmentSchemaError_();
+}
+
 function normalizeCompareValue(value) {
   return String(value === null || value === undefined ? "" : value).trim().toLowerCase();
 }
@@ -635,6 +668,9 @@ function handleAppendRow(payload) {
 
   const sheet = getSheetOrThrow(sheetName);
   const headers = getHeaders(sheet);
+  if (normalizeKey(sheetName) === normalizeKey(SHEET_SALES)) {
+    assertSalesFulfillmentHeaders_(headers);
+  }
   const rowValues = buildAppendRowValues_(sheet, rowInput);
 
   if (normalizeKey(sheetName) === normalizeKey(SHEET_SALES)) {
@@ -1523,6 +1559,7 @@ function handleAppendOrderAndDecrementStock(payload) {
 
     const salesSheet = getSheetOrThrow(SHEET_SALES);
     const salesHeaders = getHeaders(salesSheet);
+    assertSalesFulfillmentHeaders_(salesHeaders);
     const rowValues = buildAppendRowValues_(salesSheet, rowInput);
     const existingSalesRow = findOrderRowNumber_(salesSheet, salesHeaders, orderId);
     const salesRowNumber = existingSalesRow === -1 ? salesSheet.getLastRow() + 1 : existingSalesRow;
@@ -2663,6 +2700,10 @@ function publicPostErrorPayload_(err) {
 
   if (err.code === "INVALID_ADMIN_ORDER_STATUS_INTENT") {
     return { ok: false, error: "Invalid request", code: err.code };
+  }
+
+  if (err.code === "SALES_FULFILLMENT_SCHEMA_INVALID") {
+    return { ok: false, error: "Server misconfigured", code: err.code };
   }
 
   const payload = {
