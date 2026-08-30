@@ -7,6 +7,17 @@
 - Never merge, mark Ready, enable auto-merge, close, or deploy without explicit authorization.
 - Never interpret “looks good” as merge authorization.
 
+## Rollout contract
+
+- Explicit rollout authorization applies only to the approved PR, base, HEAD, and tree.
+- Verify all approved anchors, required CI, and mergeability before merging.
+- During rollout, do not change code, rebase, force-push, or fix discrepancies.
+- Stop on any anchor, CI, or mergeability mismatch.
+- Use only the explicitly authorized merge method.
+- After merge, verify the resulting `main` tree exactly equals the approved tree.
+- Allow only the automatic Vercel Git deployment unless a manual deployment is explicitly authorized.
+- Any mismatch or failure means: STOP AND REPORT.
+
 ## Production safety
 
 Never without explicit authorization:
@@ -29,6 +40,15 @@ Never without explicit authorization:
 - Existing architecture and invariants win over local convenience.
 - Fail closed for financial, inventory, recovery, and authority ambiguity.
 - Preserve existing durable and idempotency evidence.
+
+## Token-efficient context loading
+
+- `AGENTS.md` always applies.
+- Do not load `docs/ai/*` wholesale.
+- Read only the affected sections of `docs/ai/ARCHITECTURE.md`.
+- Use `docs/ai/PROJECT_STATE.md` only when project or audit state matters.
+- Live repository and GitHub evidence wins over stale documentation.
+- Report documentation that is materially stale for the current task.
 
 ## Validation
 

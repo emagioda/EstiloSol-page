@@ -1,11 +1,25 @@
 # Task packet
 
+Mode: IMPLEMENTATION | AUDIT | FOLLOW_UP | ROLLOUT
+
 ## Objective
 
 
 ## Base
 
 SHA:
+
+## Approved anchors (optional)
+
+PR:
+
+Base:
+
+HEAD:
+
+Tree:
+
+Merge method:
 
 ## Scope
 

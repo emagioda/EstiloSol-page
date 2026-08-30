@@ -2,9 +2,9 @@
 
 Update this file only after a meaningful architecture or audit-state change.
 
-## Production main
+## Task base
 
-`05086e89f3e706dbcae033e11f2c78a2276f5a20`
+Resolve the exact task base from current GitHub `main` at task start and supply it through the Task Packet. Persistent project state does not pin a volatile `main` SHA.
 
 ## Critical audit state
 
