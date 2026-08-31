@@ -9,7 +9,9 @@ Mode: IMPLEMENTATION | AUDIT | REVIEW | FOLLOW_UP | ROLLOUT
 
 SHA:
 
-## Approved anchors (optional)
+## Approved anchors
+
+Required for `ROLLOUT`; optional for other modes.
 
 PR:
 
@@ -59,11 +61,22 @@ New dependency:
 
 ## Delivery
 
-Default:
+`AUDIT` / `REVIEW`:
 
-Draft PR only.
+- Read-only by default.
+- No branch, commit, PR, or mutation unless explicitly requested.
 
-Stop immediately after Draft PR creation or update for manual review.
+`IMPLEMENTATION` / `FOLLOW_UP`:
+
+- Draft PR only.
+- Stop immediately after Draft PR creation or update for manual review.
+
+`ROLLOUT`:
+
+- Requires explicit rollout authorization.
+- Approved PR, base, HEAD, and tree anchors are mandatory.
+- Execute only the authorized merge and deployment contract from `AGENTS.md`.
+- Any mismatch means: STOP AND REPORT.
 
 ## Follow-up delta
 
