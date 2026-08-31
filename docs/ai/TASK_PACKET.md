@@ -1,6 +1,6 @@
 # Task packet
 
-Mode: IMPLEMENTATION | AUDIT | FOLLOW_UP | ROLLOUT
+Mode: IMPLEMENTATION | AUDIT | REVIEW | FOLLOW_UP | ROLLOUT
 
 ## Objective
 

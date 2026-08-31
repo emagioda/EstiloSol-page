@@ -1,9 +1,11 @@
 # Repository instructions for AI agents
 
-## Default workflow
+## Task modes
 
-- Use a Draft PR unless the user explicitly authorizes rollout.
-- Creating or updating the Draft PR is the end of an implementation task.
+- `AUDIT` and `REVIEW` are read-only by default.
+- A pure `AUDIT` or `REVIEW` creates no branch, commit, PR, deployment, or mutation unless explicitly requested.
+- `IMPLEMENTATION` and `FOLLOW_UP` use a Draft PR by default; creating or updating it ends the task.
+- `ROLLOUT` begins only after explicit authorization for approved PR, base, HEAD, and tree anchors.
 - Never merge, mark Ready, enable auto-merge, close, or deploy without explicit authorization.
 - Never interpret “looks good” as merge authorization.
 
@@ -52,7 +54,9 @@ Never without explicit authorization:
 
 ## Validation
 
-Default safe validation:
+- Documentation or workflow-only changes: run `git diff --check` only, unless another check is directly relevant.
+- During implementation iteration, run directed or affected tests first.
+- For a final candidate containing application code or configuration, run the full safe suite once before declaring it ready for review:
 
 ```text
 npm ci
@@ -63,8 +67,10 @@ npm run build
 git diff --check
 ```
 
+- For follow-up blocker fixes, run the regression test first; run the full safe suite once the PR is again a final candidate.
 - Use inert or synthetic configuration.
 - Never use real providers or Production data for validation.
+- Keep command output to PASS/FAIL summaries and include details only on failure.
 
 ## Reporting
 
@@ -89,6 +95,22 @@ Do not paste full files or huge command logs. Summarize PASS/FAIL and include de
 - Consolidate symptoms by root cause.
 - Use evidence in the form `path + symbol/function + concise conclusion`.
 - Classify findings as `BLOCKER`, `NON-BLOCKER`, or `DEFERRED`.
+- `PASS` means there is no merge-blocking finding in the reviewed HEAD.
+- Use this compact verdict when there are no blockers:
+
+```text
+VERDICT: PASS
+```
+
+- Otherwise use:
+
+```text
+VERDICT: BLOCKER
+B1: <root cause + path/symbol + required minimum fix>
+B2: ...
+```
+
+- Optional `NON-BLOCKER` or `DEFERRED` items may follow the verdict.
 - Do not change code during a read-only audit or review.
 
 ## Follow-up fixes
