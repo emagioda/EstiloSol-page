@@ -514,22 +514,24 @@ export const useProductsStore = ({
   useEffect(() => {
     if (initialCatalogComplete) return;
 
-    const sessionCatalog = readSessionCatalogCache({ allowStale: true });
-    const sessionCachedProducts = sessionCatalog?.products;
-    if (
-      !sessionCachedProducts ||
-      (sessionCachedProducts.length === 0 && !sessionCatalog?.complete)
-    ) {
-      return;
-    }
-
-    const sessionSignature = productSignature(sessionCachedProducts);
-    if (sessionSignature === cachedProductsSignature) return;
-
     const hydrateTimer = window.setTimeout(() => {
-      const complete = Boolean(sessionCatalog?.complete);
+      const sessionCatalog = readSessionCatalogCache({ allowStale: true });
+      const sessionCachedProducts = sessionCatalog?.products;
+      if (
+        !sessionCachedProducts ||
+        (sessionCachedProducts.length === 0 && !sessionCatalog?.complete)
+      ) {
+        return;
+      }
+
+      const complete = Boolean(sessionCatalog.complete);
+      const sessionSignature = productSignature(sessionCachedProducts);
       setMemoryCatalogCache(sessionCachedProducts, { complete });
-      setProducts([...sessionCachedProducts]);
+      setProducts((currentProducts) =>
+        productSignature(currentProducts) === sessionSignature
+          ? currentProducts
+          : [...sessionCachedProducts],
+      );
       setCatalogComplete(complete);
       setStatus("success");
       setErrorMessage(null);

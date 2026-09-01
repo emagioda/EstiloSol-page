@@ -37,6 +37,7 @@ const products: Product[] = [
 ];
 
 const cachedCatalogA: Product[] = [products[0]];
+const emptyServerCatalog: Product[] = [];
 const serverCatalogB: Product[] = [
   {
     ...products[0],
@@ -282,6 +283,46 @@ describe("shop filter session state", () => {
     store.unmount();
     const restored = renderHook(() => useProductsStore());
     expect(restored.result.current.allProducts).toEqual([]);
+  });
+
+  it("reconciles simultaneous consumers with the complete server snapshot", async () => {
+    primeProductsCatalogCache(cachedCatalogA, { complete: true });
+
+    const stores = renderHook(() => ({
+      shop: useProductsStore({
+        initialProducts: serverCatalogB,
+        initialCatalogComplete: true,
+      }),
+      cart: useProductsStore(),
+    }));
+
+    expect(stores.result.current.shop.allProducts.map((product) => product.id)).toEqual([
+      "server-b",
+    ]);
+    await waitFor(() => {
+      expect(stores.result.current.cart.allProducts.map((product) => product.id)).toEqual([
+        "server-b",
+      ]);
+    });
+  });
+
+  it("clears older products from simultaneous consumers for a complete empty snapshot", async () => {
+    primeProductsCatalogCache(cachedCatalogA, { complete: true });
+
+    const stores = renderHook(() => ({
+      shop: useProductsStore({
+        initialProducts: emptyServerCatalog,
+        initialCatalogComplete: true,
+      }),
+      cart: useProductsStore(),
+    }));
+
+    expect(stores.result.current.shop.allProducts).toEqual([]);
+    await waitFor(() => {
+      expect(stores.result.current.cart.allProducts).toEqual([]);
+      expect(stores.result.current.cart.status).toBe("success");
+      expect(stores.result.current.cart.catalogComplete).toBe(true);
+    });
   });
 
   it("keeps cache recovery when the server snapshot is incomplete", () => {
