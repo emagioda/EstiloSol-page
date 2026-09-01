@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import {
@@ -6,6 +7,7 @@ import {
   clearShopFiltersSessionState,
   hasSessionCatalogCache,
   prefetchProductsCatalogSession,
+  primeProductsCatalogCache,
   useProductsStore,
 } from "@/src/features/shop/presentation/view-models/useProductsStore";
 
@@ -33,6 +35,26 @@ const products: Product[] = [
     price: 1999,
   },
 ];
+
+const cachedCatalogA: Product[] = [products[0]];
+const serverCatalogB: Product[] = [
+  {
+    ...products[0],
+    id: "server-b",
+    name: "Snapshot del servidor",
+  },
+];
+
+const CatalogRenderProbe = ({
+  initialProducts,
+  initialCatalogComplete,
+}: {
+  initialProducts: Product[];
+  initialCatalogComplete: boolean;
+}) => {
+  const store = useProductsStore({ initialProducts, initialCatalogComplete });
+  return <span>{store.allProducts.map((product) => product.id).join(",") || "empty"}</span>;
+};
 
 describe("shop filter session state", () => {
   beforeEach(() => {
@@ -227,6 +249,69 @@ describe("shop filter session state", () => {
     expect(store.result.current.status).toBe("success");
     expect(store.result.current.catalogComplete).toBe(true);
     expect(store.result.current.loading).toBe(false);
+  });
+
+  it("prefers a complete server snapshot over an existing catalog cache and syncs the cache", () => {
+    primeProductsCatalogCache(cachedCatalogA, { complete: true });
+
+    const store = renderHook(() =>
+      useProductsStore({
+        initialProducts: serverCatalogB,
+        initialCatalogComplete: true,
+      }),
+    );
+
+    expect(store.result.current.allProducts.map((product) => product.id)).toEqual(["server-b"]);
+
+    store.unmount();
+    const restored = renderHook(() => useProductsStore());
+    expect(restored.result.current.allProducts.map((product) => product.id)).toEqual(["server-b"]);
+  });
+
+  it("treats a complete empty server snapshot as success and removes older cached products", () => {
+    primeProductsCatalogCache(cachedCatalogA, { complete: true });
+
+    const store = renderHook(() =>
+      useProductsStore({ initialProducts: [], initialCatalogComplete: true }),
+    );
+
+    expect(store.result.current.allProducts).toEqual([]);
+    expect(store.result.current.status).toBe("success");
+    expect(store.result.current.catalogComplete).toBe(true);
+
+    store.unmount();
+    const restored = renderHook(() => useProductsStore());
+    expect(restored.result.current.allProducts).toEqual([]);
+  });
+
+  it("keeps cache recovery when the server snapshot is incomplete", () => {
+    primeProductsCatalogCache(cachedCatalogA, { complete: true });
+
+    const store = renderHook(() =>
+      useProductsStore({
+        initialProducts: serverCatalogB,
+        initialCatalogComplete: false,
+      }),
+    );
+
+    expect(store.result.current.allProducts.map((product) => product.id)).toEqual(["p1"]);
+    expect(store.result.current.status).toBe("success");
+  });
+
+  it("does not mutate the module catalog cache while rendering", () => {
+    const serverMarkup = renderToString(
+      <CatalogRenderProbe
+        initialProducts={serverCatalogB}
+        initialCatalogComplete={true}
+      />,
+    );
+    const laterRequestMarkup = renderToString(
+      <CatalogRenderProbe initialProducts={[]} initialCatalogComplete={false} />,
+    );
+
+    expect(serverMarkup).toContain("server-b");
+    expect(laterRequestMarkup).toContain("empty");
+    expect(laterRequestMarkup).not.toContain("server-b");
   });
 
   it("keeps home catalog prefetch out of the persistent session cache", async () => {
