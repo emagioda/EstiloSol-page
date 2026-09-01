@@ -15,6 +15,7 @@ import {
 import type { PaymentMethod } from "../../view-models/useCartStore";
 import { useCart } from "../../view-models/useCartStore";
 import { refreshProductsMemoryCacheFromSource } from "../../view-models/useProductsStore";
+import OptimizedImageWithFallback from "../OptimizedImageWithFallback";
 import {
   bindCheckoutAttemptExternalReference,
   clearBrowserCheckoutAttempt,
@@ -1161,13 +1162,16 @@ export default function CheckoutSteps({
                             <button
                               type="button"
                               onClick={() => setDeliveryZoneZoomOpen(true)}
-                              className="group relative block w-full overflow-hidden rounded-2xl border border-white/12 shadow-[0_12px_22px_rgba(37,17,58,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+                              className="group relative block aspect-[16/9] w-full overflow-hidden rounded-2xl border border-white/12 shadow-[0_12px_22px_rgba(37,17,58,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
                               aria-label="Ampliar mapa de la zona de envío"
                             >
-                              <img
+                              <OptimizedImageWithFallback
                                 src={fulfillmentConfig.delivery.image}
                                 alt="Mapa de la zona de envío"
-                                className="aspect-[16/9] w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+                                fill
+                                className="object-contain transition duration-200 group-hover:scale-[1.02]"
+                                sizes="(max-width: 1024px) calc(100vw - 2rem), 50vw"
+                                fallbackLabel="Mapa no disponible"
                               />
                               <span className="absolute bottom-2 right-2 rounded-full bg-[rgba(43,22,67,0.78)] px-3 py-1 text-xs font-semibold text-[var(--brand-cream)] shadow-[0_8px_16px_rgba(18,8,35,0.24)]">
                                 Click para ampliar

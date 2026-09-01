@@ -1,8 +1,8 @@
-/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import { useState } from "react";
 import { getCartProductDemand, type CartItem } from "../../view-models/useCartStore";
+import OptimizedImageWithFallback from "../OptimizedImageWithFallback";
 import type { CheckoutInvalidProduct } from "./CheckoutSteps";
 import { deliveryMethodLabel, formatMoney, fulfillmentFeeLabel, type DeliveryMethod } from "./checkoutUtils";
 
@@ -98,14 +98,15 @@ export default function OrderSummaryMobile({
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-2">
-                          <div className="h-10 w-10 overflow-hidden rounded-lg bg-black/20">
-                            {item.image ? (
-                              <img
-                                src={item.image.startsWith("/") ? `${basePath}${item.image}` : item.image}
-                                alt={item.name}
-                                className={`h-full w-full object-cover ${hasStockProblem ? "grayscale" : ""}`}
-                              />
-                            ) : null}
+                          <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-black/10">
+                            <OptimizedImageWithFallback
+                              src={item.image?.startsWith("/") ? `${basePath}${item.image}` : item.image}
+                              alt={item.name}
+                              fill
+                              className={`object-contain p-0.5 ${hasStockProblem ? "grayscale" : ""}`}
+                              sizes="64px"
+                              fallbackClassName="text-[var(--brand-violet-500)]/70"
+                            />
                           </div>
                           <div className="min-w-0">
                             <p className="truncate text-sm text-[var(--brand-violet-500)]">{item.name}</p>

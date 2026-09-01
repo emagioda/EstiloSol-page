@@ -424,12 +424,12 @@ export const useProductsStore = ({
   const [status, setStatus] = useState<ProductsStatus>(
     cachedProducts && cachedProducts.length > 0
       ? "success"
-      : initialProducts && initialProducts.length > 0
+      : initialCatalogComplete || (initialProducts && initialProducts.length > 0)
       ? "success"
       : "idle"
   );
   const [catalogComplete, setCatalogComplete] = useState(
-    cachedProductsComplete || (initialCatalogComplete && Boolean(initialProducts?.length))
+    cachedProductsComplete || initialCatalogComplete
   );
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);

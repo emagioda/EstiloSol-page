@@ -1,5 +1,4 @@
 "use client";
-/* eslint-disable @next/next/no-img-element */
 import "@/src/core/presentation/styles/tokens.css";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -11,6 +10,7 @@ import {
   useCart,
 } from "../../view-models/useCartStore";
 import { useProductsStore } from "../../view-models/useProductsStore";
+import OptimizedImageWithFallback from "../OptimizedImageWithFallback";
 
 const formatMoney = (value: number) =>
   new Intl.NumberFormat("es-AR", {
@@ -191,14 +191,14 @@ export default function CartDrawer({
 
             return (
               <div key={it.lineId} className="flex items-center gap-3 border-b border-[var(--brand-violet-900)] pb-3">
-                <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded bg-black">
-                  {it.image ? (
-                    <img
-                      src={it.image.startsWith("/") ? `${basePath}${it.image}` : it.image}
-                      alt={it.name}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : null}
+                <div className="relative h-16 w-16 flex-shrink-0 overflow-hidden rounded bg-white/10">
+                  <OptimizedImageWithFallback
+                    src={it.image?.startsWith("/") ? `${basePath}${it.image}` : it.image}
+                    alt={it.name}
+                    fill
+                    className="object-contain p-1"
+                    sizes="64px"
+                  />
                 </div>
                 <div className="flex-1 text-sm">
                   <div className="font-medium">{it.name}</div>

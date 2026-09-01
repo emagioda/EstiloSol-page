@@ -118,4 +118,13 @@ describe("CartDrawer line identity", () => {
     fireEvent.click(screen.getByText("Eliminar"));
     expect(screen.queryByText("Producto repetido")).not.toBeInTheDocument();
   });
+
+  it("AUD5-DRAWER-01 renders the exact cart-line image with responsive dimensions", async () => {
+    await renderDrawer([productLine({ image: "/variant-p1.webp" })]);
+    fireEvent.click(screen.getByText("Add P1"));
+
+    const image = screen.getByRole("img", { name: "Producto repetido" });
+    expect(image).toHaveAttribute("src", expect.stringContaining("variant-p1.webp"));
+    expect(image).toHaveAttribute("sizes", "64px");
+  });
 });

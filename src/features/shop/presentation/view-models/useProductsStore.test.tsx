@@ -158,6 +158,77 @@ describe("shop filter session state", () => {
     });
   });
 
+  it("AUD5-FILTER-01 combines category and specification filters before sorting", () => {
+    const catalog: Product[] = [
+      ...products,
+      {
+        id: "p4",
+        name: "Pulsera grande",
+        departament: "BIJOUTERIE",
+        category: "Pulsera",
+        price: 3000,
+        specifications: { Material: "Acero" },
+      },
+      {
+        id: "p5",
+        name: "Pulsera chica",
+        departament: "BIJOUTERIE",
+        category: "Pulsera",
+        price: 1500,
+        specifications: { Material: "Acero" },
+      },
+    ];
+    const store = renderHook(() =>
+      useProductsStore({
+        initialProducts: catalog,
+        initialCatalogComplete: true,
+        initialDepartament: "BIJOUTERIE",
+      }),
+    );
+
+    act(() => {
+      store.result.current.setCategory("Pulsera");
+      store.result.current.toggleSpecFilter("Material", "Acero");
+      store.result.current.setSortBy("price-desc");
+    });
+
+    expect(store.result.current.products.map((product) => product.id)).toEqual(["p4", "p5"]);
+  });
+
+  it("AUD5-FILTER-02 keeps active filters when changing price sort and supports zero results", () => {
+    const store = renderHook(() =>
+      useProductsStore({
+        initialProducts: products,
+        initialCatalogComplete: true,
+        initialDepartament: "BIJOUTERIE",
+      }),
+    );
+
+    act(() => {
+      store.result.current.setCategory("Aros");
+      store.result.current.setSortBy("price-asc");
+    });
+    expect(store.result.current.products.map((product) => product.id)).toEqual(["p2"]);
+
+    act(() => {
+      store.result.current.setSearchTerm("sin coincidencias");
+      store.result.current.setSortBy("price-desc");
+    });
+    expect(store.result.current.filters.category).toBe("Aros");
+    expect(store.result.current.filters.sortBy).toBe("price-desc");
+    expect(store.result.current.products).toEqual([]);
+  });
+
+  it("AUD5-STORE-04 exposes a successful empty initial catalog without entering loading", () => {
+    const store = renderHook(() =>
+      useProductsStore({ initialProducts: [], initialCatalogComplete: true }),
+    );
+
+    expect(store.result.current.status).toBe("success");
+    expect(store.result.current.catalogComplete).toBe(true);
+    expect(store.result.current.loading).toBe(false);
+  });
+
   it("keeps home catalog prefetch out of the persistent session cache", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

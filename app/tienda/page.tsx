@@ -1,4 +1,6 @@
+import { Suspense } from "react";
 import TiendaPage from "@/src/features/shop/presentation/pages/TiendaPage";
+import TiendaLoading from "./loading";
 import type { Departament } from "@/src/features/shop/domain/entities/Product";
 
 export const metadata = {
@@ -37,5 +39,9 @@ export default async function TiendaRoute({ searchParams }: TiendaRouteProps) {
   const params = searchParams ? await searchParams : undefined;
   const initialDepartament = normalizeRubroParam(params?.rubro);
 
-  return <TiendaPage initialDepartament={initialDepartament} />;
+  return (
+    <Suspense fallback={<TiendaLoading />}>
+      <TiendaPage initialDepartament={initialDepartament} />
+    </Suspense>
+  );
 }
