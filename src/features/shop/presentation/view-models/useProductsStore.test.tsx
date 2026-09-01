@@ -307,6 +307,12 @@ describe("shop filter session state", () => {
   });
 
   it("clears older products from simultaneous consumers for a complete empty snapshot", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
     primeProductsCatalogCache(cachedCatalogA, { complete: true });
 
     const stores = renderHook(() => ({
@@ -323,6 +329,11 @@ describe("shop filter session state", () => {
       expect(stores.result.current.cart.status).toBe("success");
       expect(stores.result.current.cart.catalogComplete).toBe(true);
     });
+
+    await act(async () => {
+      await expect(stores.result.current.cart.loadProducts()).resolves.toBe(true);
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("keeps cache recovery when the server snapshot is incomplete", () => {

@@ -549,8 +549,7 @@ export const useProductsStore = ({
         !forceRefresh &&
         !options.revalidate &&
         cachedProductsComplete &&
-        cachedProducts &&
-        cachedProducts.length > 0
+        cachedProducts
       ) {
         setProducts(cachedProducts);
         setCatalogComplete(true);
