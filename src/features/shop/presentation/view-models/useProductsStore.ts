@@ -146,7 +146,7 @@ const setMemoryCatalogCache = (
   products: Product[],
   { complete = true }: { complete?: boolean } = {},
 ) => {
-  if (!complete && cachedProductsComplete && cachedProducts && cachedProducts.length > 0) {
+  if (!complete && cachedProductsComplete && cachedProducts) {
     return;
   }
 
@@ -361,12 +361,12 @@ export const refreshProductsMemoryCacheFromSource = async (): Promise<boolean> =
 };
 
 export const prefetchProductsCatalogSession = async (): Promise<boolean> => {
-  if (cachedProducts && cachedProducts.length > 0) {
+  if (cachedProducts && (cachedProductsComplete || cachedProducts.length > 0)) {
     return true;
   }
 
   const sessionCatalog = readSessionCatalogCache();
-  if (sessionCatalog && sessionCatalog.products.length > 0) {
+  if (sessionCatalog && (sessionCatalog.complete || sessionCatalog.products.length > 0)) {
     updateMemoryCatalogCache(sessionCatalog.products, sessionCatalog.complete);
     return true;
   }

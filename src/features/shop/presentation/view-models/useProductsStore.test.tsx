@@ -366,6 +366,52 @@ describe("shop filter session state", () => {
     expect(laterRequestMarkup).not.toContain("server-b");
   });
 
+  it("keeps a complete empty catalog through the automatic home prefetch", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: "prefetch-product",
+            name: "Respuesta incompleta de precarga",
+            price: "1500",
+            departament: "PELUQUERIA",
+            images: "",
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    primeProductsCatalogCache(emptyServerCatalog, { complete: true });
+
+    await expect(prefetchProductsCatalogSession()).resolves.toBe(true);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    primeProductsCatalogCache(serverCatalogB, { complete: false });
+    const store = renderHook(() => useProductsStore());
+    expect(store.result.current.allProducts).toEqual([]);
+    expect(store.result.current.catalogComplete).toBe(true);
+  });
+
+  it("restores a complete empty session cache without a home prefetch request", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(serverCatalogB), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    window.sessionStorage.setItem(
+      "es:shop:catalog:session:v1",
+      JSON.stringify({ cachedAt: Date.now(), complete: true, products: [] }),
+    );
+
+    await expect(prefetchProductsCatalogSession()).resolves.toBe(true);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const store = renderHook(() => useProductsStore());
+    expect(store.result.current.allProducts).toEqual([]);
+    expect(store.result.current.catalogComplete).toBe(true);
+  });
+
   it("keeps home catalog prefetch out of the persistent session cache", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
