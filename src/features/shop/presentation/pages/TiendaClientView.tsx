@@ -155,7 +155,7 @@ export default function TiendaClientView({
   const availableCategories = categories;
   const selectedWorld = filters.departament ?? "PELUQUERIA";
   const shouldRefreshCatalog = searchParams.get("refresh") === "1";
-  const hasInitialCatalog = initialProducts.length > 0;
+  const hasInitialCatalog = initialCatalogComplete;
   const shouldShowInitialLoading = status === "idle" && products.length === 0;
   const shopLocationKey = useMemo(() => {
     const query = searchParams.toString();
@@ -338,9 +338,10 @@ export default function TiendaClientView({
 
     hasCheckedFirstVisitRef.current = true;
 
+    if (hasInitialCatalog) return;
+
     const hasFreshSessionCatalog = hasSessionCatalogCache();
     if (!hasFreshSessionCatalog) {
-      if (hasInitialCatalog) return;
       const hasPreviewCatalog = products.length > 0;
       void loadProducts(hasPreviewCatalog, {
         revalidate: !hasPreviewCatalog,

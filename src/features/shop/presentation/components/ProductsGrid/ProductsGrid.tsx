@@ -213,7 +213,8 @@ export default function ProductsGrid({
             key={p.id}
             product={p}
             onQuickView={onQuickView}
-            priority={index < 4}
+            priority={index === 0}
+            eager={index < 2}
           />
         ))}
       </div>

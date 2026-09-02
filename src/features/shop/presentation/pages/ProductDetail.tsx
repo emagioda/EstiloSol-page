@@ -1,12 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import ProductImageGalleryZoom from "@/src/features/shop/presentation/components/ProductImageGalleryZoom/ProductImageGalleryZoom";
 import ProductVariantSelector from "@/src/features/shop/presentation/components/ProductVariantSelector/ProductVariantSelector";
+import OptimizedImageWithFallback from "@/src/features/shop/presentation/components/OptimizedImageWithFallback";
 import Breadcrumbs from "@/src/features/shop/presentation/components/Breadcrumbs";
 import { showCartAddedToast } from "@/src/features/shop/presentation/lib/cartToast";
 import {
@@ -395,7 +395,7 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
             currentImageIndex={currentImageIndex}
             onImageIndexChange={setCurrentImageIndex}
             theme="pdp"
-            thumbnailsDesktopOnly
+            priority
           />
         </div>
 
@@ -557,22 +557,17 @@ export default function ProductDetail({ product, similarProducts = [] }: Props) 
                   <Link
                     key={similarProduct.id}
                     href={`/tienda/producto/${similarProduct.slug || similarProduct.id}`}
+                    prefetch={false}
                     className="group snap-start shrink-0 basis-[38%] overflow-hidden rounded-xl border border-[var(--brand-gold-300)]/22 bg-white/[0.12] shadow-lg shadow-black/20 transition-all duration-200 hover:-translate-y-1 hover:border-[var(--brand-gold-300)]/50 sm:basis-[30%] lg:basis-[22%]"
                   >
-                    <div className="relative aspect-[4/5] w-full">
-                      {Array.isArray(similarProduct.images) && similarProduct.images[0] ? (
-                        <Image
-                          src={similarProduct.images[0]}
-                          alt={similarProduct.name}
-                          fill
-                          className="object-cover transition-transform duration-300 group-hover:scale-105"
-                          sizes="(max-width:640px) 38vw, (max-width:1024px) 30vw, 22vw"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-xs uppercase text-[var(--brand-gold-300)]">
-                          Sin imagen
-                        </div>
-                      )}
+                    <div className="relative aspect-[3/4] w-full bg-white/[0.06]">
+                      <OptimizedImageWithFallback
+                        src={Array.isArray(similarProduct.images) ? similarProduct.images[0] : undefined}
+                        alt={similarProduct.name}
+                        fill
+                        className="object-contain p-1.5 transition-transform duration-300 group-hover:scale-[1.03]"
+                        sizes="(max-width:640px) 38vw, (max-width:1024px) 30vw, 22vw"
+                      />
                     </div>
                     <div className="flex flex-col gap-1.5 p-3">
                       {similarOldPrice && (

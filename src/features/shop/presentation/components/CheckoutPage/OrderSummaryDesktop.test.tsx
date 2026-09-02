@@ -3,6 +3,24 @@ import { describe, expect, it, vi } from "vitest";
 import OrderSummaryDesktop from "./OrderSummaryDesktop";
 
 describe("OrderSummaryDesktop", () => {
+  it("AUD5-CHECKOUT-01 renders the exact selected line image at summary size", () => {
+    render(
+      <OrderSummaryDesktop
+        items={[{ lineId: "line-image", productId: "variant-2", name: "Variante azul", image: "/blue.webp", unitPrice: 100, qty: 1 }]}
+        subtotal={100}
+        discountAmount={0}
+        shippingFee={0}
+        finalTotal={100}
+        hasDiscount={false}
+        deliveryMethod="pickup"
+      />,
+    );
+
+    const image = screen.getByRole("img", { name: "Variante azul" });
+    expect(image).toHaveAttribute("src", expect.stringContaining("blue.webp"));
+    expect(image).toHaveAttribute("sizes", "64px");
+  });
+
   it("PR3-CHECKOUT-01 shows one normal product line with its consolidated qty", () => {
     render(
       <OrderSummaryDesktop

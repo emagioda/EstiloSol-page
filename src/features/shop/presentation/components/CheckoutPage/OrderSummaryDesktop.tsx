@@ -1,7 +1,7 @@
-/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import { getCartProductDemand, type CartItem } from "../../view-models/useCartStore";
+import OptimizedImageWithFallback from "../OptimizedImageWithFallback";
 import type { CheckoutInvalidProduct } from "./CheckoutSteps";
 import { deliveryMethodLabel, formatMoney, fulfillmentFeeLabel, type DeliveryMethod } from "./checkoutUtils";
 
@@ -66,14 +66,15 @@ export default function OrderSummaryDesktop({
                   : "border-[rgba(122,89,177,0.2)] bg-[rgba(255,255,255,0.46)]"
               }`}
             >
-              <div className="h-16 w-16 overflow-hidden rounded-xl bg-black/20">
-                {item.image ? (
-                  <img
-                    src={item.image.startsWith("/") ? `${basePath}${item.image}` : item.image}
-                    alt={item.name}
-                    className={`h-full w-full object-cover ${hasStockProblem ? "grayscale" : ""}`}
-                  />
-                ) : null}
+              <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-black/10">
+                <OptimizedImageWithFallback
+                  src={item.image?.startsWith("/") ? `${basePath}${item.image}` : item.image}
+                  alt={item.name}
+                  fill
+                  className={`object-contain p-1 ${hasStockProblem ? "grayscale" : ""}`}
+                  sizes="64px"
+                  fallbackClassName="text-[var(--brand-violet-500)]/70"
+                />
               </div>
               <div className="flex-1">
                 <p className="line-clamp-2 text-sm text-[var(--brand-violet-500)]">{item.name}</p>

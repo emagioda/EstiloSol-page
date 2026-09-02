@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import {
@@ -6,6 +7,7 @@ import {
   clearShopFiltersSessionState,
   hasSessionCatalogCache,
   prefetchProductsCatalogSession,
+  primeProductsCatalogCache,
   useProductsStore,
 } from "@/src/features/shop/presentation/view-models/useProductsStore";
 
@@ -33,6 +35,27 @@ const products: Product[] = [
     price: 1999,
   },
 ];
+
+const cachedCatalogA: Product[] = [products[0]];
+const emptyServerCatalog: Product[] = [];
+const serverCatalogB: Product[] = [
+  {
+    ...products[0],
+    id: "server-b",
+    name: "Snapshot del servidor",
+  },
+];
+
+const CatalogRenderProbe = ({
+  initialProducts,
+  initialCatalogComplete,
+}: {
+  initialProducts: Product[];
+  initialCatalogComplete: boolean;
+}) => {
+  const store = useProductsStore({ initialProducts, initialCatalogComplete });
+  return <span>{store.allProducts.map((product) => product.id).join(",") || "empty"}</span>;
+};
 
 describe("shop filter session state", () => {
   beforeEach(() => {
@@ -156,6 +179,237 @@ describe("shop filter session state", () => {
       category: null,
       searchTerm: "",
     });
+  });
+
+  it("AUD5-FILTER-01 combines category and specification filters before sorting", () => {
+    const catalog: Product[] = [
+      ...products,
+      {
+        id: "p4",
+        name: "Pulsera grande",
+        departament: "BIJOUTERIE",
+        category: "Pulsera",
+        price: 3000,
+        specifications: { Material: "Acero" },
+      },
+      {
+        id: "p5",
+        name: "Pulsera chica",
+        departament: "BIJOUTERIE",
+        category: "Pulsera",
+        price: 1500,
+        specifications: { Material: "Acero" },
+      },
+    ];
+    const store = renderHook(() =>
+      useProductsStore({
+        initialProducts: catalog,
+        initialCatalogComplete: true,
+        initialDepartament: "BIJOUTERIE",
+      }),
+    );
+
+    act(() => {
+      store.result.current.setCategory("Pulsera");
+      store.result.current.toggleSpecFilter("Material", "Acero");
+      store.result.current.setSortBy("price-desc");
+    });
+
+    expect(store.result.current.products.map((product) => product.id)).toEqual(["p4", "p5"]);
+  });
+
+  it("AUD5-FILTER-02 keeps active filters when changing price sort and supports zero results", () => {
+    const store = renderHook(() =>
+      useProductsStore({
+        initialProducts: products,
+        initialCatalogComplete: true,
+        initialDepartament: "BIJOUTERIE",
+      }),
+    );
+
+    act(() => {
+      store.result.current.setCategory("Aros");
+      store.result.current.setSortBy("price-asc");
+    });
+    expect(store.result.current.products.map((product) => product.id)).toEqual(["p2"]);
+
+    act(() => {
+      store.result.current.setSearchTerm("sin coincidencias");
+      store.result.current.setSortBy("price-desc");
+    });
+    expect(store.result.current.filters.category).toBe("Aros");
+    expect(store.result.current.filters.sortBy).toBe("price-desc");
+    expect(store.result.current.products).toEqual([]);
+  });
+
+  it("AUD5-STORE-04 exposes a successful empty initial catalog without entering loading", () => {
+    const store = renderHook(() =>
+      useProductsStore({ initialProducts: [], initialCatalogComplete: true }),
+    );
+
+    expect(store.result.current.status).toBe("success");
+    expect(store.result.current.catalogComplete).toBe(true);
+    expect(store.result.current.loading).toBe(false);
+  });
+
+  it("prefers a complete server snapshot over an existing catalog cache and syncs the cache", () => {
+    primeProductsCatalogCache(cachedCatalogA, { complete: true });
+
+    const store = renderHook(() =>
+      useProductsStore({
+        initialProducts: serverCatalogB,
+        initialCatalogComplete: true,
+      }),
+    );
+
+    expect(store.result.current.allProducts.map((product) => product.id)).toEqual(["server-b"]);
+
+    store.unmount();
+    const restored = renderHook(() => useProductsStore());
+    expect(restored.result.current.allProducts.map((product) => product.id)).toEqual(["server-b"]);
+  });
+
+  it("treats a complete empty server snapshot as success and removes older cached products", () => {
+    primeProductsCatalogCache(cachedCatalogA, { complete: true });
+
+    const store = renderHook(() =>
+      useProductsStore({ initialProducts: [], initialCatalogComplete: true }),
+    );
+
+    expect(store.result.current.allProducts).toEqual([]);
+    expect(store.result.current.status).toBe("success");
+    expect(store.result.current.catalogComplete).toBe(true);
+
+    store.unmount();
+    const restored = renderHook(() => useProductsStore());
+    expect(restored.result.current.allProducts).toEqual([]);
+  });
+
+  it("reconciles simultaneous consumers with the complete server snapshot", async () => {
+    primeProductsCatalogCache(cachedCatalogA, { complete: true });
+
+    const stores = renderHook(() => ({
+      shop: useProductsStore({
+        initialProducts: serverCatalogB,
+        initialCatalogComplete: true,
+      }),
+      cart: useProductsStore(),
+    }));
+
+    expect(stores.result.current.shop.allProducts.map((product) => product.id)).toEqual([
+      "server-b",
+    ]);
+    await waitFor(() => {
+      expect(stores.result.current.cart.allProducts.map((product) => product.id)).toEqual([
+        "server-b",
+      ]);
+    });
+  });
+
+  it("clears older products from simultaneous consumers for a complete empty snapshot", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    primeProductsCatalogCache(cachedCatalogA, { complete: true });
+
+    const stores = renderHook(() => ({
+      shop: useProductsStore({
+        initialProducts: emptyServerCatalog,
+        initialCatalogComplete: true,
+      }),
+      cart: useProductsStore(),
+    }));
+
+    expect(stores.result.current.shop.allProducts).toEqual([]);
+    await waitFor(() => {
+      expect(stores.result.current.cart.allProducts).toEqual([]);
+      expect(stores.result.current.cart.status).toBe("success");
+      expect(stores.result.current.cart.catalogComplete).toBe(true);
+    });
+
+    await act(async () => {
+      await expect(stores.result.current.cart.loadProducts()).resolves.toBe(true);
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps cache recovery when the server snapshot is incomplete", () => {
+    primeProductsCatalogCache(cachedCatalogA, { complete: true });
+
+    const store = renderHook(() =>
+      useProductsStore({
+        initialProducts: serverCatalogB,
+        initialCatalogComplete: false,
+      }),
+    );
+
+    expect(store.result.current.allProducts.map((product) => product.id)).toEqual(["p1"]);
+    expect(store.result.current.status).toBe("success");
+  });
+
+  it("does not mutate the module catalog cache while rendering", () => {
+    const serverMarkup = renderToString(
+      <CatalogRenderProbe
+        initialProducts={serverCatalogB}
+        initialCatalogComplete={true}
+      />,
+    );
+    const laterRequestMarkup = renderToString(
+      <CatalogRenderProbe initialProducts={[]} initialCatalogComplete={false} />,
+    );
+
+    expect(serverMarkup).toContain("server-b");
+    expect(laterRequestMarkup).toContain("empty");
+    expect(laterRequestMarkup).not.toContain("server-b");
+  });
+
+  it("keeps a complete empty catalog through the automatic home prefetch", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: "prefetch-product",
+            name: "Respuesta incompleta de precarga",
+            price: "1500",
+            departament: "PELUQUERIA",
+            images: "",
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    primeProductsCatalogCache(emptyServerCatalog, { complete: true });
+
+    await expect(prefetchProductsCatalogSession()).resolves.toBe(true);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    primeProductsCatalogCache(serverCatalogB, { complete: false });
+    const store = renderHook(() => useProductsStore());
+    expect(store.result.current.allProducts).toEqual([]);
+    expect(store.result.current.catalogComplete).toBe(true);
+  });
+
+  it("restores a complete empty session cache without a home prefetch request", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(serverCatalogB), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    window.sessionStorage.setItem(
+      "es:shop:catalog:session:v1",
+      JSON.stringify({ cachedAt: Date.now(), complete: true, products: [] }),
+    );
+
+    await expect(prefetchProductsCatalogSession()).resolves.toBe(true);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const store = renderHook(() => useProductsStore());
+    expect(store.result.current.allProducts).toEqual([]);
+    expect(store.result.current.catalogComplete).toBe(true);
   });
 
   it("keeps home catalog prefetch out of the persistent session cache", async () => {

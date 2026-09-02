@@ -1,9 +1,8 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
-
 import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import OptimizedImageWithFallback from "../OptimizedImageWithFallback";
 
 const ProductLightbox = dynamic(() => import("./ProductLightbox"), { ssr: false });
 const PRODUCT_LIGHTBOX_HISTORY_KEY = "__estiloSolProductLightboxOpen";
@@ -65,10 +64,10 @@ type Props = {
   currentImageIndex: number;
   onImageIndexChange: (index: number) => void;
   theme?: Theme;
-  thumbnailsDesktopOnly?: boolean;
   // when true, force the gallery layout to always stack vertically
   // (thumbnails below the main image) regardless of viewport size.
   alwaysColumn?: boolean;
+  priority?: boolean;
 };
 
 export default function ProductImageGalleryZoom({
@@ -77,8 +76,8 @@ export default function ProductImageGalleryZoom({
   currentImageIndex,
   onImageIndexChange,
   theme = "pdp",
-  thumbnailsDesktopOnly = false,
   alwaysColumn = false,
+  priority = false,
 }: Props) {
   const SWIPE_THRESHOLD_PX = 40;
   const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
@@ -180,18 +179,14 @@ export default function ProductImageGalleryZoom({
     theme === "quickview" ? "text-[#777]" : "text-[var(--brand-gold-300)]";
 
   const thumbnailWrapperClassName = alwaysColumn
-    ? thumbnailsDesktopOnly
-      ? "mt-4 hidden flex-row gap-2 overflow-x-auto sm:flex"
-      : "mt-4 flex flex-row gap-2 overflow-x-auto"
-    : thumbnailsDesktopOnly
-    ? "hidden gap-2 md:order-first md:mt-0 md:flex md:w-16 md:flex-col"
-    : "mt-4 grid grid-cols-5 gap-2 md:mt-0 md:w-16 md:flex-col md:flex md:order-first";
+    ? "mt-4 flex flex-row gap-2 overflow-x-auto pb-1"
+    : "mt-4 flex gap-2 overflow-x-auto pb-1 md:order-first md:mt-0 md:w-16 md:flex-col md:overflow-y-auto md:pb-0";
 
   // Use the same desktop gallery layout even for a single image, so the
   // thumbnail rail never jumps above the main product photo on PDP pages.
   const galleryLayoutClassName = alwaysColumn
     ? "flex flex-col"
-    : thumbnailsDesktopOnly || images.length > 0
+    : images.length > 0
     ? "flex flex-col md:flex-row md:gap-4 md:items-start"
     : "flex flex-col";
 
@@ -292,34 +287,23 @@ export default function ProductImageGalleryZoom({
           }
         }}
       >
-        {images.length > 0 ? (
-          <div
-            className="absolute inset-0 flex h-full w-full transition-transform duration-500 ease-out"
-            style={{
-              transform: `translate3d(-${safeIndex * 100}%, 0, 0)`,
-            }}
-          >
-            {images.map((image, index) => (
-              <div key={`${image}-${index}`} className="relative h-full w-full shrink-0 overflow-hidden">
-                <img
-                  src={image}
-                  alt={productName}
-                  className="h-full w-full object-cover transition-transform duration-500 ease-out md:group-hover:scale-110"
-                  style={{
-                    transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%`,
-                  }}
-                  loading={index === safeIndex ? "eager" : "lazy"}
-                />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div
-            className={`flex h-full w-full items-center justify-center text-xs uppercase ${placeholderClassName}`}
-          >
-            Sin imagen
-          </div>
-        )}
+        <OptimizedImageWithFallback
+          key={images[safeIndex] ?? "missing-gallery-image"}
+          src={images[safeIndex]}
+          alt={`${productName}, imagen ${safeIndex + 1} de ${Math.max(images.length, 1)}`}
+          fill
+          className="object-contain p-2 transition-transform duration-500 ease-out md:group-hover:scale-105"
+          style={{ transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%` }}
+          sizes={
+            alwaysColumn
+              ? "(max-width: 640px) calc(100vw - 3.5rem), 50vw"
+              : "(max-width: 1024px) calc(100vw - 2.5rem), 44vw"
+          }
+          priority={priority}
+          loading={priority ? "eager" : "lazy"}
+          fetchPriority={priority ? "high" : "auto"}
+          fallbackClassName={placeholderClassName}
+        />
 
         {hasMultipleImages && (
           <>
@@ -380,8 +364,8 @@ export default function ProductImageGalleryZoom({
               onClick={() => changeImageIndex(index)}
               className="relative aspect-square shrink-0 cursor-pointer overflow-hidden rounded-md transition-all hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)] md:border-2"
               style={{
-                width: thumbnailsDesktopOnly || alwaysColumn ? "3.5rem" : "auto",
-                height: thumbnailsDesktopOnly || alwaysColumn ? "3.5rem" : "auto",
+                width: "3.5rem",
+                height: "3.5rem",
                 border:
                   index === safeIndex
                     ? theme === "quickview"
@@ -391,12 +375,15 @@ export default function ProductImageGalleryZoom({
                 opacity: index === safeIndex ? 1 : 0.6,
               }}
               aria-label={`Ver imagen ${index + 1} de ${images.length}`}
+              aria-current={index === safeIndex ? "true" : undefined}
             >
-              <img
+              <OptimizedImageWithFallback
                 src={image}
                 alt={`${productName} miniatura ${index + 1}`}
-                className="absolute inset-0 h-full w-full object-cover"
-                loading="lazy"
+                fill
+                className="object-contain p-0.5"
+                sizes="56px"
+                fallbackClassName={placeholderClassName}
               />
             </button>
           ))}

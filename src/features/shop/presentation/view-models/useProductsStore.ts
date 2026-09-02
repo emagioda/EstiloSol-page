@@ -146,7 +146,7 @@ const setMemoryCatalogCache = (
   products: Product[],
   { complete = true }: { complete?: boolean } = {},
 ) => {
-  if (!complete && cachedProductsComplete && cachedProducts && cachedProducts.length > 0) {
+  if (!complete && cachedProductsComplete && cachedProducts) {
     return;
   }
 
@@ -285,7 +285,7 @@ export const primeProductsCatalogCache = (
   products: Product[],
   { complete = false }: { complete?: boolean } = {},
 ) => {
-  if (products.length === 0) return;
+  if (products.length === 0 && !complete) return;
   setMemoryCatalogCache(products, { complete });
   if (complete) {
     writeSessionCachedProducts(products);
@@ -361,12 +361,12 @@ export const refreshProductsMemoryCacheFromSource = async (): Promise<boolean> =
 };
 
 export const prefetchProductsCatalogSession = async (): Promise<boolean> => {
-  if (cachedProducts && cachedProducts.length > 0) {
+  if (cachedProducts && (cachedProductsComplete || cachedProducts.length > 0)) {
     return true;
   }
 
   const sessionCatalog = readSessionCatalogCache();
-  if (sessionCatalog && sessionCatalog.products.length > 0) {
+  if (sessionCatalog && (sessionCatalog.complete || sessionCatalog.products.length > 0)) {
     updateMemoryCatalogCache(sessionCatalog.products, sessionCatalog.complete);
     return true;
   }
@@ -406,15 +406,15 @@ export const useProductsStore = ({
   initialDepartamentOverridesPersistedFilters?: boolean;
 } = {}) => {
   const [products, setProducts] = useState<Product[]>(() => {
+    if (initialCatalogComplete) {
+      return initialProducts ?? [];
+    }
+
     if (cachedProducts && cachedProducts.length > 0) {
-      if (!cachedProductsSignature) {
-        cachedProductsSignature = productSignature(cachedProducts);
-      }
       return cachedProducts;
     }
 
     if (initialProducts && initialProducts.length > 0) {
-      setMemoryCatalogCache(initialProducts, { complete: initialCatalogComplete });
       return initialProducts;
     }
 
@@ -422,14 +422,16 @@ export const useProductsStore = ({
   });
 
   const [status, setStatus] = useState<ProductsStatus>(
-    cachedProducts && cachedProducts.length > 0
+    initialCatalogComplete
+      ? "success"
+      : cachedProducts && cachedProducts.length > 0
       ? "success"
       : initialProducts && initialProducts.length > 0
       ? "success"
       : "idle"
   );
   const [catalogComplete, setCatalogComplete] = useState(
-    cachedProductsComplete || (initialCatalogComplete && Boolean(initialProducts?.length))
+    cachedProductsComplete || initialCatalogComplete
   );
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -439,8 +441,19 @@ export const useProductsStore = ({
   const skipNextFiltersPersistRef = useRef(persistFilters);
 
   useEffect(() => {
-    if (initialProducts && initialProducts.length > 0) {
-      primeProductsCatalogCache(initialProducts, { complete: initialCatalogComplete });
+    const serverProducts = initialProducts ?? [];
+
+    if (initialCatalogComplete) {
+      primeProductsCatalogCache(serverProducts, { complete: true });
+      setProducts(serverProducts);
+      setCatalogComplete(true);
+      setStatus("success");
+      setErrorMessage(null);
+      return;
+    }
+
+    if (serverProducts.length > 0) {
+      primeProductsCatalogCache(serverProducts, { complete: false });
     }
   }, [initialCatalogComplete, initialProducts]);
 
@@ -481,10 +494,10 @@ export const useProductsStore = ({
       const customEvent = event as CustomEvent<{ products?: Product[]; complete?: boolean }>;
       const eventProducts = customEvent.detail?.products;
       const sourceProducts = Array.isArray(eventProducts) ? eventProducts : cachedProducts;
-
-      if (!sourceProducts || sourceProducts.length === 0) return;
-
       const complete = customEvent.detail?.complete ?? cachedProductsComplete;
+
+      if (!sourceProducts || (sourceProducts.length === 0 && !complete)) return;
+
       setMemoryCatalogCache(sourceProducts, { complete });
       setProducts([...sourceProducts]);
       setCatalogComplete(complete);
@@ -499,24 +512,33 @@ export const useProductsStore = ({
   }, []);
 
   useEffect(() => {
-    const sessionCatalog = readSessionCatalogCache({ allowStale: true });
-    const sessionCachedProducts = sessionCatalog?.products;
-    if (!sessionCachedProducts || sessionCachedProducts.length === 0) return;
-
-    const sessionSignature = productSignature(sessionCachedProducts);
-    if (sessionSignature === cachedProductsSignature) return;
+    if (initialCatalogComplete) return;
 
     const hydrateTimer = window.setTimeout(() => {
-      const complete = Boolean(sessionCatalog?.complete);
+      const sessionCatalog = readSessionCatalogCache({ allowStale: true });
+      const sessionCachedProducts = sessionCatalog?.products;
+      if (
+        !sessionCachedProducts ||
+        (sessionCachedProducts.length === 0 && !sessionCatalog?.complete)
+      ) {
+        return;
+      }
+
+      const complete = Boolean(sessionCatalog.complete);
+      const sessionSignature = productSignature(sessionCachedProducts);
       setMemoryCatalogCache(sessionCachedProducts, { complete });
-      setProducts([...sessionCachedProducts]);
+      setProducts((currentProducts) =>
+        productSignature(currentProducts) === sessionSignature
+          ? currentProducts
+          : [...sessionCachedProducts],
+      );
       setCatalogComplete(complete);
       setStatus("success");
       setErrorMessage(null);
     }, 0);
 
     return () => window.clearTimeout(hydrateTimer);
-  }, []);
+  }, [initialCatalogComplete]);
 
   const loadProducts = useCallback(
     async (
@@ -527,8 +549,7 @@ export const useProductsStore = ({
         !forceRefresh &&
         !options.revalidate &&
         cachedProductsComplete &&
-        cachedProducts &&
-        cachedProducts.length > 0
+        cachedProducts
       ) {
         setProducts(cachedProducts);
         setCatalogComplete(true);

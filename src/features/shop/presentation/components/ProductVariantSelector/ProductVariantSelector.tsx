@@ -1,9 +1,9 @@
 "use client";
 
-import Image from "next/image";
 import type { Product } from "@/src/features/shop/domain/entities/Product";
 import { getProductVariantDisplayLabel } from "@/src/features/shop/domain/productVariants";
 import { isProductPurchasable } from "@/src/features/shop/infrastructure/data/productAdapter";
+import OptimizedImageWithFallback from "../OptimizedImageWithFallback";
 
 type VariantSelectorTheme = "pdp" | "quickview";
 
@@ -123,11 +123,11 @@ export default function ProductVariantSelector({
                 )}
               >
                 {previewImage ? (
-                  <Image
+                  <OptimizedImageWithFallback
                     src={previewImage}
-                    alt=""
+                    alt={`Vista previa de ${accessibleLabel}`}
                     fill
-                    className="object-cover transition duration-300 group-hover:scale-105"
+                    className="object-contain p-1 transition duration-300 group-hover:scale-105"
                     sizes="(min-width: 640px) 84px, 72px"
                   />
                 ) : (
