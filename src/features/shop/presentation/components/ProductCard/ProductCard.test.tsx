@@ -36,13 +36,16 @@ describe("ProductCard image projection", () => {
 
     const image = screen.getByRole("img", { name: "Producto principal" });
     expect(image.parentElement).toHaveClass("aspect-[3/4]");
-    expect(image).toHaveClass("object-contain");
+    expect(image).toHaveClass("object-cover");
+    expect(image).not.toHaveClass("p-2");
     expect(screen.getAllByRole("img")).toHaveLength(1);
   });
 
   it("AUD5-CARD-02 replaces a broken image without collapsing the card", () => {
     render(<ProductCard product={product} />);
 
+    fireEvent.error(screen.getByRole("img", { name: "Producto principal" }));
+    expect(screen.getByRole("img", { name: "Producto principal" })).toBeInTheDocument();
     fireEvent.error(screen.getByRole("img", { name: "Producto principal" }));
     expect(
       screen.getByRole("img", { name: "Producto principal: imagen no disponible" }),

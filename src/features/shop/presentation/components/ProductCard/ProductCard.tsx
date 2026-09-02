@@ -122,7 +122,7 @@ function ProductCard({
           src={representativeImage}
           alt={product.name}
           fill
-          className="object-contain p-2 transition-transform duration-300 group-hover:scale-[1.03]"
+          className="object-cover transition-transform duration-300 group-hover:scale-[1.03]"
           sizes="(max-width:640px) 50vw, (max-width:1024px) 33vw, 25vw"
           priority={priority}
           loading={priority || eager ? "eager" : "lazy"}
