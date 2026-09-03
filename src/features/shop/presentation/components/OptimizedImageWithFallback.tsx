@@ -10,6 +10,11 @@ type OptimizedImageWithFallbackProps = Omit<ImageProps, "alt" | "src" | "onError
   fallbackClassName?: string;
 };
 
+type FailedAttempt = {
+  src: string;
+  stage: "direct" | "failed";
+};
+
 export default function OptimizedImageWithFallback({
   src,
   alt,
@@ -17,9 +22,12 @@ export default function OptimizedImageWithFallback({
   fallbackClassName = "text-[var(--brand-gold-300)]",
   ...imageProps
 }: OptimizedImageWithFallbackProps) {
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const [failedAttempt, setFailedAttempt] = useState<FailedAttempt | null>(null);
   const normalizedSrc = typeof src === "string" ? src.trim() : "";
-  const shouldRenderImage = normalizedSrc.length > 0 && failedSrc !== normalizedSrc;
+  const failureStage =
+    failedAttempt?.src === normalizedSrc ? failedAttempt.stage : "optimized";
+  const shouldRenderImage = normalizedSrc.length > 0 && failureStage !== "failed";
+  const shouldLoadDirectly = imageProps.unoptimized === true || failureStage === "direct";
 
   if (!shouldRenderImage) {
     return (
@@ -35,10 +43,23 @@ export default function OptimizedImageWithFallback({
 
   return (
     <Image
+      key={`${normalizedSrc}-${failureStage}`}
       {...imageProps}
       src={normalizedSrc}
       alt={alt}
-      onError={() => setFailedSrc(normalizedSrc)}
+      unoptimized={shouldLoadDirectly}
+      onError={() => {
+        setFailedAttempt((currentAttempt) => {
+          const currentStage =
+            currentAttempt?.src === normalizedSrc ? currentAttempt.stage : "optimized";
+
+          if (imageProps.unoptimized === true || currentStage === "direct") {
+            return { src: normalizedSrc, stage: "failed" };
+          }
+
+          return { src: normalizedSrc, stage: "direct" };
+        });
+      }}
     />
   );
 }

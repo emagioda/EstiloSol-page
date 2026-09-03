@@ -16,6 +16,8 @@ describe("ProductImageGalleryZoom", () => {
 
     const mainImage = screen.getByRole("img", { name: "Producto, imagen 2 de 3" });
     expect(mainImage).toHaveAttribute("sizes", expect.stringContaining("44vw"));
+    expect(mainImage).toHaveClass("object-cover");
+    expect(mainImage).not.toHaveClass("p-2");
     expect(screen.getAllByRole("img")).toHaveLength(4);
     expect(screen.getByRole("button", { name: "Ver imagen 2 de 3" })).toHaveAttribute(
       "aria-current",
@@ -39,6 +41,26 @@ describe("ProductImageGalleryZoom", () => {
     expect(onImageIndexChange).toHaveBeenCalledWith(1);
 
     fireEvent.error(screen.getByRole("img", { name: "Producto, imagen 1 de 2" }));
+    expect(screen.getByRole("img", { name: "Producto, imagen 1 de 2" })).toBeInTheDocument();
+    fireEvent.error(screen.getByRole("img", { name: "Producto, imagen 1 de 2" }));
     expect(screen.getByRole("img", { name: "Producto, imagen 1 de 2: imagen no disponible" })).toBeInTheDocument();
+  });
+
+  it("HOTFIX-GALLERY-03 keeps the Quick View main image full-bleed", () => {
+    render(
+      <ProductImageGalleryZoom
+        images={["/quick-view.webp"]}
+        productName="Vista rapida"
+        currentImageIndex={0}
+        onImageIndexChange={vi.fn()}
+        theme="quickview"
+        alwaysColumn
+      />,
+    );
+
+    const mainImage = screen.getByRole("img", { name: "Vista rapida, imagen 1 de 1" });
+    expect(mainImage.parentElement).toHaveClass("aspect-[3/4]");
+    expect(mainImage).toHaveClass("object-cover");
+    expect(mainImage).not.toHaveClass("p-2");
   });
 });
