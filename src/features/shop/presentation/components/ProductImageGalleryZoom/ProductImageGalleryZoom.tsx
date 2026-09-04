@@ -58,6 +58,18 @@ const isProductLightboxHistoryState = () => {
 
 type Theme = "quickview" | "pdp";
 
+type CarouselDirection = "next" | "previous";
+
+type CarouselTransition = {
+  id: number;
+  fromIndex: number;
+  toIndex: number;
+  direction: CarouselDirection;
+  phase: "preparing" | "running";
+};
+
+const CAROUSEL_TRANSITION_MS = 280;
+
 type Props = {
   images: string[];
   productName: string;
@@ -80,9 +92,26 @@ export default function ProductImageGalleryZoom({
   priority = false,
 }: Props) {
   const SWIPE_THRESHOLD_PX = 40;
+  const hasMultipleImages = images.length > 1;
+  const safeIndex = images.length
+    ? Math.min(Math.max(currentImageIndex, 0), images.length - 1)
+    : 0;
   const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
+  const [displayedImageIndex, setDisplayedImageIndex] = useState(safeIndex);
+  const [carouselTransition, setCarouselTransition] =
+    useState<CarouselTransition | null>(null);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      : false,
+  );
   const lightboxHistoryEntryRef = useRef(false);
+  const displayedImageIndexRef = useRef(safeIndex);
+  const carouselTransitionRef = useRef<CarouselTransition | null>(null);
+  const transitionIdRef = useRef(0);
+  const animationFrameRef = useRef<number | null>(null);
+  const transitionTimeoutRef = useRef<number | null>(null);
   const pointerStartRef = useRef<{
     pointerId: number;
     x: number;
@@ -94,12 +123,126 @@ export default function ProductImageGalleryZoom({
   // that a user can swipe to a new picture and then tap once (even very
   // quickly) to open the zoom view. the browser rarely delivers a click
   // event for a full horizontal drag, so accidental openings aren’t an issue.
-
-  const hasMultipleImages = images.length > 1;
-  const safeIndex = images.length
-    ? Math.min(Math.max(currentImageIndex, 0), images.length - 1)
-    : 0;
   const slides = useMemo(() => images.map((src) => ({ src })), [images]);
+
+  const clearTransitionScheduling = useCallback(() => {
+    if (animationFrameRef.current !== null) {
+      window.cancelAnimationFrame?.(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    if (transitionTimeoutRef.current !== null) {
+      window.clearTimeout(transitionTimeoutRef.current);
+      transitionTimeoutRef.current = null;
+    }
+  }, []);
+
+  const completeCarouselTransition = useCallback(
+    (transitionId: number) => {
+      const currentTransition = carouselTransitionRef.current;
+      if (!currentTransition || currentTransition.id !== transitionId) return;
+
+      clearTransitionScheduling();
+      displayedImageIndexRef.current = currentTransition.toIndex;
+      carouselTransitionRef.current = null;
+      setDisplayedImageIndex(currentTransition.toIndex);
+      setCarouselTransition(null);
+    },
+    [clearTransitionScheduling],
+  );
+
+  const settleOnImageIndex = useCallback(
+    (nextIndex: number) => {
+      clearTransitionScheduling();
+      displayedImageIndexRef.current = nextIndex;
+      carouselTransitionRef.current = null;
+      setDisplayedImageIndex(nextIndex);
+      setCarouselTransition(null);
+    },
+    [clearTransitionScheduling],
+  );
+
+  const startCarouselTransition = useCallback(
+    (fromIndex: number, toIndex: number, direction: CarouselDirection) => {
+      clearTransitionScheduling();
+
+      const nextTransition: CarouselTransition = {
+        id: transitionIdRef.current + 1,
+        fromIndex,
+        toIndex,
+        direction,
+        phase: "preparing",
+      };
+      transitionIdRef.current = nextTransition.id;
+      carouselTransitionRef.current = nextTransition;
+      setCarouselTransition(nextTransition);
+
+      animationFrameRef.current = window.requestAnimationFrame(() => {
+        animationFrameRef.current = null;
+        const currentTransition = carouselTransitionRef.current;
+        if (!currentTransition || currentTransition.id !== nextTransition.id) return;
+
+        const runningTransition = {
+          ...currentTransition,
+          phase: "running" as const,
+        };
+        carouselTransitionRef.current = runningTransition;
+        setCarouselTransition(runningTransition);
+        transitionTimeoutRef.current = window.setTimeout(
+          () => completeCarouselTransition(nextTransition.id),
+          CAROUSEL_TRANSITION_MS + 100,
+        );
+      });
+    },
+    [clearTransitionScheduling, completeCarouselTransition],
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+
+    const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updateReducedMotionPreference = () => {
+      setPrefersReducedMotion(reducedMotionQuery.matches);
+    };
+
+    updateReducedMotionPreference();
+    reducedMotionQuery.addEventListener?.("change", updateReducedMotionPreference);
+    return () => {
+      reducedMotionQuery.removeEventListener?.("change", updateReducedMotionPreference);
+    };
+  }, []);
+
+  useEffect(() => {
+    const currentTransition = carouselTransitionRef.current;
+    const currentTargetIndex =
+      currentTransition?.toIndex ?? displayedImageIndexRef.current;
+
+    if (!hasMultipleImages || prefersReducedMotion) {
+      if (!currentTransition && safeIndex === displayedImageIndexRef.current) return;
+
+      const frameId = window.requestAnimationFrame(() => settleOnImageIndex(safeIndex));
+      return () => window.cancelAnimationFrame?.(frameId);
+    }
+
+    if (safeIndex === currentTargetIndex) return;
+
+    const frameId = window.requestAnimationFrame(() =>
+      startCarouselTransition(
+        currentTargetIndex,
+        safeIndex,
+        safeIndex > currentTargetIndex ? "next" : "previous",
+      ),
+    );
+    return () => window.cancelAnimationFrame?.(frameId);
+  }, [
+    hasMultipleImages,
+    prefersReducedMotion,
+    safeIndex,
+    settleOnImageIndex,
+    startCarouselTransition,
+  ]);
+
+  useEffect(() => clearTransitionScheduling, [clearTransitionScheduling]);
 
   const openLightbox = useCallback(() => {
     if (!images.length) return;
@@ -145,30 +288,55 @@ export default function ProductImageGalleryZoom({
     };
   }, []);
 
-  const changeImageIndex = (nextIndex: number) => {
+  const changeImageIndex = (
+    nextIndex: number,
+    requestedDirection?: CarouselDirection,
+  ) => {
     if (!images.length) {
       onImageIndexChange(nextIndex);
       return;
     }
 
-    if (nextIndex === safeIndex) {
-      onImageIndexChange(nextIndex);
+    const normalizedNextIndex = Math.min(Math.max(nextIndex, 0), images.length - 1);
+    const currentTargetIndex =
+      carouselTransitionRef.current?.toIndex ?? displayedImageIndexRef.current;
+
+    if (normalizedNextIndex === currentTargetIndex) {
+      onImageIndexChange(normalizedNextIndex);
       return;
     }
 
-    onImageIndexChange(nextIndex);
+    if (hasMultipleImages && !prefersReducedMotion) {
+      startCarouselTransition(
+        currentTargetIndex,
+        normalizedNextIndex,
+        requestedDirection ??
+          (normalizedNextIndex > currentTargetIndex ? "next" : "previous"),
+      );
+    } else {
+      settleOnImageIndex(normalizedNextIndex);
+    }
+
+    onImageIndexChange(normalizedNextIndex);
   };
 
   const nextImage = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     if (!images.length) return;
-    changeImageIndex((safeIndex + 1) % images.length);
+    const currentTargetIndex =
+      carouselTransitionRef.current?.toIndex ?? displayedImageIndexRef.current;
+    changeImageIndex((currentTargetIndex + 1) % images.length, "next");
   };
 
   const prevImage = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     if (!images.length) return;
-    changeImageIndex((safeIndex - 1 + images.length) % images.length);
+    const currentTargetIndex =
+      carouselTransitionRef.current?.toIndex ?? displayedImageIndexRef.current;
+    changeImageIndex(
+      (currentTargetIndex - 1 + images.length) % images.length,
+      "previous",
+    );
   };
 
   const surfaceClassName =
@@ -194,12 +362,43 @@ export default function ProductImageGalleryZoom({
     ? `group relative aspect-[3/4] w-full md:flex-1 overflow-hidden ${surfaceClassName}`
     : `group relative aspect-[3/4] w-full md:flex-1 overflow-hidden md:order-last ${surfaceClassName}`;
 
+  const activeDisplayedIndex = images.length
+    ? Math.min(Math.max(displayedImageIndex, 0), images.length - 1)
+    : 0;
+  const visibleMainSlides = carouselTransition
+    ? [
+        {
+          index: carouselTransition.fromIndex,
+          role: "outgoing" as const,
+          transform:
+            carouselTransition.phase === "running"
+              ? `translate3d(${carouselTransition.direction === "next" ? "-100%" : "100%"}, 0, 0)`
+              : "translate3d(0, 0, 0)",
+        },
+        {
+          index: carouselTransition.toIndex,
+          role: "incoming" as const,
+          transform:
+            carouselTransition.phase === "running"
+              ? "translate3d(0, 0, 0)"
+              : `translate3d(${carouselTransition.direction === "next" ? "100%" : "-100%"}, 0, 0)`,
+        },
+      ]
+    : [
+        {
+          index: activeDisplayedIndex,
+          role: "active" as const,
+          transform: "translate3d(0, 0, 0)",
+        },
+      ];
+
   return (
     <>
       <div className={galleryLayoutClassName}>
         <div
           className={mainImageWrapperClassName}
           style={{ touchAction: "pan-y" }}
+          data-carousel-direction={carouselTransition?.direction}
         onMouseMove={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           const x = ((event.clientX - rect.left) / rect.width) * 100;
@@ -229,10 +428,13 @@ export default function ProductImageGalleryZoom({
             Math.abs(deltaX) >= SWIPE_THRESHOLD_PX &&
             Math.abs(deltaX) > Math.abs(deltaY)
           ) {
+            const currentTargetIndex =
+              carouselTransitionRef.current?.toIndex ?? displayedImageIndexRef.current;
             changeImageIndex(
               deltaX < 0
-                ? (safeIndex + 1) % images.length
-                : (safeIndex - 1 + images.length) % images.length,
+                ? (currentTargetIndex + 1) % images.length
+                : (currentTargetIndex - 1 + images.length) % images.length,
+              deltaX < 0 ? "next" : "previous",
             );
             swipeHandledRef.current = true;
           }
@@ -287,23 +489,48 @@ export default function ProductImageGalleryZoom({
           }
         }}
       >
-        <OptimizedImageWithFallback
-          key={images[safeIndex] ?? "missing-gallery-image"}
-          src={images[safeIndex]}
-          alt={`${productName}, imagen ${safeIndex + 1} de ${Math.max(images.length, 1)}`}
-          fill
-          className="object-cover transition-transform duration-500 ease-out md:group-hover:scale-105"
-          style={{ transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%` }}
-          sizes={
-            alwaysColumn
-              ? "(max-width: 640px) calc(100vw - 3.5rem), 50vw"
-              : "(max-width: 1024px) calc(100vw - 2.5rem), 44vw"
-          }
-          priority={priority}
-          loading={priority ? "eager" : "lazy"}
-          fetchPriority={priority ? "high" : "auto"}
-          fallbackClassName={placeholderClassName}
-        />
+        {visibleMainSlides.map((mainSlide) => (
+          <div
+            key={`main-slide-${mainSlide.index}`}
+            className={`pointer-events-none absolute inset-0 ${
+              carouselTransition
+                ? "will-change-transform transition-transform duration-[280ms] ease-out motion-reduce:transition-none"
+                : ""
+            }`}
+            style={{ transform: mainSlide.transform }}
+            data-gallery-slide={mainSlide.role}
+            aria-hidden={mainSlide.role === "outgoing" ? "true" : undefined}
+            onTransitionEnd={(event) => {
+              if (
+                mainSlide.role !== "incoming" ||
+                event.target !== event.currentTarget ||
+                event.propertyName !== "transform" ||
+                !carouselTransition
+              ) {
+                return;
+              }
+
+              completeCarouselTransition(carouselTransition.id);
+            }}
+          >
+            <OptimizedImageWithFallback
+              src={images[mainSlide.index]}
+              alt={`${productName}, imagen ${mainSlide.index + 1} de ${Math.max(images.length, 1)}`}
+              fill
+              className="object-cover transition-transform duration-500 ease-out md:group-hover:scale-105"
+              style={{ transformOrigin: `${zoomPosition.x}% ${zoomPosition.y}%` }}
+              sizes={
+                alwaysColumn
+                  ? "(max-width: 640px) calc(100vw - 3.5rem), 50vw"
+                  : "(max-width: 1024px) calc(100vw - 2.5rem), 44vw"
+              }
+              priority={priority}
+              loading={priority ? "eager" : "lazy"}
+              fetchPriority={priority ? "high" : "auto"}
+              fallbackClassName={placeholderClassName}
+            />
+          </div>
+        ))}
 
         {hasMultipleImages && (
           <>
@@ -381,7 +608,7 @@ export default function ProductImageGalleryZoom({
                 src={image}
                 alt={`${productName} miniatura ${index + 1}`}
                 fill
-                className="object-contain p-0.5"
+                className="object-cover"
                 sizes="56px"
                 fallbackClassName={placeholderClassName}
               />
