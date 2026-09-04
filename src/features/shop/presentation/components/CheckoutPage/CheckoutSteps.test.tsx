@@ -448,6 +448,39 @@ describe("CheckoutSteps Auto-Advance", () => {
     expect(screen.getByText("Ingresá las calles de referencia.")).toBeInTheDocument();
   });
 
+  it("keeps entered values visually stronger than placeholders", async () => {
+    mockUseCart.mockReturnValue({
+      items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],
+      paymentMethod: "mercadopago",
+      setPaymentMethod: vi.fn(),
+      removeItem: vi.fn(),
+      addItem: vi.fn(() => ({ ok: true, addedQty: 1, finalQty: 1, maxQty: null })),
+      updateQty: vi.fn(),
+      syncStockFromProducts: vi.fn(),
+      clear: vi.fn(),
+      getTotal: () => 100,
+      getDiscountedTotal: () => 100,
+    });
+
+    render(<CheckoutSteps subtotal={100} discountedTotal={100} />);
+
+    const firstName = await screen.findByLabelText(/^Nombre$/i);
+    const notes = screen.getByLabelText(/^Notas/i);
+    expect(firstName).toHaveClass("checkout-field", "font-medium", "text-[#4b2a75]");
+    expect(firstName).toHaveClass(
+      "placeholder:font-normal",
+      "placeholder:text-[#755b91]",
+    );
+    expect(notes).toHaveClass("font-medium", "placeholder:text-[#755b91]");
+    expect(screen.getByText(fallbackFulfillmentConfig.delivery.subtitle)).toHaveClass(
+      "text-[var(--brand-cream)]/84",
+    );
+
+    fireEvent.change(firstName, { target: { value: "Jane" } });
+    expect(firstName).toHaveValue("Jane");
+    expect(firstName).toHaveAttribute("placeholder", "Tu nombre");
+  });
+
   it("EF-F-01A-01 hides inactive delivery and selects the available pickup flow", async () => {
     mockUseCart.mockReturnValue({
       items: [{ productId: "p1", name: "Producto 1", unitPrice: 100, qty: 1 }],

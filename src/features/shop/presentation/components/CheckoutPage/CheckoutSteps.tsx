@@ -83,9 +83,9 @@ type CheckoutStepsProps = {
 type BankField = "cvu" | "alias";
 
 const inputBaseClassName =
-  "w-full rounded-2xl border border-white/10 bg-[rgba(255,255,255,0.9)] px-3.5 py-2.5 text-sm text-[var(--brand-violet-950)] placeholder:text-[var(--brand-violet-950)]/42 shadow-[inset_0_1px_0_rgba(255,255,255,0.5)] transition focus-visible:border-[rgba(248,227,176,0.68)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(248,227,176,0.5)]";
+  "checkout-field w-full rounded-2xl border border-white/10 bg-[rgba(255,255,255,0.94)] px-3.5 py-2.5 text-sm font-medium text-[#4b2a75] placeholder:font-normal placeholder:text-[#755b91] shadow-[inset_0_1px_0_rgba(255,255,255,0.5)] transition disabled:cursor-not-allowed disabled:bg-[rgba(255,255,255,0.72)] disabled:text-[#755b91] disabled:placeholder:text-[#806b99] focus-visible:border-[rgba(248,227,176,0.68)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(248,227,176,0.5)]";
 const fieldLabelClassName =
-  "mb-1.5 block pl-2 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--brand-cream)]/76";
+  "mb-1.5 block pl-2 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--brand-cream)]/86";
 const fieldErrorClassName = "mt-1.5 pl-2 text-xs font-medium text-rose-100";
 const deliveryOptionBaseClassName =
   "group relative flex min-h-[5.25rem] cursor-pointer items-center rounded-2xl border px-4 py-3 text-left transition duration-200 focus-within:ring-2 focus-within:ring-[rgba(248,227,176,0.42)] sm:px-5";
@@ -1088,7 +1088,7 @@ export default function CheckoutSteps({
                       <DeliveryIcon type="delivery" />
                       <span className="min-w-0 flex-1">
                         <span className="block text-base font-semibold leading-tight">{fulfillmentConfig.delivery.name}</span>
-                        <span className="mt-1 block text-xs leading-relaxed text-[var(--brand-cream)]/66">
+                        <span className="mt-1 block text-xs leading-relaxed text-[var(--brand-cream)]/84">
                           {fulfillmentConfig.delivery.subtitle}
                         </span>
                       </span>
@@ -1117,7 +1117,7 @@ export default function CheckoutSteps({
                       <DeliveryIcon type="pickup" />
                       <span className="min-w-0 flex-1">
                         <span className="block text-base font-semibold leading-tight">{fulfillmentConfig.pickup.name}</span>
-                        <span className="mt-1 block text-xs leading-relaxed text-[var(--brand-cream)]/66">
+                        <span className="mt-1 block text-xs leading-relaxed text-[var(--brand-cream)]/84">
                           {fulfillmentConfig.pickup.subtitle}
                         </span>
                       </span>
@@ -1187,7 +1187,7 @@ export default function CheckoutSteps({
                             />
                           </>
                         ) : (
-                          <p className="border-l border-[var(--brand-gold-300)]/45 pl-3 text-sm leading-relaxed text-[var(--brand-cream)]/82">
+                          <p className="border-l border-[var(--brand-gold-300)]/45 pl-3 text-sm leading-relaxed text-[var(--brand-cream)]/88">
                             {fulfillmentConfig.delivery.subtitle}
                           </p>
                         )}
@@ -1297,7 +1297,7 @@ export default function CheckoutSteps({
                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--brand-gold-300)]">
                       Elegí un punto de encuentro
                     </p>
-                    <p className="mt-1 text-sm leading-relaxed text-[var(--brand-cream)]/72">
+                    <p className="mt-1 text-sm leading-relaxed text-[var(--brand-cream)]/84">
                       Seleccioná el lugar que te quede más cómodo.
                     </p>
                   </div>
@@ -1328,14 +1328,14 @@ export default function CheckoutSteps({
                               {pickupPointPriceLabel(point.price)}
                             </span>
                           </span>
-                          <span className="mt-1 block pr-6 text-xs leading-relaxed text-[var(--brand-cream)]/66">
+                          <span className="mt-1 block pr-6 text-xs leading-relaxed text-[var(--brand-cream)]/84">
                             {point.subtitle}
                           </span>
                         </label>
                       );
                     })}
                   </div>
-                  <p className="text-sm leading-relaxed text-[var(--brand-cream)]/76">
+                  <p className="text-sm leading-relaxed text-[var(--brand-cream)]/86">
                     El costo se suma al total según el punto elegido. Coordinamos día y horario por WhatsApp después de confirmar el pago.
                   </p>
                   {pickupPointError ? (
