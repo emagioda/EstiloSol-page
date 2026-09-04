@@ -35,29 +35,21 @@ export default function OrderSummaryMobile({
 
   return (
     <>
-      <section className="fixed inset-x-0 top-[calc(var(--header-height-mobile)+0.75rem)] z-[190] px-4 sm:px-6 lg:hidden">
+      <section className="fixed inset-x-0 top-[var(--header-height-mobile)] z-[190] bg-[var(--brand-violet-950)] px-4 pb-3 pt-3 sm:px-6 lg:hidden">
         <div className="relative mx-auto w-full max-w-7xl">
           <button
             type="button"
             onClick={() => setOpen((prev) => !prev)}
-            className="flex w-full items-center justify-between gap-3 rounded-3xl border border-[rgba(122,89,177,0.36)] bg-[rgba(246,236,252,0.96)] p-4 text-left shadow-[0_16px_32px_rgba(89,52,128,0.32)] backdrop-blur-md transition hover:border-[rgba(212,175,55,0.42)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
+            className="flex w-full items-center justify-between gap-3 whitespace-nowrap rounded-3xl border border-[rgba(122,89,177,0.36)] bg-[rgba(246,236,252,0.96)] px-4 py-3 text-left shadow-[0_16px_32px_rgba(89,52,128,0.32)] backdrop-blur-md transition hover:border-[rgba(212,175,55,0.42)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-gold-300)]"
             aria-expanded={open}
             aria-controls="mobile-order-summary-panel"
           >
-            <div>
-              <p className="text-[11px] uppercase tracking-[0.12em] text-[var(--brand-violet-500)]/80">
-                Resumen de compra
-              </p>
-              <p className="text-sm font-medium text-[var(--brand-violet-500)]">
-                {open ? "Ocultar detalle" : "Ver detalles de mi compra"}
-              </p>
-            </div>
-            <div className="text-right">
-              {hasDiscount ? (
-                <p className="text-xs text-[var(--brand-violet-500)]/55 line-through">{formatMoney(subtotal)}</p>
-              ) : null}
-              <p className="text-lg font-semibold text-[var(--brand-gold-600)]">{formatMoney(finalTotal)}</p>
-            </div>
+            <span className="min-w-0 flex-1 text-[13px] font-medium text-[var(--brand-violet-500)] sm:text-sm">
+              {open ? "Ocultar detalle" : "Ver detalles de mi compra"}
+            </span>
+            <span className="shrink-0 text-base font-semibold tabular-nums text-[var(--brand-gold-600)] sm:text-lg">
+              {formatMoney(finalTotal)}
+            </span>
           </button>
 
           <div
