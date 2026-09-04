@@ -153,6 +153,41 @@ describe("ProductImageGalleryZoom", () => {
     );
   });
 
+  it("resets immediately when the image set changes, then animates within the new set", () => {
+    const onImageIndexChange = vi.fn();
+    const { container, rerender } = render(
+      <ProductImageGalleryZoom
+        images={["/old-one.webp", "/old-two.webp"]}
+        productName="Producto"
+        currentImageIndex={1}
+        onImageIndexChange={onImageIndexChange}
+      />,
+    );
+
+    rerender(
+      <ProductImageGalleryZoom
+        images={["/new-one.webp", "/new-two.webp"]}
+        productName="Producto"
+        currentImageIndex={0}
+        onImageIndexChange={onImageIndexChange}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "Producto, imagen 1 de 2" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Producto, imagen 2 de 2" })).toBeNull();
+    expect(container.querySelectorAll('[data-gallery-slide="active"]')).toHaveLength(1);
+    expect(container.querySelector('[data-gallery-slide="incoming"]')).toBeNull();
+    expect(container.querySelector('[data-gallery-slide="outgoing"]')).toBeNull();
+    expect(container.querySelector('img[src*="old-"]')).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Imagen siguiente" }));
+    expect(onImageIndexChange).toHaveBeenCalledWith(1);
+    expect(container.querySelector("[data-carousel-direction='next']")).toBeInTheDocument();
+    expect(container.querySelector('[data-gallery-slide="incoming"]')).toContainElement(
+      screen.getByRole("img", { name: "Producto, imagen 2 de 2" }),
+    );
+  });
+
   it("keeps swipe index changes aligned with the carousel direction", () => {
     const onImageIndexChange = vi.fn();
     const { container } = render(

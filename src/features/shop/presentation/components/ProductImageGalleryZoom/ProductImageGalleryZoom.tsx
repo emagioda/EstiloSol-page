@@ -1,6 +1,14 @@
 "use client";
 
-import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import dynamic from "next/dynamic";
 import OptimizedImageWithFallback from "../OptimizedImageWithFallback";
 
@@ -70,6 +78,10 @@ type CarouselTransition = {
 
 const CAROUSEL_TRANSITION_MS = 280;
 
+const hasSameImages = (currentImages: string[], nextImages: string[]) =>
+  currentImages.length === nextImages.length &&
+  currentImages.every((image, index) => image === nextImages[index]);
+
 type Props = {
   images: string[];
   productName: string;
@@ -101,6 +113,10 @@ export default function ProductImageGalleryZoom({
   const [displayedImageIndex, setDisplayedImageIndex] = useState(safeIndex);
   const [carouselTransition, setCarouselTransition] =
     useState<CarouselTransition | null>(null);
+  const [imageSetSnapshot, setImageSetSnapshot] = useState(() => ({
+    images: [...images],
+    resetIndex: safeIndex,
+  }));
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(() =>
     typeof window !== "undefined" && typeof window.matchMedia === "function"
       ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -119,6 +135,12 @@ export default function ProductImageGalleryZoom({
   } | null>(null);
   const swipeHandledRef = useRef(false);
 
+  if (!hasSameImages(imageSetSnapshot.images, images)) {
+    setImageSetSnapshot({ images: [...images], resetIndex: safeIndex });
+    setDisplayedImageIndex(safeIndex);
+    setCarouselTransition(null);
+  }
+
   // we intentionally **do not** suppress clicks after a swipe; the goal is
   // that a user can swipe to a new picture and then tap once (even very
   // quickly) to open the zoom view. the browser rarely delivers a click
@@ -136,6 +158,13 @@ export default function ProductImageGalleryZoom({
       transitionTimeoutRef.current = null;
     }
   }, []);
+
+  useLayoutEffect(() => {
+    clearTransitionScheduling();
+    transitionIdRef.current += 1;
+    displayedImageIndexRef.current = imageSetSnapshot.resetIndex;
+    carouselTransitionRef.current = null;
+  }, [clearTransitionScheduling, imageSetSnapshot]);
 
   const completeCarouselTransition = useCallback(
     (transitionId: number) => {
